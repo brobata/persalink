@@ -25,34 +25,41 @@ PersaLink runs a lightweight server on your machine that bridges tmux sessions t
 - **tmux** installed (`apt install tmux` / `brew install tmux`)
 - **npm** 8+
 
-### Install & Run
+### Install
+
+**From npm** (easiest):
+
+```bash
+npm install -g persalink
+persalink
+```
+
+**One-line installer** (no npm required):
+
+```bash
+curl -fsSL https://github.com/brobata/persalink/releases/latest/download/setup.sh | bash
+```
+
+**From source** (for development):
 
 ```bash
 git clone https://github.com/brobata/persalink.git
 cd persalink
-
-# Install dependencies
 npm install
-
-# Build everything
 npm run build:server
-cd apps/client && npm run build && cd ../..
-
-# Start the server
-node apps/server/dist/apps/server/src/main/index.js
+npm run build:client
+npm run start:server
 ```
-
-On first launch, you'll be prompted to set a password.
 
 ### Connect
 
-Open `http://<your-server-ip>:9877` in any browser. Enter your password to authenticate.
+Open `http://<your-server-ip>:9877` in any browser. Set a password on first connect — that's it.
 
-### Run with PM2 (recommended)
+### Run with PM2 (recommended for long-running servers)
 
 ```bash
 npm install -g pm2
-pm2 start ecosystem.config.js
+pm2 start persalink --name persalink
 pm2 save
 pm2 startup  # auto-start on boot
 ```
