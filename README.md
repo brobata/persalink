@@ -1,5 +1,9 @@
 # PersaLink
 
+**Your terminal. Any device. Always.**
+
+![PersaLink](docs/hero.png)
+
 Tmux session orchestrator — manage terminal sessions from any device through your browser.
 
 PersaLink runs a lightweight server on your machine that bridges tmux sessions to a responsive web UI. Connect from your phone, tablet, or any browser to access your terminal sessions without SSH clients or VPN hassle.

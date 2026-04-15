@@ -9,6 +9,8 @@ release/
 *.log
 *.png
 *.jpg
+!docs/**/*.png
+!docs/**/*.jpg
 .persalink-dev/
 .claude-context.md
 .playwright-mcp/
