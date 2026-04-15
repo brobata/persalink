@@ -102,7 +102,7 @@ export class TmuxManager {
       // Only show PersaLink-managed sessions (prefixed with pl-)
       if (!parsed.name.startsWith(SESSION_PREFIX)) continue;
 
-      const profileId = this.extractProfileId(parsed.name);
+      const profileId = this.extractProfileId(parsed.name, profileMap);
       const profile = profileId && profileMap ? profileMap.get(profileId) : undefined;
 
       // Fetch windows for this session
@@ -155,14 +155,16 @@ export class TmuxManager {
 
   /** Create a new tmux session from a profile (or bare) */
   async createSession(profile?: Profile, cols: number = 120, rows: number = 40): Promise<string> {
-    const sessionName = profile
-      ? `${SESSION_PREFIX}${profile.id}`
-      : `${SESSION_PREFIX}${Date.now()}`;
-
-    // Check if session already exists
-    const existing = await this.sessionExists(sessionName);
-    if (existing) {
-      return sessionName; // Reuse existing
+    let sessionName: string;
+    if (profile) {
+      const base = `${SESSION_PREFIX}${profile.id}`;
+      sessionName = base;
+      let counter = 2;
+      while (await this.sessionExists(sessionName)) {
+        sessionName = `${base}-${counter++}`;
+      }
+    } else {
+      sessionName = `${SESSION_PREFIX}${Date.now()}`;
     }
 
     const args = [
@@ -334,11 +336,21 @@ export class TmuxManager {
   }
 
   /** Extract profile ID from tmux session name */
-  private extractProfileId(sessionName: string): string | undefined {
+  private extractProfileId(sessionName: string, profileMap?: Map<string, Profile>): string | undefined {
     if (!sessionName.startsWith(SESSION_PREFIX)) return undefined;
-    const id = sessionName.slice(SESSION_PREFIX.length);
-    // If it's a timestamp (bare session), no profile
-    if (/^\d+$/.test(id)) return undefined;
-    return id;
+    const rest = sessionName.slice(SESSION_PREFIX.length);
+    // Bare timestamp session — no profile
+    if (/^\d+$/.test(rest)) return undefined;
+    // Exact match against a known profile
+    if (profileMap?.has(rest)) return rest;
+    // Match `<profileId>-<n>` (duplicate instance) — profile IDs may contain dashes,
+    // so prefer the longest matching profile id from the map
+    if (profileMap) {
+      const m = rest.match(/^(.+)-(\d+)$/);
+      if (m && profileMap.has(m[1])) return m[1];
+    }
+    // Fallback: strip trailing -N if present
+    const m = rest.match(/^(.+)-(\d+)$/);
+    return m ? m[1] : rest;
   }
 }

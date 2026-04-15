@@ -72,17 +72,14 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
   profile: Profile; isLive: boolean; reordering: boolean;
   onMove?: (direction: 'up' | 'down') => void;
 }) {
-  const { createSession, attachSession, sessions, healthStatuses, editProfile } = useAppStore();
+  const { createSession, sessions, healthStatuses, editProfile } = useAppStore();
 
   const health = healthStatuses.find(h => h.profileId === profile.id);
-  const liveSession = sessions.find(s => s.profileId === profile.id);
+  const liveSessions = sessions.filter(s => s.profileId === profile.id);
+  const liveCount = liveSessions.length;
 
   const handleTap = () => {
-    if (liveSession) {
-      attachSession(liveSession.id);
-    } else {
-      createSession(profile.id);
-    }
+    createSession(profile.id);
   };
 
   const handleEdit = (e: React.MouseEvent) => {
@@ -115,8 +112,15 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
       >
         <div className="relative shrink-0">
           <span className="text-lg">{profile.icon || '\uD83D\uDCC2'}</span>
-          {liveSession && (
+          {liveCount > 0 && liveCount < 2 && (
             <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          )}
+          {liveCount >= 2 && (
+            <div className="absolute -top-1 -right-1.5 min-w-[16px] h-[16px] px-1
+                            rounded-full bg-green-500 text-[10px] font-bold text-zinc-950
+                            flex items-center justify-center">
+              {liveCount}
+            </div>
           )}
         </div>
         <span className="flex-1 text-sm font-medium truncate">{profile.name}</span>

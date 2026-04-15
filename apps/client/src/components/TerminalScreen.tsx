@@ -81,7 +81,7 @@ function WindowTab({ w, windowCount }: { w: { index: number; name: string; activ
 }
 
 function TabPicker({ onClose }: { onClose: () => void }) {
-  const { profiles, sessions, createSession, attachSession } = useAppStore();
+  const { profiles, sessions, createSession } = useAppStore();
 
   const grouped = useMemo(() => {
     const groups = new Map<string, Profile[]>();
@@ -94,12 +94,7 @@ function TabPicker({ onClose }: { onClose: () => void }) {
   }, [profiles]);
 
   const handlePick = (profile: Profile) => {
-    const liveSession = sessions.find(s => s.profileId === profile.id);
-    if (liveSession) {
-      attachSession(liveSession.id);
-    } else {
-      createSession(profile.id);
-    }
+    createSession(profile.id);
     // onClose is handled by store (showTabPicker set to false on attach)
   };
 

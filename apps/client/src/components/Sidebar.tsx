@@ -65,18 +65,15 @@ function SessionPill({ session }: { session: SessionInfo }) {
 // ============================================================================
 
 function ProfileRow({ profile }: { profile: Profile }) {
-  const { createSession, attachSession, sessions, healthStatuses, editProfile, attachedSession } = useAppStore();
+  const { createSession, sessions, healthStatuses, editProfile, attachedSession } = useAppStore();
 
   const health = healthStatuses.find(h => h.profileId === profile.id);
-  const liveSession = sessions.find(s => s.profileId === profile.id);
-  const isActive = liveSession && attachedSession?.id === liveSession.id;
+  const liveSessions = sessions.filter(s => s.profileId === profile.id);
+  const liveCount = liveSessions.length;
+  const isActive = liveSessions.some(s => s.id === attachedSession?.id);
 
   const handleClick = () => {
-    if (liveSession) {
-      attachSession(liveSession.id);
-    } else {
-      createSession(profile.id);
-    }
+    createSession(profile.id);
   };
 
   return (
@@ -89,8 +86,15 @@ function ProfileRow({ profile }: { profile: Profile }) {
       >
         <div className="relative shrink-0">
           <span className="text-sm">{profile.icon || '\uD83D\uDCC2'}</span>
-          {liveSession && (
+          {liveCount > 0 && liveCount < 2 && (
             <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          )}
+          {liveCount >= 2 && (
+            <div className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] px-1
+                            rounded-full bg-green-500 text-[9px] font-bold text-zinc-950
+                            flex items-center justify-center">
+              {liveCount}
+            </div>
           )}
         </div>
         <span className={`flex-1 text-xs font-medium truncate ${
