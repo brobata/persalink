@@ -98,11 +98,39 @@ function detachClient(client: ConnectedClient): void {
 // Authentication
 // ---------------------------------------------------------------------------
 
+function sendRateLimited(client: ConnectedClient, rate: { retryAfterMs?: number; permanentLock?: boolean }): void {
+  if (rate.permanentLock) {
+    send(client, {
+      type: 'auth.failed',
+      message: 'Server locked after too many failed attempts. Delete ~/.persalink/rate-limits.json on the server to reset, or reinstall.',
+      permanentLock: true,
+    });
+  } else {
+    send(client, { type: 'auth.failed', message: 'Too many attempts', retryAfterMs: rate.retryAfterMs });
+  }
+}
+
+function handleFailedAuth(client: ConnectedClient, method: 'password' | 'token', userMessage: string): void {
+  const rate = rateLimiter.recordFailure(client.ip);
+  audit('auth_failed', { ip: client.ip, method, failures: rate.failures, permanentLock: rate.permanentLock });
+  if (rate.permanentLock) {
+    tokenStore.revokeAll();
+    audit('permanent_lock', { ip: client.ip, failures: rate.failures });
+    sendRateLimited(client, rate);
+    return;
+  }
+  if (!rate.allowed) {
+    sendRateLimited(client, rate);
+    return;
+  }
+  send(client, { type: 'auth.failed', message: userMessage });
+}
+
 async function handleAuth(client: ConnectedClient, message: ClientMessage): Promise<void> {
   if (message.type === 'auth') {
     const rateResult = rateLimiter.check(client.ip);
     if (!rateResult.allowed) {
-      send(client, { type: 'auth.failed', message: 'Too many attempts', retryAfterMs: rateResult.retryAfterMs });
+      sendRateLimited(client, rateResult);
       return;
     }
 
@@ -128,9 +156,7 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
     if (config.passwordHash) {
       const valid = await verifyPassword(message.password, config.passwordHash);
       if (!valid) {
-        rateLimiter.recordFailure(client.ip);
-        audit('auth_failed', { ip: client.ip, method: 'password' });
-        send(client, { type: 'auth.failed', message: 'Incorrect password' });
+        handleFailedAuth(client, 'password', 'Incorrect password');
         return;
       }
     }
@@ -141,14 +167,12 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
   } else if (message.type === 'auth.token') {
     const rateResult = rateLimiter.check(client.ip);
     if (!rateResult.allowed) {
-      send(client, { type: 'auth.failed', message: 'Too many attempts', retryAfterMs: rateResult.retryAfterMs });
+      sendRateLimited(client, rateResult);
       return;
     }
     const stored = tokenStore.validateToken(message.token);
     if (!stored) {
-      rateLimiter.recordFailure(client.ip);
-      audit('auth_failed', { ip: client.ip, method: 'token' });
-      send(client, { type: 'auth.failed', message: 'Invalid or expired token' });
+      handleFailedAuth(client, 'token', 'Invalid or expired token');
       return;
     }
     rateLimiter.recordSuccess(client.ip);

@@ -24,7 +24,8 @@ export type AuditEvent =
   | 'tmux_session_attached'
   | 'tmux_session_detached'
   | 'action_executed'
-  | 'profiles_discovered';
+  | 'profiles_discovered'
+  | 'permanent_lock';
 
 interface AuditFields {
   ip?: string;
@@ -45,12 +46,14 @@ interface AuditFields {
   rss_mb?: number;
   sessions?: number;
   clients?: number;
+  failures?: number;
+  permanentLock?: boolean;
 }
 
 const WARN_EVENTS: Set<AuditEvent> = new Set([
   'auth_failed', 'token_auth_failed', 'token_expired', 'auth_timeout',
 ]);
-const ERROR_EVENTS: Set<AuditEvent> = new Set(['rate_limited']);
+const ERROR_EVENTS: Set<AuditEvent> = new Set(['rate_limited', 'permanent_lock']);
 
 function getLevel(event: AuditEvent): string {
   if (event === 'watchdog') return 'info';

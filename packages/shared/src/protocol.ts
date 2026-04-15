@@ -143,7 +143,7 @@ export const PROTOCOL_VERSION = 1;
 export type ServerMessage =
   // Auth
   | { type: 'auth.ok'; serverName: string; setupMode: boolean; token?: string; protocolVersion?: number }
-  | { type: 'auth.failed'; message: string; retryAfterMs?: number }
+  | { type: 'auth.failed'; message: string; retryAfterMs?: number; permanentLock?: boolean }
   | { type: 'auth.required'; setupMode: boolean; protocolVersion?: number }
   // Token management
   | { type: 'token.list'; tokens: TokenInfo[] }
