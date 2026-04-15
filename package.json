@@ -1,0 +1,28 @@
+{
+  "name": "persalink",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tmux session orchestrator — seamless terminal management from any device",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w @persalink/server",
+    "build:server": "npm run build -w @persalink/server",
+    "start:server": "npm run start -w @persalink/server",
+    "dev:client": "npm run dev -w @persalink/client",
+    "build:client": "npm run build -w @persalink/client"
+  },
+  "keywords": ["tmux", "terminal", "xterm", "websocket", "session-manager", "remote-terminal", "mobile-terminal"],
+  "author": "Brobata",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/brobata/persalink"
+  },
+  "homepage": "https://github.com/brobata/persalink#readme",
+  "bugs": {
+    "url": "https://github.com/brobata/persalink/issues"
+  }
+}

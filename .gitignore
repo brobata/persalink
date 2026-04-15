@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-electron/
+release/
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+*.log
+*.png
+*.jpg
+.persalink-dev/
+.claude-context.md
+.playwright-mcp/
