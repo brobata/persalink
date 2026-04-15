@@ -1,6 +1,6 @@
 {
   "name": "persalink",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "Tmux session orchestrator — seamless terminal management from any device",
   "workspaces": [

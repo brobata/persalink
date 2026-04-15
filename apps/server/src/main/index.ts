@@ -732,7 +732,22 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
+function printTmuxMissingHelp(): void {
+  console.error('\n  ✗ PersaLink cannot start — tmux is not installed.\n');
+  console.error('    PersaLink bridges tmux sessions to your browser, so tmux must');
+  console.error('    be installed on this machine. Install it with:\n');
+  console.error('      Debian/Ubuntu:  sudo apt install tmux');
+  console.error('      macOS:          brew install tmux');
+  console.error('      Arch:           sudo pacman -S tmux');
+  console.error('      Fedora/RHEL:    sudo dnf install tmux\n');
+  console.error('    Then run `persalink` again.\n');
+}
+
 main().catch((err) => {
+  if (err instanceof Error && /tmux is not installed/i.test(err.message)) {
+    printTmuxMissingHelp();
+    process.exit(1);
+  }
   console.error('[PersaLink] Fatal error:', err);
   process.exit(1);
 });
