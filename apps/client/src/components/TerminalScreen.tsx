@@ -166,9 +166,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const formData = new FormData();
       formData.append('file', file);
 
-      const url = serverUrl.startsWith('http')
-        ? serverUrl
-        : `http://${serverUrl}`;
+      const hostOnly = serverUrl.trim().replace(/^(wss?|https?):\/\//i, '');
+      const scheme = window.location.protocol === 'https:' ? 'https://' : 'http://';
+      const url = `${scheme}${hostOnly}`;
 
       const res = await fetch(`${url}/api/upload`, {
         method: 'POST',
