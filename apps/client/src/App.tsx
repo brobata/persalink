@@ -117,7 +117,7 @@ export function App() {
 
   // Mobile: full-screen view switching (existing behavior)
   return (
-    <div className="relative h-screen">
+    <div className="relative h-[100dvh]">
       {view === 'home' && <HomeScreen />}
       {view === 'terminal' && <TerminalScreen />}
       {view === 'settings' && <SettingsScreen />}

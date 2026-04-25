@@ -5,7 +5,7 @@ export function SettingsScreen() {
 
   return (
     <div className="flex flex-col h-full">
-      <header className="shrink-0 px-4 pt-[max(12px,var(--sat))] pb-3 border-b border-zinc-800">
+      <header className="shrink-0 px-4 pt-[max(16px,env(safe-area-inset-top))] pb-3 border-b border-zinc-800">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setView('home')}

@@ -524,7 +524,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   return (
     <div className="flex flex-col h-full min-w-0 bg-[#09090b]">
       {/* Top bar — fixed height prevents scrollbar jitter from resizing the terminal */}
-      <div className="shrink-0 flex items-center px-2 pt-[max(6px,var(--sat))] pb-1.5 bg-zinc-900 border-b border-zinc-800 gap-1 overflow-hidden">
+      <div className="shrink-0 flex items-center px-2 pt-[max(10px,env(safe-area-inset-top))] pb-1.5 bg-zinc-900 border-b border-zinc-800 gap-1 overflow-hidden">
         {/* Back button — mobile only */}
         {!sidebarVisible && (
           <button
