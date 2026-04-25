@@ -66,7 +66,7 @@ interface AppState {
   showTabPicker: boolean;
 
   // Quick action results
-  actionResult: { actionId: string; output: string; exitCode: number } | null;
+  actionResult: { actionId: string; profileId?: string; output: string; exitCode: number; timedOut?: boolean; truncated?: boolean; spawnError?: boolean } | null;
 
   // Actions
   setServerUrl: (url: string) => void;
@@ -500,7 +500,17 @@ function handleServerMessage(
       break;
 
     case 'action.result':
-      set({ actionResult: { actionId: msg.actionId, output: msg.output, exitCode: msg.exitCode } });
+      set({
+        actionResult: {
+          actionId: msg.actionId,
+          profileId: msg.profileId,
+          output: msg.output,
+          exitCode: msg.exitCode,
+          timedOut: msg.timedOut,
+          truncated: msg.truncated,
+          spawnError: msg.spawnError,
+        },
+      });
       break;
 
     case 'error':

@@ -392,7 +392,16 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       }
       audit('action_executed', { ip: client.ip, profileId: message.profileId, actionId: message.actionId });
       const result = await tmuxManager.runAction(action.command, profile.cwd);
-      send(client, { type: 'action.result', actionId: action.id, output: result.output, exitCode: result.exitCode });
+      send(client, {
+        type: 'action.result',
+        actionId: action.id,
+        profileId: message.profileId,
+        output: result.output,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        truncated: result.truncated,
+        spawnError: result.spawnError,
+      });
       break;
     }
 

@@ -20,6 +20,51 @@ const SESSION_PREFIX = 'pl-';
 // Control Plane — tmux CLI wrapper (uses execFile, not exec — no shell injection)
 // ============================================================================
 
+export interface ActionRunResult {
+  output: string;
+  exitCode: number;
+  timedOut: boolean;
+  truncated: boolean;
+  spawnError: boolean;
+}
+
+function runShell(
+  command: string,
+  cwd: string | undefined,
+  opts: { timeoutMs: number; maxBuffer: number },
+): Promise<ActionRunResult> {
+  return new Promise((resolve) => {
+    const cwdResolved = cwd?.replace(/^~/, process.env.HOME || '/home');
+    execFile('bash', ['-c', command], {
+      timeout: opts.timeoutMs,
+      maxBuffer: opts.maxBuffer,
+      cwd: cwdResolved || process.env.HOME,
+      env: process.env,
+    }, (err, stdout, stderr) => {
+      // execFile augments err with `killed`, `signal`, and `code` at runtime;
+      // the Node typings declare only the ErrnoException subset.
+      const e = err as (Error & { killed?: boolean; signal?: string; code?: string | number }) | null;
+      const timedOut = !!e && e.killed === true && e.signal === 'SIGTERM';
+      const truncated = !!e && e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+      // Spawn error = bash binary missing, cwd nonexistent, etc. (not an exit-code failure)
+      const spawnError = !!e && !timedOut && !truncated && typeof e.code === 'string';
+
+      let output = stdout + (stderr ? '\n' + stderr : '');
+      if (timedOut) output += `\n[timed out after ${opts.timeoutMs}ms]`;
+      if (truncated) output += `\n[output truncated at ${opts.maxBuffer} bytes]`;
+      if (spawnError) output += `\n[spawn error: ${(err as Error).message}]`;
+
+      resolve({
+        output,
+        exitCode: e ? (typeof e.code === 'number' ? e.code : 1) : 0,
+        timedOut,
+        truncated,
+        spawnError,
+      });
+    });
+  });
+}
+
 async function tmux(...args: string[]): Promise<string> {
   try {
     const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 10_000 });
@@ -314,37 +359,14 @@ export class TmuxManager {
    * profiles (trusted input — not client-supplied). Uses execFile with bash -c
    * because profile commands may use shell features (pipes, redirects).
    */
-  async runAction(command: string, cwd?: string): Promise<{ output: string; exitCode: number }> {
-    return new Promise((resolve) => {
-      const cwdResolved = cwd?.replace(/^~/, process.env.HOME || '/home');
-      execFile('bash', ['-c', command], {
-        timeout: 30_000,
-        cwd: cwdResolved || process.env.HOME,
-        env: process.env,
-      }, (err, stdout, stderr) => {
-        resolve({
-          output: stdout + (stderr ? '\n' + stderr : ''),
-          exitCode: err ? (err as any).code || 1 : 0,
-        });
-      });
-    });
+  async runAction(command: string, cwd?: string): Promise<ActionRunResult> {
+    return runShell(command, cwd, { timeoutMs: 30_000, maxBuffer: 4 * 1024 * 1024 });
   }
 
   /** Run a health check command (trusted, from server-side profile config) */
-  async runHealthCheck(command: string, cwd?: string): Promise<{ output: string; exitCode: number }> {
-    return new Promise((resolve) => {
-      const cwdResolved = cwd?.replace(/^~/, process.env.HOME || '/home');
-      execFile('bash', ['-c', command], {
-        timeout: 10_000,
-        cwd: cwdResolved || process.env.HOME,
-        env: process.env,
-      }, (err, stdout, stderr) => {
-        resolve({
-          output: (stdout + (stderr ? '\n' + stderr : '')).slice(0, 4096),
-          exitCode: err ? (err as any).code || 1 : 0,
-        });
-      });
-    });
+  async runHealthCheck(command: string, cwd?: string): Promise<ActionRunResult> {
+    const r = await runShell(command, cwd, { timeoutMs: 10_000, maxBuffer: 256 * 1024 });
+    return { ...r, output: r.output.slice(0, 4096) };
   }
 
   /** Extract profile ID from tmux session name */

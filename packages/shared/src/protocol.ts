@@ -160,7 +160,7 @@ export type ServerMessage =
   // Window events
   | { type: 'windows.list'; windows: TmuxWindowInfo[] }
   // Quick actions
-  | { type: 'action.result'; actionId: string; output: string; exitCode: number }
+  | { type: 'action.result'; actionId: string; profileId: string; output: string; exitCode: number; timedOut?: boolean; truncated?: boolean; spawnError?: boolean }
   // Profile events
   | { type: 'profiles.list'; profiles: Profile[] }
   | { type: 'profiles.discovered'; profiles: Profile[] }
