@@ -200,7 +200,7 @@ function HealthCheckEditor({
 // ============================================================================
 
 export function ProfileEditor() {
-  const { editingProfile, setView, saveProfile, deleteProfile } = useAppStore();
+  const { editingProfile, closeOverlay, saveProfile, deleteProfile } = useAppStore();
 
   const isNew = !editingProfile;
   const [form, setForm] = useState<Partial<Profile>>(
@@ -252,14 +252,14 @@ export function ProfileEditor() {
     };
 
     saveProfile(profile);
-    setView('home');
+    closeOverlay();
   };
 
   const handleDelete = () => {
     if (!editingProfile || editingProfile.id === 'default') return;
     if (!confirmDelete) { setConfirmDelete(true); return; }
     deleteProfile(editingProfile.id);
-    setView('home');
+    closeOverlay();
   };
 
   return (
@@ -269,7 +269,7 @@ export function ProfileEditor() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setView('home')}
+              onClick={() => closeOverlay()}
               className="px-2.5 py-1 text-xs bg-zinc-800 text-zinc-400 rounded-md
                          active:bg-zinc-700 transition-colors"
             >

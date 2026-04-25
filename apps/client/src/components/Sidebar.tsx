@@ -173,7 +173,7 @@ function ProfileRow({ profile }: { profile: Profile }) {
 // ============================================================================
 
 export function Sidebar() {
-  const { sessions, profiles, serverName, setView, discoverProfiles, createSession, editProfile } = useAppStore();
+  const { sessions, profiles, serverName, openSettings, discoverProfiles, createSession, editProfile } = useAppStore();
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
   const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
 
@@ -214,7 +214,7 @@ export function Sidebar() {
               </svg>
             </button>
             <button
-              onClick={() => setView('settings')}
+              onClick={openSettings}
               className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
               title="Settings"
             >

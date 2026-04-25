@@ -1,14 +1,14 @@
 import { useAppStore } from '../stores/appStore';
 
 export function SettingsScreen() {
-  const { setView, disconnect, serverName, serverUrl, sessions, profiles } = useAppStore();
+  const { closeOverlay, disconnect, serverName, serverUrl, sessions, profiles } = useAppStore();
 
   return (
     <div className="flex flex-col h-full">
       <header className="shrink-0 px-4 pt-[max(16px,env(safe-area-inset-top))] pb-3 border-b border-zinc-800">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setView('home')}
+            onClick={closeOverlay}
             className="px-2.5 py-1 text-xs bg-zinc-800 text-zinc-400 rounded-md
                        hover:bg-zinc-700 transition-colors"
           >

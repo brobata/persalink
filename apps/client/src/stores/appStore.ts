@@ -99,7 +99,6 @@ interface AppState {
   reorderProfiles: (profileIds: string[]) => void;
   goBack: () => void;
   requestScrollback: (lines?: number) => void;
-  setView: (view: View) => void;
   clearActionResult: () => void;
   initBiometric: () => Promise<void>;
   unlockWithBiometric: () => Promise<boolean>;
@@ -109,6 +108,13 @@ interface AppState {
   getTabs: () => SessionTab[];
   pushNotification: (kind: 'error' | 'info', message: string, op?: string) => void;
   dismissNotification: (id: string) => void;
+
+  // Intent-named view transitions — replace direct setView mutation so
+  // components express what they want, not how the state changes. Each
+  // validates that the transition is sensible from the current view.
+  // (editProfile() and goBack() are pre-existing intent transitions.)
+  openSettings: () => void;
+  closeOverlay: () => void;
 }
 
 // ============================================================================
@@ -362,7 +368,20 @@ export const useAppStore = create<AppState>()(
         wsClient?.send({ type: 'session.scrollback', lines });
       },
 
-      setView: (view) => set({ view }),
+      openSettings: () => {
+        // Allowed from any post-auth view (home/terminal/settings — re-entering
+        // settings is a no-op). Disallowed during pre-auth (locked/connect/auth).
+        const v = get().view;
+        if (v === 'locked' || v === 'connect' || v === 'auth') return;
+        set({ view: 'settings' });
+      },
+
+      closeOverlay: () => {
+        const v = get().view;
+        if (v === 'settings' || v === 'profile-editor') {
+          set({ view: 'home', editingProfile: null });
+        }
+      },
 
       clearActionResult: () => set({ actionResult: null }),
 
@@ -427,7 +446,7 @@ function handleServerMessage(
 
     case 'auth.ok':
       set({
-        connectionState: 'authenticated' as ConnectionState,
+        connectionState: 'authenticated',
         serverName: msg.serverName,
         view: 'home',
         authError: null,
