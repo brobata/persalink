@@ -247,10 +247,12 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       }
       const cols = Math.max(10, Math.min(500, message.cols || 120));
       const rows = Math.max(2, Math.min(200, message.rows || 40));
+      // 0 = no prefill (fastest, current default); cap at tmux history-limit.
+      const scrollbackLines = Math.max(0, Math.min(10000, message.scrollbackLines ?? 0));
 
       try {
         detachClient(client);
-        await attachToSession(client, message.sessionId, cols, rows);
+        await attachToSession(client, message.sessionId, cols, rows, scrollbackLines);
       } catch (err) {
         send(client, { type: 'error', message: `Failed to attach: ${err instanceof Error ? err.message : err}` });
       }
@@ -520,6 +522,7 @@ async function attachToSession(
   sessionName: string,
   cols: number,
   rows: number,
+  scrollbackLines: number = 0,
 ): Promise<void> {
   const exists = await tmuxManager.sessionExists(sessionName);
   if (!exists) {
@@ -529,8 +532,10 @@ async function attachToSession(
   // Set aggressive resize so our PTY size wins
   await tmuxManager.resizeSession(sessionName);
 
-  // Get scrollback before attaching (for initial display)
-  const scrollback = await tmuxManager.captureScrollback(sessionName);
+  // Capture only what the client asked for. 0 = skip the tmux call entirely.
+  const scrollback = scrollbackLines > 0
+    ? await tmuxManager.captureScrollback(sessionName, scrollbackLines)
+    : '';
 
   // Create PTY bridge
   const bridge = tmuxManager.attachBridge(

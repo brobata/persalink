@@ -8,6 +8,8 @@ import { TerminalScreen } from './components/TerminalScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { ProfileEditor } from './components/ProfileEditor';
 import { Sidebar } from './components/Sidebar';
+import { GridLayout } from './components/GridLayout';
+import { useLayoutStore } from './stores/layoutStore';
 
 // ============================================================================
 // Desktop breakpoint hook
@@ -48,6 +50,22 @@ export function App() {
     }
   }, []);
 
+  // Route newly-created sessions into the pane that asked for them
+  useEffect(() => {
+    let known = new Set<string>(useAppStore.getState().sessions.map(s => s.id));
+    const unsub = useAppStore.subscribe((state) => {
+      const ids = state.sessions.map(s => s.id);
+      const newIds = ids.filter(id => !known.has(id));
+      known = new Set(ids);
+      const { pendingAssignPaneId, assignSession, clearPendingAssign } = useLayoutStore.getState();
+      if (pendingAssignPaneId && newIds.length > 0) {
+        assignSession(pendingAssignPaneId, newIds[newIds.length - 1]);
+        clearPendingAssign();
+      }
+    });
+    return unsub;
+  }, []);
+
   // Intercept browser back gesture / back button
   useEffect(() => {
     const pushState = () => {
@@ -75,22 +93,21 @@ export function App() {
   if (view === 'connect') return <ConnectScreen />;
   if (view === 'auth') return <AuthScreen />;
 
-  // Desktop: sidebar always visible + main panel
+  // Desktop: sidebar always visible + main panel (GridLayout replaces the
+  // single-session TerminalScreen here — a 1-pane grid is single-session mode).
   if (isDesktop) {
+    const overlaying = view === 'settings' || view === 'profile-editor';
     return (
       <div className="flex h-screen bg-zinc-950 relative">
         <Sidebar />
         <div className="flex-1 min-w-0 h-full overflow-hidden">
-          {view === 'terminal' && <TerminalScreen sidebarVisible />}
-          {view === 'settings' && <SettingsScreen />}
-          {view === 'profile-editor' && <ProfileEditor />}
-          {view === 'home' && (
-            <div className="flex items-center justify-center h-full text-zinc-700">
-              <div className="text-center space-y-2">
-                <div className="text-4xl">&#x2190;</div>
-                <p className="text-sm">Select a profile to connect</p>
-              </div>
-            </div>
+          {overlaying ? (
+            <>
+              {view === 'settings' && <SettingsScreen />}
+              {view === 'profile-editor' && <ProfileEditor />}
+            </>
+          ) : (
+            <GridLayout />
           )}
         </div>
         {isReconnecting && <ReconnectingOverlay />}

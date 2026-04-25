@@ -181,6 +181,13 @@ export class TmuxManager {
 
     await tmux(...args);
 
+    // Increase per-session scrollback buffer. tmux defaults to 2000 lines
+    // which makes long Claude/build outputs unreadable after a refresh or
+    // reattach. 50k gives plenty of headroom (~20MB per session worst case).
+    try {
+      await tmux('set-option', '-t', sessionName, 'history-limit', '10000');
+    } catch { /* ignore */ }
+
     // Set environment variables via tmux set-environment (safe — no shell)
     if (profile?.env) {
       for (const [key, value] of Object.entries(profile.env)) {
@@ -242,6 +249,11 @@ export class TmuxManager {
   async resizeSession(sessionName: string): Promise<void> {
     try {
       await tmux('set-option', '-t', sessionName, 'aggressive-resize', 'on');
+    } catch { /* ignore */ }
+    // Also bump history-limit on every attach. Cheap, idempotent, and
+    // covers sessions that were created before this option was added.
+    try {
+      await tmux('set-option', '-t', sessionName, 'history-limit', '10000');
     } catch { /* ignore */ }
   }
 

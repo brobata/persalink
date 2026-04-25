@@ -6,6 +6,7 @@
 
 import { useMemo, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
+import { useLayoutStore } from '../stores/layoutStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // ============================================================================
@@ -13,13 +14,22 @@ import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 // ============================================================================
 
 function SessionPill({ session }: { session: SessionInfo }) {
-  const { attachSession, killSession, attachedSession } = useAppStore();
+  const killSession = useAppStore(s => s.killSession);
+  const panes = useLayoutStore(s => s.panes);
+  const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
+  const assignSession = useLayoutStore(s => s.assignSession);
   const [confirmKill, setConfirmKill] = useState(false);
-  const isActive = attachedSession?.id === session.id;
+  const paneIndex = panes.findIndex(p => p.sessionId === session.id);
+  const paneSlot = paneIndex >= 0 ? panes[paneIndex] : null;
+  const isActive = !!paneSlot;
+  const isInFocusedPane = paneSlot?.id === focusedPaneId;
+  const paneNumber = paneIndex + 1;
 
   return (
     <div className={`flex items-center gap-1.5 rounded-lg pl-2.5 pr-1 py-1.5 transition-colors ${
-      isActive ? 'bg-zinc-700 border border-zinc-600' : 'bg-zinc-800/50 border border-zinc-800 hover:bg-zinc-800'
+      isInFocusedPane ? 'bg-zinc-700 border border-zinc-600'
+        : isActive ? 'bg-zinc-800 border border-zinc-700'
+        : 'bg-zinc-800/50 border border-zinc-800 hover:bg-zinc-800'
     }`}>
       {session.profileIcon && (
         <span className="text-xs shrink-0">{session.profileIcon}</span>
@@ -31,13 +41,28 @@ function SessionPill({ session }: { session: SessionInfo }) {
         />
       )}
       <button
-        onClick={() => attachSession(session.id)}
+        onClick={() => assignSession(focusedPaneId, session.id)}
         className={`text-xs font-medium truncate flex-1 text-left transition-colors ${
-          isActive ? 'text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+          isInFocusedPane ? 'text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
         }`}
+        title={
+          isInFocusedPane ? `In focused pane (${paneNumber})`
+            : isActive ? `In pane ${paneNumber} — click to move to focused pane`
+            : 'Attach to focused pane'
+        }
       >
         {session.profileName || session.name}
       </button>
+      {isActive && (
+        <span
+          className={`shrink-0 inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold ${
+            isInFocusedPane ? 'bg-zinc-500 text-zinc-50' : 'bg-zinc-700 text-zinc-300'
+          }`}
+          title={`Pane ${paneNumber}`}
+        >
+          {paneNumber}
+        </span>
+      )}
       {confirmKill ? (
         <button
           onClick={() => { killSession(session.id); setConfirmKill(false); }}
@@ -65,14 +90,26 @@ function SessionPill({ session }: { session: SessionInfo }) {
 // ============================================================================
 
 function ProfileRow({ profile }: { profile: Profile }) {
-  const { createSession, sessions, healthStatuses, editProfile, attachedSession } = useAppStore();
+  const { createSession, sessions, healthStatuses, editProfile } = useAppStore();
+  const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
+  const panes = useLayoutStore(s => s.panes);
+  const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
 
   const health = healthStatuses.find(h => h.profileId === profile.id);
   const liveSessions = sessions.filter(s => s.profileId === profile.id);
   const liveCount = liveSessions.length;
-  const isActive = liveSessions.some(s => s.id === attachedSession?.id);
+  const focusedSessionId = panes.find(p => p.id === focusedPaneId)?.sessionId;
+  const isActive = !!(focusedSessionId && liveSessions.some(s => s.id === focusedSessionId));
 
   const handleClick = () => {
+    // If there's already a live session for this profile, attach it into the
+    // focused pane. Otherwise create a new one (routed via pendingAssign).
+    const existing = liveSessions[0];
+    if (existing) {
+      useLayoutStore.getState().assignSession(focusedPaneId, existing.id);
+      return;
+    }
+    markPendingAssign(focusedPaneId);
     createSession(profile.id);
   };
 
@@ -137,6 +174,8 @@ function ProfileRow({ profile }: { profile: Profile }) {
 
 export function Sidebar() {
   const { sessions, profiles, serverName, setView, discoverProfiles, createSession, editProfile } = useAppStore();
+  const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
+  const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
 
   const groupedProfiles = useMemo(() => {
     const groups = new Map<string, Profile[]>();
@@ -237,7 +276,7 @@ export function Sidebar() {
       {/* Bottom actions */}
       <div className="shrink-0 px-2 py-2 border-t border-zinc-800 space-y-1">
         <button
-          onClick={() => createSession()}
+          onClick={() => { markPendingAssign(focusedPaneId); createSession(); }}
           className="w-full py-1.5 text-xs text-zinc-600 hover:text-zinc-400
                      border border-dashed border-zinc-800 hover:border-zinc-700
                      rounded-lg transition-colors"

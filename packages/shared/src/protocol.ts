@@ -103,7 +103,7 @@ export type ClientMessage =
   | { type: 'password.change'; currentPassword: string; newPassword: string }
   // Session management
   | { type: 'session.create'; profileId?: string; name?: string; cols?: number; rows?: number }
-  | { type: 'session.attach'; sessionId: string; cols?: number; rows?: number }
+  | { type: 'session.attach'; sessionId: string; cols?: number; rows?: number; scrollbackLines?: number }
   | { type: 'session.detach' }
   | { type: 'session.input'; data: string }
   | { type: 'session.resize'; cols: number; rows: number }

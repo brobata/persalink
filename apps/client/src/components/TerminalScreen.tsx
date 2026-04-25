@@ -396,19 +396,45 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     fitAddonRef.current = fitAddon;
 
-    // Touch scroll for mobile — translate swipes into xterm scroll
+    // Touch scroll for mobile — slow drags scroll 1:1, fast flicks add
+    // momentum that decays over time (native iOS/Android feel).
     let touchStartY = 0;
+    let lastMoveY = 0;
+    let lastMoveTime = 0;
     let scrollAccum = 0;
+    let velocity = 0; // px/ms, positive = swipe up = scroll forward
+    let momentumRaf: number | null = null;
     const LINE_PX = 18;
+    const FRICTION_PER_16MS = 0.94; // slightly less than 1 → exponential decay
+    const STOP_THRESHOLD_PX_PER_MS = 0.04; // stop momentum below this
+    const FLING_THRESHOLD_PX_PER_MS = 0.25; // ignore stationary lifts
     const container = termRef.current;
 
+    const cancelMomentum = () => {
+      if (momentumRaf !== null) {
+        cancelAnimationFrame(momentumRaf);
+        momentumRaf = null;
+      }
+    };
+
     const onTouchStart = (e: TouchEvent) => {
+      cancelMomentum();
       touchStartY = e.touches[0].clientY;
+      lastMoveY = touchStartY;
+      lastMoveTime = performance.now();
       scrollAccum = 0;
+      velocity = 0;
     };
     const onTouchMove = (e: TouchEvent) => {
-      const dy = touchStartY - e.touches[0].clientY;
-      touchStartY = e.touches[0].clientY;
+      const now = performance.now();
+      const y = e.touches[0].clientY;
+      const dy = lastMoveY - y; // positive when finger moves up = scroll content up
+      const dt = Math.max(1, now - lastMoveTime);
+      // Smooth velocity with EMA so a single jittery sample doesn't dominate.
+      velocity = velocity * 0.7 + (dy / dt) * 0.3;
+      lastMoveY = y;
+      lastMoveTime = now;
+
       scrollAccum += dy;
       const lines = Math.trunc(scrollAccum / LINE_PX);
       if (lines !== 0) {
@@ -416,8 +442,42 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         term.scrollLines(lines);
       }
     };
+    const onTouchEnd = () => {
+      // If the finger was essentially stopped before lift, no fling.
+      // Stale velocity from earlier in the gesture also gets dropped if
+      // the last few ms were quiet (touchmove not fired recently).
+      const idleSinceLastMove = performance.now() - lastMoveTime;
+      if (idleSinceLastMove > 80 || Math.abs(velocity) < FLING_THRESHOLD_PX_PER_MS) {
+        velocity = 0;
+        return;
+      }
+
+      let lastFrame = performance.now();
+      const tick = () => {
+        const now = performance.now();
+        const dt = now - lastFrame;
+        lastFrame = now;
+        // Decay velocity proportional to elapsed time, normalized to 16ms frames.
+        velocity *= Math.pow(FRICTION_PER_16MS, dt / 16.667);
+        scrollAccum += velocity * dt;
+        const lines = Math.trunc(scrollAccum / LINE_PX);
+        if (lines !== 0) {
+          scrollAccum -= lines * LINE_PX;
+          term.scrollLines(lines);
+        }
+        if (Math.abs(velocity) > STOP_THRESHOLD_PX_PER_MS) {
+          momentumRaf = requestAnimationFrame(tick);
+        } else {
+          velocity = 0;
+          momentumRaf = null;
+        }
+      };
+      momentumRaf = requestAnimationFrame(tick);
+    };
     container.addEventListener('touchstart', onTouchStart, { passive: true });
     container.addEventListener('touchmove', onTouchMove, { passive: true });
+    container.addEventListener('touchend', onTouchEnd, { passive: true });
+    container.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
     // Handle resize — debounced, and only refit if the grid size actually changes.
     // xterm snaps to whole character cells, so a 1-2px jitter (e.g. tab bar
@@ -448,8 +508,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     setTimeout(() => term.focus(), 150);
 
     return () => {
+      cancelMomentum();
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
+      container.removeEventListener('touchend', onTouchEnd);
+      container.removeEventListener('touchcancel', onTouchEnd);
       container.removeEventListener('paste', onPaste as EventListener);
       resizeObserver.disconnect();
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
