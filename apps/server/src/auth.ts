@@ -29,7 +29,14 @@ export interface PasswordHash {
   params: { N: number; r: number; p: number; keylen: number };
 }
 
-const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, keylen: 32 };
+// 2026 floor — ~128MB working set, ~50ms on commodity hardware. Old hashes
+// stored with weaker params still verify (back-compat), but anything below
+// MIN_N is rejected to prevent param-downgrade attacks if the file is
+// attacker-influenced.
+const SCRYPT_PARAMS = { N: 131072, r: 8, p: 1, keylen: 32 };
+const MIN_N = 16384;
+// Default maxmem (32MB) is too small for N>=2^15. 256MB covers our params plus headroom.
+const SCRYPT_MAXMEM = 256 * 1024 * 1024;
 
 export async function hashPassword(password: string): Promise<PasswordHash> {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -37,6 +44,7 @@ export async function hashPassword(password: string): Promise<PasswordHash> {
     N: SCRYPT_PARAMS.N,
     r: SCRYPT_PARAMS.r,
     p: SCRYPT_PARAMS.p,
+    maxmem: SCRYPT_MAXMEM,
   });
   return {
     salt,
@@ -47,10 +55,16 @@ export async function hashPassword(password: string): Promise<PasswordHash> {
 }
 
 export async function verifyPassword(password: string, stored: PasswordHash): Promise<boolean> {
+  // Reject obviously-weak stored params — defense if config.json is ever
+  // attacker-influenced and gets downgraded to N=1024.
+  if (stored.params.N < MIN_N || stored.params.r < 1 || stored.params.p < 1 || stored.params.keylen < 16) {
+    return false;
+  }
   const derived = await scryptAsync(password, stored.salt, stored.params.keylen, {
     N: stored.params.N,
     r: stored.params.r,
     p: stored.params.p,
+    maxmem: SCRYPT_MAXMEM,
   });
   const storedBuf = Buffer.from(stored.hash, 'hex');
   if (derived.length !== storedBuf.length) return false;

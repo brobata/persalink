@@ -64,16 +64,26 @@ export function validateProfile(profile: Profile): string | null {
     if (/[;&|`$]/.test(profile.shell)) {
       return 'Shell path contains invalid characters';
     }
+    // Reject leading dash — tmux/bash would interpret as a flag.
+    if (profile.shell.startsWith('-')) return 'Shell path cannot start with "-"';
   }
   if (profile.cwd !== undefined) {
     if (typeof profile.cwd !== 'string' || profile.cwd.length > MAX_CWD_LENGTH) {
       return 'Invalid working directory';
     }
+    // Reject leading dash — tmux uses `-c <cwd>` and would parse a leading
+    // dash as a separate flag (argument injection).
+    if (profile.cwd.startsWith('-')) return 'Working directory cannot start with "-"';
+    // Reject newlines/control chars that could escape into tmux command lines.
+    if (/[\x00-\x1f]/.test(profile.cwd)) return 'Working directory contains control characters';
   }
   if (profile.command !== undefined) {
     if (typeof profile.command !== 'string' || profile.command.length > MAX_COMMAND_LENGTH) {
       return `Command must be ${MAX_COMMAND_LENGTH} characters or fewer`;
     }
+    // Reject embedded newlines/CRs — `command` is fed straight into
+    // `tmux send-keys ... Enter` and a newline would chain commands silently.
+    if (/[\r\n]/.test(profile.command)) return 'Command cannot contain newlines';
   }
   if (profile.env !== undefined) {
     if (typeof profile.env !== 'object' || profile.env === null) return 'Invalid env';
@@ -81,7 +91,11 @@ export function validateProfile(profile: Profile): string | null {
     if (entries.length > MAX_ENV_ENTRIES) return `Max ${MAX_ENV_ENTRIES} environment variables`;
     for (const [key, value] of entries) {
       if (typeof key !== 'string' || key.length > MAX_ENV_KEY_LENGTH) return 'Invalid env key';
+      // Env keys are typically [A-Z_][A-Z0-9_]*; reject anything that would
+      // need quoting or could be misread as a flag.
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return `Invalid env key: ${key}`;
       if (typeof value !== 'string' || value.length > MAX_ENV_VALUE_LENGTH) return 'Invalid env value';
+      if (/[\x00\r\n]/.test(value)) return 'Env value contains control characters';
     }
   }
   if (profile.color !== undefined && profile.color !== null) {
@@ -183,37 +197,47 @@ export class ProfileManager {
    */
   async discover(): Promise<Profile[]> {
     const projectsDir = path.join(os.homedir(), 'projects');
-    if (!fs.existsSync(projectsDir)) return [];
 
-    const discovered: Profile[] = [];
-    const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith('.')) continue;
-
-      const projectPath = path.join(projectsDir, entry.name);
-      const profileId = entry.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-
-      // Skip if we already have this profile
-      if (this.profiles.has(profileId)) continue;
-
-      // Check if it's a git repo
-      const isGit = fs.existsSync(path.join(projectPath, '.git'));
-      if (!isGit) continue;
-
-      // Detect project type and generate appropriate profile
-      const profile = await this.detectProjectProfile(profileId, entry.name, projectPath);
-      if (profile) discovered.push(profile);
+    let entries: import('fs').Dirent[];
+    try {
+      entries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
     }
 
-    return discovered;
+    const candidates = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => ({
+        name: e.name,
+        path: path.join(projectsDir, e.name),
+        profileId: e.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-'),
+      }))
+      .filter(c => !this.profiles.has(c.profileId));
+
+    // Run per-project detection in parallel — was sequential await in a for
+    // loop, which blocks every client's WebSocket on a NAS-mounted dir.
+    const results = await Promise.all(
+      candidates.map(async (c) => {
+        try {
+          // Probe for .git first; skip non-repos.
+          await fs.promises.access(path.join(c.path, '.git'));
+        } catch { return null; }
+        return this.detectProjectProfile(c.profileId, c.name, c.path);
+      }),
+    );
+
+    return results.filter((p): p is Profile => p !== null);
   }
 
   private async detectProjectProfile(id: string, name: string, projectPath: string): Promise<Profile | null> {
-    const hasPackageJson = fs.existsSync(path.join(projectPath, 'package.json'));
-    const hasDockerCompose = fs.existsSync(path.join(projectPath, 'docker-compose.yml'))
-      || fs.existsSync(path.join(projectPath, 'docker-compose.prod.yml'));
+    // Run all the sentinel-file probes in parallel.
+    const [hasPackageJson, hasComposeYml, hasComposeProdYml] = await Promise.all([
+      fs.promises.access(path.join(projectPath, 'package.json')).then(() => true, () => false),
+      fs.promises.access(path.join(projectPath, 'docker-compose.yml')).then(() => true, () => false),
+      fs.promises.access(path.join(projectPath, 'docker-compose.prod.yml')).then(() => true, () => false),
+    ]);
+    const hasDockerCompose = hasComposeYml || hasComposeProdYml;
 
     // Default: open Claude in the project directory
     const profile: Profile = {
@@ -246,18 +270,6 @@ export class ProfileManager {
     }
 
     return profile;
-  }
-
-  private inferGroup(nlProfile: any): string {
-    const cwd = (nlProfile.cwd || '').toLowerCase();
-
-    if (cwd.includes('website') || cwd.includes('web') || cwd.includes('site')) {
-      return 'Websites';
-    }
-    if (cwd.includes('infra') || cwd.includes('devops') || cwd.includes('ops')) {
-      return 'Infrastructure';
-    }
-    return 'Projects';
   }
 
   private inferIcon(name: string): string {

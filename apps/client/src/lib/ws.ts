@@ -55,20 +55,35 @@ export class WSClient {
       try {
         const msg: ServerMessage = JSON.parse(event.data);
         this.onMessage(msg);
-      } catch { /* ignore malformed */ }
+      } catch (err) {
+        // Don't silently drop — protocol drift between client/server shows
+        // up here and is otherwise invisible.
+        const preview = typeof event.data === 'string' ? event.data.slice(0, 200) : '<binary>';
+        console.warn('[ws] malformed message dropped:', err, 'preview:', preview);
+      }
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
       this.stopPing();
-      if (!this.intentionalClose && this.hasConnectedOnce) {
+
+      // Server-initiated explicit closes (auth rejected, password changed,
+      // origin denied) use 4xxx codes. Don't reconnect into a permanent
+      // failure — the appStore handles re-auth via the auth.failed message.
+      // Standard close codes 1000 (normal) and 1001 (going away) likewise
+      // shouldn't trigger reconnect from a clean disconnect() call.
+      const isAuthFailureClose = event.code >= 4000 && event.code < 5000;
+
+      if (this.intentionalClose || isAuthFailureClose) {
+        this.onStateChange('disconnected');
+        return;
+      }
+
+      if (this.hasConnectedOnce) {
         this.onStateChange('reconnecting');
-        this.scheduleReconnect();
       } else {
         this.onStateChange('disconnected');
-        if (!this.intentionalClose) {
-          this.scheduleReconnect();
-        }
       }
+      this.scheduleReconnect();
     };
 
     this.ws.onerror = () => {

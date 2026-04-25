@@ -276,14 +276,12 @@ export class TmuxManager {
     this.customNames.delete(sessionName);
   }
 
-  /** Capture scrollback from the current pane */
+  /** Capture scrollback from the current pane.
+   *  Throws on real tmux errors — empty string here used to be ambiguous with
+   *  "session has no output" and made users think their work was lost. */
   async captureScrollback(sessionName: string, lines: number = 2000): Promise<string> {
-    try {
-      const output = await tmux('capture-pane', '-t', sessionName, '-p', '-S', `-${lines}`);
-      return output;
-    } catch {
-      return '';
-    }
+    if (lines <= 0) return '';
+    return tmux('capture-pane', '-t', sessionName, '-p', '-S', `-${lines}`);
   }
 
   /** Resize a tmux session — sets aggressive-resize so our PTY size wins */
@@ -373,14 +371,11 @@ export class TmuxManager {
     if (/^\d+$/.test(rest)) return undefined;
     // Exact match against a known profile
     if (profileMap?.has(rest)) return rest;
-    // Match `<profileId>-<n>` (duplicate instance) — profile IDs may contain dashes,
-    // so prefer the longest matching profile id from the map
-    if (profileMap) {
-      const m = rest.match(/^(.+)-(\d+)$/);
-      if (m && profileMap.has(m[1])) return m[1];
-    }
-    // Fallback: strip trailing -N if present
+    // Match `<profileId>-<n>` (duplicate instance). Profile IDs may contain
+    // dashes, so prefer the longest match from the map; fall back to stripping
+    // trailing -N when the prefix isn't a known profile.
     const m = rest.match(/^(.+)-(\d+)$/);
+    if (m && profileMap?.has(m[1])) return m[1];
     return m ? m[1] : rest;
   }
 }

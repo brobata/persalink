@@ -77,13 +77,18 @@ function isLocalhostIp(ip: string): boolean {
 }
 
 function send(client: ConnectedClient, message: ServerMessage): void {
+  if (client.ws.readyState !== WebSocket.OPEN) return;
+  if (client.ws.bufferedAmount > MAX_BUFFERED_AMOUNT) {
+    if (message.type === 'session.output') return;
+  }
   try {
-    if (client.ws.readyState !== WebSocket.OPEN) return;
-    if (client.ws.bufferedAmount > MAX_BUFFERED_AMOUNT) {
-      if (message.type === 'session.output') return;
-    }
     client.ws.send(JSON.stringify(message));
-  } catch { /* client disconnected */ }
+  } catch (err) {
+    // Silently dropping was masking real bugs (JSON.stringify on a circular
+    // ref, ws library error, etc.). Disconnects are normal and rate-limited
+    // by the early readyState check above; anything past it is suspicious.
+    console.error(`[ws send] failed for client ${client.id} type=${message.type}:`, err);
+  }
 }
 
 function broadcastToAuthenticated(message: ServerMessage): void {
@@ -299,7 +304,18 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
 
     case 'session.input': {
       if (client.bridge) {
-        try { client.bridge.ptyProcess.write(message.data); } catch { /* ignore */ }
+        try {
+          client.bridge.ptyProcess.write(message.data);
+        } catch (err) {
+          // PTY died and onExit hasn't fired yet (or was missed). Tell the
+          // client the session is gone so the UI re-routes — silent drop
+          // means the user types into a void.
+          console.error('[session.input] write failed:', err);
+          const sessionId = client.attachedSession;
+          client.bridge = null;
+          client.attachedSession = null;
+          if (sessionId) send(client, { type: 'session.ended', sessionId });
+        }
       }
       break;
     }
@@ -308,7 +324,12 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       const cols = Math.max(10, Math.min(500, message.cols));
       const rows = Math.max(2, Math.min(200, message.rows));
       if (client.bridge) {
-        try { client.bridge.ptyProcess.resize(cols, rows); } catch { /* ignore */ }
+        try {
+          client.bridge.ptyProcess.resize(cols, rows);
+        } catch {
+          // Resize on a dead PTY is non-fatal; input handler above will
+          // surface session.ended on the next keystroke.
+        }
       }
       break;
     }
@@ -355,7 +376,9 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     // ---- Scrollback ----
     case 'session.scrollback': {
       if (client.attachedSession) {
-        const lines = Math.min(message.lines || 2000, 10000);
+        // Clamp non-negative — a negative `lines` made tmux capture forward
+        // from the buffer instead of backward.
+        const lines = Math.max(0, Math.min(message.lines || 2000, 10000));
         const data = await tmuxManager.captureScrollback(client.attachedSession, lines);
         send(client, { type: 'session.scrollback', data });
       }
