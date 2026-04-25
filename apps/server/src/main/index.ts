@@ -524,55 +524,75 @@ async function attachToSession(
   rows: number,
   scrollbackLines: number = 0,
 ): Promise<void> {
-  const exists = await tmuxManager.sessionExists(sessionName);
+  // Tmux can need a tick to register a freshly-created session under load.
+  // Retry briefly before declaring it gone — fixes the phantom-session bug
+  // where session.create succeeded but the immediate attach failed.
+  let exists = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    exists = await tmuxManager.sessionExists(sessionName);
+    if (exists) break;
+    if (attempt < 2) await new Promise(r => setTimeout(r, 50));
+  }
   if (!exists) {
     throw new Error(`Session ${sessionName} does not exist`);
   }
 
-  // Set aggressive resize so our PTY size wins
-  await tmuxManager.resizeSession(sessionName);
+  let bridge: ReturnType<typeof tmuxManager.attachBridge> | null = null;
+  try {
+    // Set aggressive resize so our PTY size wins
+    await tmuxManager.resizeSession(sessionName);
 
-  // Capture only what the client asked for. 0 = skip the tmux call entirely.
-  const scrollback = scrollbackLines > 0
-    ? await tmuxManager.captureScrollback(sessionName, scrollbackLines)
-    : '';
+    // Capture only what the client asked for. 0 = skip the tmux call entirely.
+    const scrollback = scrollbackLines > 0
+      ? await tmuxManager.captureScrollback(sessionName, scrollbackLines)
+      : '';
 
-  // Create PTY bridge
-  const bridge = tmuxManager.attachBridge(
-    sessionName,
-    cols,
-    rows,
-    // onData: relay terminal output to client (tagged so client routes to correct terminal)
-    (data: string) => {
-      if (bridge.intentionalDetach) return; // bridge is dying, don't send stale output
-      send(client, { type: 'session.output', data, sessionId: sessionName });
-    },
-    // onExit: tmux attach exited (session killed or detached externally)
-    () => {
-      // If this was an intentional detach (tab switch / explicit detach), don't
-      // send session.ended — the tmux session is still alive.
-      const wasIntentional = bridge.intentionalDetach;
+    // Create PTY bridge
+    bridge = tmuxManager.attachBridge(
+      sessionName,
+      cols,
+      rows,
+      // onData: relay terminal output to client (tagged so client routes to correct terminal)
+      (data: string) => {
+        if (bridge!.intentionalDetach) return; // bridge is dying, don't send stale output
+        send(client, { type: 'session.output', data, sessionId: sessionName });
+      },
+      // onExit: tmux attach exited (session killed or detached externally)
+      () => {
+        const wasIntentional = bridge!.intentionalDetach;
+        client.bridge = null;
+        client.attachedSession = null;
+        if (!wasIntentional) {
+          send(client, { type: 'session.ended', sessionId: sessionName });
+          broadcastSessionsList();
+        }
+      },
+    );
+
+    client.bridge = bridge;
+    client.attachedSession = sessionName;
+
+    // Get session info
+    const sessions = await tmuxManager.listSessions(profileManager.getMap());
+    const session = sessions.find(s => s.id === sessionName);
+
+    if (session) {
+      send(client, { type: 'session.attached', session, scrollback: scrollback || undefined });
+    }
+
+    audit('tmux_session_attached', { ip: client.ip, sessionId: sessionName });
+  } catch (err) {
+    // Bridge spawned but a downstream step (listSessions, etc.) failed.
+    // Without this cleanup, the PTY would stay alive holding a tmux client slot
+    // while the UI thinks attach failed.
+    if (bridge) {
+      bridge.intentionalDetach = true;
+      try { bridge.ptyProcess.kill(); } catch { /* best-effort */ }
       client.bridge = null;
       client.attachedSession = null;
-      if (!wasIntentional) {
-        send(client, { type: 'session.ended', sessionId: sessionName });
-        broadcastSessionsList();
-      }
-    },
-  );
-
-  client.bridge = bridge;
-  client.attachedSession = sessionName;
-
-  // Get session info
-  const sessions = await tmuxManager.listSessions(profileManager.getMap());
-  const session = sessions.find(s => s.id === sessionName);
-
-  if (session) {
-    send(client, { type: 'session.attached', session, scrollback: scrollback || undefined });
+    }
+    throw err;
   }
-
-  audit('tmux_session_attached', { ip: client.ip, sessionId: sessionName });
 }
 
 // ---------------------------------------------------------------------------
