@@ -129,21 +129,37 @@ export class TokenStore {
   }
 
   private load(): void {
+    let raw: string;
     try {
-      if (!fs.existsSync(TOKENS_FILE)) {
+      raw = fs.readFileSync(TOKENS_FILE, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         this.tokens = [];
         return;
       }
-      const raw = fs.readFileSync(TOKENS_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.tokens)) {
-        this.tokens = parsed.tokens;
-        return;
-      }
-      this.tokens = [];
-    } catch {
-      this.tokens = [];
+      // Token store is auth-critical — silently resetting on transient FS errors
+      // would revoke all sessions AND clobber the on-disk record on next save.
+      // Fail closed: refuse to start so the operator can investigate.
+      throw new Error(`Failed to read tokens at ${TOKENS_FILE}: ${(err as Error).message}`);
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      const aside = `${TOKENS_FILE}.corrupt-${Date.now()}`;
+      try { fs.renameSync(TOKENS_FILE, aside); } catch { /* best-effort */ }
+      throw new Error(`tokens.json was corrupt (saved aside as ${aside}): ${(err as Error).message}`);
+    }
+
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tokens?: unknown }).tokens)) {
+      this.tokens = (parsed as { tokens: StoredToken[] }).tokens;
+      return;
+    }
+    // Schema mismatch — also rename aside rather than overwrite.
+    const aside = `${TOKENS_FILE}.malformed-${Date.now()}`;
+    try { fs.renameSync(TOKENS_FILE, aside); } catch { /* best-effort */ }
+    throw new Error(`tokens.json had unexpected shape (saved aside as ${aside})`);
   }
 
   validateToken(plaintext: string): StoredToken | null {

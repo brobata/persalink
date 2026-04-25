@@ -57,22 +57,34 @@ function ensureConfigDir(): void {
 export function loadConfig(): ServerConfig {
   ensureConfigDir();
 
-  if (!fs.existsSync(CONFIG_FILE)) {
-    saveConfig(DEFAULT_CONFIG);
-    return { ...DEFAULT_CONFIG, security: { ...DEFAULT_SECURITY } };
+  let raw: string;
+  try {
+    raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      saveConfig(DEFAULT_CONFIG);
+      return { ...DEFAULT_CONFIG, security: { ...DEFAULT_SECURITY } };
+    }
+    // SECURITY: silently falling back to DEFAULT_CONFIG would set passwordHash
+    // to null, putting the server back in "first-run, anyone can claim it"
+    // mode. Refuse to start instead.
+    throw new Error(`Failed to read config at ${CONFIG_FILE}: ${(err as Error).message}`);
   }
 
+  let parsed: Record<string, unknown>;
   try {
-    const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return {
-      ...DEFAULT_CONFIG,
-      ...parsed,
-      security: { ...DEFAULT_SECURITY, ...(parsed.security || {}) },
-    };
-  } catch {
-    return { ...DEFAULT_CONFIG, security: { ...DEFAULT_SECURITY } };
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const aside = `${CONFIG_FILE}.corrupt-${Date.now()}`;
+    try { fs.renameSync(CONFIG_FILE, aside); } catch { /* best-effort */ }
+    throw new Error(`config.json was corrupt (saved aside as ${aside}): ${(err as Error).message}`);
   }
+
+  return {
+    ...DEFAULT_CONFIG,
+    ...parsed,
+    security: { ...DEFAULT_SECURITY, ...((parsed.security as Record<string, unknown>) || {}) },
+  };
 }
 
 export function saveConfig(config: ServerConfig): void {

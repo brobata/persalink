@@ -305,17 +305,31 @@ export class ProfileManager {
   }
 
   private load(): void {
-    if (!fs.existsSync(PROFILES_FILE)) return;
-
+    let raw: string;
     try {
-      const raw = fs.readFileSync(PROFILES_FILE, 'utf-8');
-      const list: Profile[] = JSON.parse(raw);
-      this.profiles.clear();
-      for (const profile of list) {
-        this.profiles.set(profile.id, profile);
-      }
-    } catch {
-      // Ignore corrupt file
+      raw = fs.readFileSync(PROFILES_FILE, 'utf-8');
+    } catch (err) {
+      // Legitimate first run — file doesn't exist yet.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      // Any other read error (EACCES, EISDIR, IO error) must NOT silently reset.
+      // Returning here would let the next save() clobber the user's existing
+      // profiles file. Throw so the server fails to start with a clear error.
+      throw new Error(`Failed to read profiles at ${PROFILES_FILE}: ${(err as Error).message}`);
+    }
+
+    let list: Profile[];
+    try {
+      list = JSON.parse(raw);
+    } catch (err) {
+      // Corrupt JSON. Rename aside so the user can recover, then proceed empty.
+      const aside = `${PROFILES_FILE}.corrupt-${Date.now()}`;
+      try { fs.renameSync(PROFILES_FILE, aside); } catch { /* best-effort */ }
+      throw new Error(`profiles.json was corrupt (saved aside as ${aside}): ${(err as Error).message}`);
+    }
+
+    this.profiles.clear();
+    for (const profile of list) {
+      this.profiles.set(profile.id, profile);
     }
   }
 
