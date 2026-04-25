@@ -76,7 +76,7 @@ async function tmux(...args: string[]): Promise<string> {
   }
 }
 
-function parseSessionLine(line: string): { name: string; windows: number; created: number; attached: boolean } | null {
+function parseSessionLine(line: string): { name: string; windows: number; created: number; attached: boolean; activity: number } | null {
   // Uses | separator to avoid collision with colons in tmux session names
   const parts = line.split('|');
   if (parts.length < 4) return null;
@@ -85,6 +85,7 @@ function parseSessionLine(line: string): { name: string; windows: number; create
     windows: parseInt(parts[1], 10) || 1,
     created: parseInt(parts[2], 10) || 0,
     attached: parts[3] === '1',
+    activity: parseInt(parts[4], 10) || 0,
   };
 }
 
@@ -135,48 +136,43 @@ export class TmuxManager {
 
   /** List all PersaLink-managed tmux sessions */
   async listSessions(profileMap?: Map<string, Profile>): Promise<SessionInfo[]> {
-    const raw = await tmux('list-sessions', '-F', '#{session_name}|#{session_windows}|#{session_created}|#{session_attached}');
+    // Fold session_activity into the format string so we don't need a
+    // per-session display-message call. Was N+1 queries; now 1 + N (windows).
+    const raw = await tmux('list-sessions', '-F',
+      '#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{session_activity}');
     if (!raw) return [];
 
-    const sessions: SessionInfo[] = [];
-    for (const line of raw.split('\n')) {
-      if (!line) continue;
-      const parsed = parseSessionLine(line);
-      if (!parsed) continue;
+    const parsedSessions = raw
+      .split('\n')
+      .filter(Boolean)
+      .map(parseSessionLine)
+      .filter((p): p is NonNullable<typeof p> => !!p)
+      .filter(p => p.name.startsWith(SESSION_PREFIX));
 
-      // Only show PersaLink-managed sessions (prefixed with pl-)
-      if (!parsed.name.startsWith(SESSION_PREFIX)) continue;
+    // Run window lookups in parallel rather than serially.
+    const windowsPerSession = await Promise.all(
+      parsedSessions.map(p => this.listWindows(p.name)),
+    );
 
+    const nowSec = Math.floor(Date.now() / 1000);
+    return parsedSessions.map((parsed, i) => {
       const profileId = this.extractProfileId(parsed.name, profileMap);
       const profile = profileId && profileMap ? profileMap.get(profileId) : undefined;
+      const idleSeconds = parsed.activity > 0 ? nowSec - parsed.activity : undefined;
 
-      // Fetch windows for this session
-      const windows = await this.listWindows(parsed.name);
-
-      // Get idle time
-      let idleSeconds: number | undefined;
-      try {
-        const idle = await tmux('display-message', '-t', parsed.name, '-p', '#{session_activity}');
-        if (idle) {
-          idleSeconds = Math.floor(Date.now() / 1000) - parseInt(idle, 10);
-        }
-      } catch { /* ignore */ }
-
-      sessions.push({
+      return {
         id: parsed.name,
         name: this.customNames.get(parsed.name) || profile?.name || parsed.name.replace(SESSION_PREFIX, ''),
         profileId,
         profileName: profile?.name,
         profileColor: profile?.color,
         profileIcon: profile?.icon,
-        windows,
+        windows: windowsPerSession[i],
         createdAt: parsed.created * 1000,
         attached: parsed.attached,
         idleSeconds,
-      });
-    }
-
-    return sessions;
+      };
+    });
   }
 
   /** List windows within a tmux session */

@@ -691,6 +691,10 @@ function startWatchdog(): void {
   setInterval(async () => {
     tokenStore.purgeExpired();
 
+    // Skip the tmux fan-out entirely when nobody is connected — saves
+    // N tmux invocations every 60s on an idle server.
+    if (clients.size === 0) return;
+
     // Broadcast updated sessions list periodically (picks up externally created/killed sessions)
     await broadcastSessionsList();
 
