@@ -25,7 +25,10 @@ export type AuditEvent =
   | 'tmux_session_detached'
   | 'action_executed'
   | 'profiles_discovered'
-  | 'permanent_lock';
+  | 'permanent_lock'
+  | 'setup_rejected_remote'
+  | 'ws_rejected_origin'
+  | 'ws_rejected_per_ip_cap';
 
 interface AuditFields {
   ip?: string;
@@ -48,6 +51,8 @@ interface AuditFields {
   clients?: number;
   failures?: number;
   permanentLock?: boolean;
+  origin?: string;
+  liveFromIp?: number;
 }
 
 const WARN_EVENTS: Set<AuditEvent> = new Set([

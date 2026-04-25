@@ -16,6 +16,11 @@ export interface SecurityConfig {
   maxConnectionsPerIp: number;
   trustProxy: boolean;
   maxTotalSessions: number;
+  // When false (default), the first-run password can only be set from a
+  // localhost connection. Prevents a network attacker from racing to claim
+  // the password between server start and operator setup. Set true if you
+  // need to set the password from the LAN.
+  allowRemoteSetup: boolean;
 }
 
 export interface ServerConfig {
@@ -37,6 +42,7 @@ const DEFAULT_SECURITY: SecurityConfig = {
   maxConnectionsPerIp: 10,
   trustProxy: false,
   maxTotalSessions: 50,
+  allowRemoteSetup: false,
 };
 
 const DEFAULT_CONFIG: ServerConfig = {

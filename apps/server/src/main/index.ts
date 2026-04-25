@@ -56,6 +56,26 @@ let settingUpPassword = false;
 // Helpers
 // ---------------------------------------------------------------------------
 
+function resolveClientIp(req: http.IncomingMessage): string {
+  if (config.security.trustProxy) {
+    const fwd = (req.headers['x-forwarded-for'] as string || '').split(',')[0].trim();
+    if (fwd) return fwd;
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function countConnectionsByIp(ip: string): number {
+  let n = 0;
+  for (const c of clients.values()) {
+    if (c.ip === ip) n++;
+  }
+  return n;
+}
+
+function isLocalhostIp(ip: string): boolean {
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
 function send(client: ConnectedClient, message: ServerMessage): void {
   try {
     if (client.ws.readyState !== WebSocket.OPEN) return;
@@ -134,19 +154,31 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       return;
     }
 
-    // Setup mode: first connection sets the password
+    // Setup mode: first connection sets the password.
     if (!config.passwordHash && !settingUpPassword) {
-      settingUpPassword = true;
-      const validationError = validatePassword(message.password);
-      if (validationError) {
-        settingUpPassword = false;
-        send(client, { type: 'auth.failed', message: validationError });
+      // Default policy: only localhost can claim the password. Without this,
+      // the first attacker to reach an unconfigured server takes ownership.
+      if (!config.security.allowRemoteSetup && !isLocalhostIp(client.ip)) {
+        audit('setup_rejected_remote', { ip: client.ip });
+        send(client, { type: 'auth.failed', message: 'First-run setup must be performed from localhost. Set security.allowRemoteSetup=true in ~/.persalink/config.json to allow remote setup.' });
         return;
       }
-      config.passwordHash = await hashPassword(message.password);
-      saveConfig(config);
-      settingUpPassword = false;
-      audit('password_set', { ip: client.ip });
+
+      settingUpPassword = true;
+      try {
+        const validationError = validatePassword(message.password);
+        if (validationError) {
+          send(client, { type: 'auth.failed', message: validationError });
+          return;
+        }
+        config.passwordHash = await hashPassword(message.password);
+        saveConfig(config);
+        audit('password_set', { ip: client.ip });
+      } finally {
+        // Always clear the flag — a thrown saveConfig must not leave the
+        // server permanently stuck in "setup in progress" mode.
+        settingUpPassword = false;
+      }
     } else if (!config.passwordHash && settingUpPassword) {
       send(client, { type: 'auth.failed', message: 'Password setup in progress, try again' });
       return;
@@ -609,12 +641,40 @@ async function attachToSession(
 // ---------------------------------------------------------------------------
 
 function setupWebSocket(server: http.Server): void {
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({
+    server,
+    verifyClient: (info, cb) => {
+      const req = info.req;
+      const ip = resolveClientIp(req);
+
+      // Origin allowlist — empty list means same-origin only (the default).
+      // Without this, a malicious LAN page can hijack a saved-token session
+      // via a regular browser fetch / DNS rebinding.
+      const origin = req.headers.origin;
+      const allowed = config.security.allowedOrigins;
+      if (origin) {
+        const sameOrigin = origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
+        if (!sameOrigin && (allowed.length === 0 || !allowed.includes(origin))) {
+          audit('ws_rejected_origin', { ip, origin });
+          cb(false, 403, 'Origin not allowed');
+          return;
+        }
+      }
+
+      // Per-IP concurrent connection cap — blunts pre-auth flood.
+      const liveFromIp = countConnectionsByIp(ip);
+      if (liveFromIp >= config.security.maxConnectionsPerIp) {
+        audit('ws_rejected_per_ip_cap', { ip, liveFromIp });
+        cb(false, 429, 'Too many connections');
+        return;
+      }
+
+      cb(true);
+    },
+  });
 
   wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
-    const ip = config.security.trustProxy
-      ? (req.headers['x-forwarded-for'] as string || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
-      : req.socket.remoteAddress || 'unknown';
+    const ip = resolveClientIp(req);
 
     const clientId = crypto.randomUUID();
     const client: ConnectedClient = {
