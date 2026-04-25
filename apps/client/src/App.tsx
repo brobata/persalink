@@ -9,6 +9,7 @@ import { SettingsScreen } from './components/SettingsScreen';
 import { ProfileEditor } from './components/ProfileEditor';
 import { Sidebar } from './components/Sidebar';
 import { GridLayout } from './components/GridLayout';
+import { ToastStack } from './components/Toast';
 import { useLayoutStore } from './stores/layoutStore';
 
 // ============================================================================
@@ -92,6 +93,8 @@ export function App() {
   if (view === 'locked') return <LockScreen />;
   if (view === 'connect') return <ConnectScreen />;
   if (view === 'auth') return <AuthScreen />;
+  // Toast lives at the root so it overlays whatever view is rendered.
+  // (Pre-auth views above don't need it — server isn't accepting messages yet.)
 
   // Desktop: sidebar always visible + main panel (GridLayout replaces the
   // single-session TerminalScreen here — a 1-pane grid is single-session mode).
@@ -111,6 +114,7 @@ export function App() {
           )}
         </div>
         {isReconnecting && <ReconnectingOverlay />}
+        <ToastStack />
       </div>
     );
   }
@@ -123,6 +127,7 @@ export function App() {
       {view === 'settings' && <SettingsScreen />}
       {view === 'profile-editor' && <ProfileEditor />}
       {isReconnecting && <ReconnectingOverlay />}
+      <ToastStack />
     </div>
   );
 }

@@ -68,6 +68,11 @@ interface AppState {
   // Quick action results
   actionResult: { actionId: string; profileId?: string; output: string; exitCode: number; timedOut?: boolean; truncated?: boolean; spawnError?: boolean } | null;
 
+  // Toast notifications — server-side errors and other transient messages.
+  // Without this, a 'window.create' or 'profile.save' failure on the server
+  // produces no visible signal on the client.
+  notifications: { id: string; kind: 'error' | 'info'; message: string; op?: string; createdAt: number }[];
+
   // Actions
   setServerUrl: (url: string) => void;
   connect: () => void;
@@ -102,6 +107,8 @@ interface AppState {
   closeTab: (sessionId: string) => void;
   setShowTabPicker: (show: boolean) => void;
   getTabs: () => SessionTab[];
+  pushNotification: (kind: 'error' | 'info', message: string, op?: string) => void;
+  dismissNotification: (id: string) => void;
 }
 
 // ============================================================================
@@ -148,6 +155,17 @@ export const useAppStore = create<AppState>()(
       switchingToId: null,
       showTabPicker: false,
       actionResult: null,
+      notifications: [],
+
+      pushNotification: (kind, message, op) => set((s) => ({
+        notifications: [
+          ...s.notifications.slice(-4), // cap at 5 visible
+          { id: crypto.randomUUID(), kind, message, op, createdAt: Date.now() },
+        ],
+      })),
+      dismissNotification: (id) => set((s) => ({
+        notifications: s.notifications.filter((n) => n.id !== id),
+      })),
 
       setServerUrl: (url) => set({
         serverUrl: url.trim().replace(/^(wss?|https?):\/\//i, ''),
@@ -514,7 +532,8 @@ function handleServerMessage(
       break;
 
     case 'error':
-      console.warn('[PersaLink]', msg.message);
+      console.warn('[PersaLink]', msg.op ? `[${msg.op}]` : '', msg.message);
+      useAppStore.getState().pushNotification('error', msg.message, msg.op);
       break;
 
     case 'pong':

@@ -706,15 +706,24 @@ function setupWebSocket(server: http.Server): void {
     });
 
     ws.on('message', async (raw: Buffer | string) => {
+      const str = typeof raw === 'string' ? raw : raw.toString('utf-8');
+      if (str.length > 1_000_000) {
+        send(client, { type: 'error', message: 'Message too large' });
+        return;
+      }
+
+      // Parse first — JSON errors are distinct from handler errors.
+      // Previously both fell through one catch and emitted "Invalid message",
+      // hiding all real failures behind a misleading label.
+      let message: ClientMessage;
       try {
-        const str = typeof raw === 'string' ? raw : raw.toString('utf-8');
-        if (str.length > 1_000_000) {
-          send(client, { type: 'error', message: 'Message too large' });
-          return;
-        }
+        message = JSON.parse(str);
+      } catch {
+        send(client, { type: 'error', message: 'Malformed JSON' });
+        return;
+      }
 
-        const message: ClientMessage = JSON.parse(str);
-
+      try {
         if (!client.authenticated) {
           if (message.type === 'auth' || message.type === 'auth.token') {
             await handleAuth(client, message);
@@ -725,10 +734,12 @@ function setupWebSocket(server: http.Server): void {
           }
           return;
         }
-
         await handleMessage(client, message);
-      } catch {
-        send(client, { type: 'error', message: 'Invalid message' });
+      } catch (err) {
+        const op = (message as { type?: string }).type;
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(`[ws] handler ${op} failed for client ${clientId}:`, err);
+        send(client, { type: 'error', message: detail, op });
       }
     });
 

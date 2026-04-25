@@ -170,4 +170,4 @@ export type ServerMessage =
   | { type: 'session.scrollback'; data: string }
   // General
   | { type: 'pong' }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; op?: string };
