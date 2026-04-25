@@ -1,134 +1,167 @@
 /**
  * @file PersaLink Protocol v1
- * @description Shared types for tmux session orchestrator communication.
- *   PersaLink uses tmux as the session engine for persistent terminal sessions.
- *   Sessions survive server restarts. Profiles define project environments
- *   with on-connect automation, quick actions, and health checks.
+ * @description Shared schemas + types for tmux session orchestrator communication.
+ *   Uses zod schemas as the single source of truth — the TS types below are
+ *   derived from them via z.infer, and the schemas double as runtime
+ *   validators at the WebSocket boundary and inside ProfileManager.
  */
+
+import { z } from 'zod';
 
 // ============================================================================
 // Profiles
 // ============================================================================
 
-export interface QuickAction {
-  id: string;
-  name: string;
-  command: string;
-  icon?: string;
-  confirm?: boolean;
-}
+const PROFILE_ID_RX = /^[a-z0-9_-]+$/;
+const COLOR_HEX_RX = /^#[0-9a-fA-F]{6}$/;
+const ENV_KEY_RX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-export interface HealthCheck {
-  command: string;
-  intervalSeconds: number;
-  parser: 'exit-code' | 'json' | 'contains';
-  /** For 'contains' parser: string to search for in output */
-  contains?: string;
-}
+const NoLeadingDash = (s: string) => !s.startsWith('-');
+const NoControlChars = (s: string) => !/[\x00-\x1f]/.test(s);
+const NoNewlines = (s: string) => !/[\r\n]/.test(s);
 
-export interface Profile {
-  id: string;
-  name: string;
-  icon?: string;
-  color?: string;
-  cwd?: string;
-  command?: string;
-  shell?: string;
-  env?: Record<string, string>;
-  group?: string;
-  pinned?: boolean;
-  actions?: QuickAction[];
-  healthCheck?: HealthCheck;
-  cols?: number;
-  rows?: number;
-}
+export const QuickActionSchema = z.object({
+  id: z.string().min(1).max(100),
+  name: z.string().min(1).max(100),
+  command: z.string().min(1).max(1024).refine(NoNewlines, 'Command cannot contain newlines'),
+  icon: z.string().max(8).optional(),
+  confirm: z.boolean().optional(),
+});
+
+export const HealthCheckSchema = z.object({
+  command: z.string().min(1).max(1024).refine(NoNewlines, 'Command cannot contain newlines'),
+  intervalSeconds: z.number().int().positive().max(86400),
+  parser: z.enum(['exit-code', 'json', 'contains']),
+  contains: z.string().max(256).optional(),
+});
+
+export const ProfileSchema = z.object({
+  id: z.string().regex(PROFILE_ID_RX, 'Profile ID must be alphanumeric with hyphens/underscores').max(100),
+  name: z.string().min(1).max(100),
+  icon: z.string().max(8).optional(),
+  color: z.string().regex(COLOR_HEX_RX, 'Color must be a hex color (e.g. #ff5500)').optional().nullable(),
+  cwd: z.string().max(512)
+    .refine(NoLeadingDash, 'Working directory cannot start with "-"')
+    .refine(NoControlChars, 'Working directory contains control characters')
+    .optional(),
+  command: z.string().max(2048).refine(NoNewlines, 'Command cannot contain newlines').optional(),
+  shell: z.string().max(256)
+    .refine((s) => !/[;&|`$]/.test(s), 'Shell path contains invalid characters')
+    .refine(NoLeadingDash, 'Shell path cannot start with "-"')
+    .optional(),
+  env: z.record(
+    z.string().regex(ENV_KEY_RX, 'Invalid env key').max(64),
+    z.string().max(2048).refine(NoControlChars, 'Env value contains control characters'),
+  ).refine((r) => Object.keys(r).length <= 32, 'Max 32 environment variables').optional(),
+  group: z.string().max(50).optional(),
+  pinned: z.boolean().optional(),
+  actions: z.array(QuickActionSchema).max(10).optional(),
+  healthCheck: HealthCheckSchema.optional(),
+  cols: z.number().int().min(10).max(500).optional(),
+  rows: z.number().int().min(2).max(200).optional(),
+});
+
+export type QuickAction = z.infer<typeof QuickActionSchema>;
+export type HealthCheck = z.infer<typeof HealthCheckSchema>;
+export type Profile = z.infer<typeof ProfileSchema>;
 
 // ============================================================================
 // Tmux Sessions
 // ============================================================================
 
-export interface TmuxWindowInfo {
-  index: number;
-  name: string;
-  active: boolean;
-  paneCount: number;
-}
+export const TmuxWindowInfoSchema = z.object({
+  index: z.number().int().min(0),
+  name: z.string(),
+  active: z.boolean(),
+  paneCount: z.number().int().min(1),
+});
 
-export interface SessionInfo {
-  id: string;
-  name: string;
-  profileId?: string;
-  profileName?: string;
-  profileColor?: string;
-  profileIcon?: string;
-  windows: TmuxWindowInfo[];
-  createdAt: number;
-  attached: boolean;
-  /** Seconds since last activity */
-  idleSeconds?: number;
-}
+export const SessionInfoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  profileId: z.string().optional(),
+  profileName: z.string().optional(),
+  profileColor: z.string().optional(),
+  profileIcon: z.string().optional(),
+  windows: z.array(TmuxWindowInfoSchema),
+  createdAt: z.number(),
+  attached: z.boolean(),
+  idleSeconds: z.number().optional(),
+});
 
-export interface HealthStatus {
-  profileId: string;
-  healthy: boolean;
-  lastCheck: number;
-  output?: string;
-}
+export const HealthStatusSchema = z.object({
+  profileId: z.string(),
+  healthy: z.boolean(),
+  lastCheck: z.number(),
+  output: z.string().optional(),
+});
+
+export type TmuxWindowInfo = z.infer<typeof TmuxWindowInfoSchema>;
+export type SessionInfo = z.infer<typeof SessionInfoSchema>;
+export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 
 // ============================================================================
 // Token Info
 // ============================================================================
 
-export interface TokenInfo {
-  id: string;
-  name: string;
-  createdAt: string;
-  lastUsedAt: string;
-  expiresAt: string | null;
-}
+export const TokenInfoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  createdAt: z.string(),
+  lastUsedAt: z.string(),
+  expiresAt: z.string().nullable(),
+});
+
+export type TokenInfo = z.infer<typeof TokenInfoSchema>;
 
 // ============================================================================
 // Client -> Server Messages
 // ============================================================================
 
-export type ClientMessage =
+const ColsField = z.number().int().min(10).max(500).optional();
+const RowsField = z.number().int().min(2).max(200).optional();
+
+export const ClientMessageSchema = z.discriminatedUnion('type', [
   // Auth
-  | { type: 'auth'; password: string; tokenName?: string }
-  | { type: 'auth.token'; token: string }
+  z.object({ type: z.literal('auth'), password: z.string().min(1).max(256), tokenName: z.string().max(100).optional() }),
+  z.object({ type: z.literal('auth.token'), token: z.string().min(1).max(512) }),
   // Token management
-  | { type: 'token.list' }
-  | { type: 'token.create'; name: string; ttlDays?: number | null }
-  | { type: 'token.revoke'; tokenId: string }
+  z.object({ type: z.literal('token.list') }),
+  z.object({ type: z.literal('token.create'), name: z.string().max(100), ttlDays: z.number().int().nullable().optional() }),
+  z.object({ type: z.literal('token.revoke'), tokenId: z.string().max(128) }),
   // Password management
-  | { type: 'password.change'; currentPassword: string; newPassword: string }
+  z.object({ type: z.literal('password.change'), currentPassword: z.string().min(1).max(256), newPassword: z.string().min(1).max(256) }),
   // Session management
-  | { type: 'session.create'; profileId?: string; name?: string; cols?: number; rows?: number }
-  | { type: 'session.attach'; sessionId: string; cols?: number; rows?: number; scrollbackLines?: number }
-  | { type: 'session.detach' }
-  | { type: 'session.input'; data: string }
-  | { type: 'session.resize'; cols: number; rows: number }
-  | { type: 'session.kill'; sessionId: string }
-  | { type: 'session.rename'; sessionId: string; name: string }
-  | { type: 'sessions.list' }
-  // Window management (tmux windows within a session)
-  | { type: 'window.select'; windowIndex: number }
-  | { type: 'window.create'; name?: string }
-  | { type: 'window.kill'; windowIndex: number }
-  | { type: 'window.rename'; windowIndex: number; name: string }
+  z.object({ type: z.literal('session.create'), profileId: z.string().max(100).optional(), name: z.string().max(100).optional(), cols: ColsField, rows: RowsField }),
+  z.object({ type: z.literal('session.attach'), sessionId: z.string().max(256), cols: ColsField, rows: RowsField, scrollbackLines: z.number().int().min(0).max(10000).optional() }),
+  z.object({ type: z.literal('session.detach') }),
+  z.object({ type: z.literal('session.input'), data: z.string().max(1_000_000) }),
+  z.object({ type: z.literal('session.resize'), cols: z.number().int().min(10).max(500), rows: z.number().int().min(2).max(200) }),
+  z.object({ type: z.literal('session.kill'), sessionId: z.string().max(256) }),
+  z.object({ type: z.literal('session.rename'), sessionId: z.string().max(256), name: z.string().max(100) }),
+  z.object({ type: z.literal('sessions.list') }),
+  // Window management
+  z.object({ type: z.literal('window.select'), windowIndex: z.number().int().min(0) }),
+  z.object({ type: z.literal('window.create'), name: z.string().max(100).optional() }),
+  z.object({ type: z.literal('window.kill'), windowIndex: z.number().int().min(0) }),
+  z.object({ type: z.literal('window.rename'), windowIndex: z.number().int().min(0), name: z.string().max(100) }),
   // Quick actions
-  | { type: 'action.run'; profileId: string; actionId: string }
+  z.object({ type: z.literal('action.run'), profileId: z.string().max(100), actionId: z.string().max(100) }),
   // Profile management
-  | { type: 'profiles.list' }
-  | { type: 'profile.save'; profile: Profile }
-  | { type: 'profile.delete'; profileId: string }
-  | { type: 'profile.reorder'; profileIds: string[] }
-  | { type: 'profile.discover' }
+  z.object({ type: z.literal('profiles.list') }),
+  z.object({ type: z.literal('profile.save'), profile: ProfileSchema }),
+  z.object({ type: z.literal('profile.delete'), profileId: z.string().max(100) }),
+  z.object({ type: z.literal('profile.reorder'), profileIds: z.array(z.string().max(100)).max(1000) }),
+  z.object({ type: z.literal('profile.discover') }),
   // Health
-  | { type: 'health.status' }
+  z.object({ type: z.literal('health.status') }),
   // Scrollback
-  | { type: 'session.scrollback'; lines?: number }
+  z.object({ type: z.literal('session.scrollback'), lines: z.number().int().optional() }),
   // Keepalive
-  | { type: 'ping' };
+  z.object({ type: z.literal('ping') }),
+]);
+
+export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
 // ============================================================================
 // Protocol Version
@@ -140,6 +173,10 @@ export const PROTOCOL_VERSION = 1;
 // Server -> Client Messages
 // ============================================================================
 
+// Server messages aren't validated at runtime on either side (the server
+// produces them, the client consumes them), so these stay as plain TS unions
+// for ergonomics. If we ever want full bidirectional validation we can
+// promote to schemas the same way.
 export type ServerMessage =
   // Auth
   | { type: 'auth.ok'; serverName: string; setupMode: boolean; token?: string; protocolVersion?: number }
@@ -171,3 +208,20 @@ export type ServerMessage =
   // General
   | { type: 'pong' }
   | { type: 'error'; message: string; op?: string };
+
+// ============================================================================
+// Boundary parsing helpers
+// ============================================================================
+
+/** Parse an inbound client message. Throws zod errors with structured paths. */
+export function parseClientMessage(raw: unknown): ClientMessage {
+  return ClientMessageSchema.parse(raw);
+}
+
+/** Validate a profile shape. Returns null on success, error message on failure. */
+export function validateProfileShape(profile: unknown): string | null {
+  const result = ProfileSchema.safeParse(profile);
+  if (result.success) return null;
+  const first = result.error.issues[0];
+  return first ? `${first.path.join('.') || 'profile'}: ${first.message}` : 'Invalid profile';
+}

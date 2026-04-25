@@ -10,6 +10,7 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { Profile } from '@persalink/shared/protocol';
+import { validateProfileShape } from '@persalink/shared/protocol';
 import { atomicWriteFileSync } from './atomicWrite';
 import { CONFIG_DIR } from './config';
 
@@ -38,86 +39,9 @@ const CLAUDE_PROFILE: Profile = {
 // Validation
 // ============================================================================
 
-const MAX_PROFILE_NAME_LENGTH = 100;
-const MAX_CWD_LENGTH = 512;
-const MAX_COMMAND_LENGTH = 1000;
-const MAX_ENV_ENTRIES = 50;
-const MAX_ENV_KEY_LENGTH = 128;
-const MAX_ENV_VALUE_LENGTH = 4096;
-const COLOR_HEX_PATTERN = /^#[0-9a-fA-F]{6}$/;
-const PROFILE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
-const MAX_ACTIONS = 20;
-
+/** Validate a profile via the shared zod schema. Single source of truth. */
 export function validateProfile(profile: Profile): string | null {
-  if (!profile.id || typeof profile.id !== 'string') return 'Profile ID is required';
-  if (profile.id.length > 100 || !PROFILE_ID_PATTERN.test(profile.id)) {
-    return 'Profile ID must be alphanumeric with hyphens/underscores';
-  }
-  if (!profile.name || typeof profile.name !== 'string') return 'Profile name is required';
-  if (profile.name.length > MAX_PROFILE_NAME_LENGTH) {
-    return `Profile name must be ${MAX_PROFILE_NAME_LENGTH} characters or fewer`;
-  }
-  if (profile.shell !== undefined) {
-    if (typeof profile.shell !== 'string' || profile.shell.length > 256) {
-      return 'Invalid shell path';
-    }
-    if (/[;&|`$]/.test(profile.shell)) {
-      return 'Shell path contains invalid characters';
-    }
-    // Reject leading dash — tmux/bash would interpret as a flag.
-    if (profile.shell.startsWith('-')) return 'Shell path cannot start with "-"';
-  }
-  if (profile.cwd !== undefined) {
-    if (typeof profile.cwd !== 'string' || profile.cwd.length > MAX_CWD_LENGTH) {
-      return 'Invalid working directory';
-    }
-    // Reject leading dash — tmux uses `-c <cwd>` and would parse a leading
-    // dash as a separate flag (argument injection).
-    if (profile.cwd.startsWith('-')) return 'Working directory cannot start with "-"';
-    // Reject newlines/control chars that could escape into tmux command lines.
-    if (/[\x00-\x1f]/.test(profile.cwd)) return 'Working directory contains control characters';
-  }
-  if (profile.command !== undefined) {
-    if (typeof profile.command !== 'string' || profile.command.length > MAX_COMMAND_LENGTH) {
-      return `Command must be ${MAX_COMMAND_LENGTH} characters or fewer`;
-    }
-    // Reject embedded newlines/CRs — `command` is fed straight into
-    // `tmux send-keys ... Enter` and a newline would chain commands silently.
-    if (/[\r\n]/.test(profile.command)) return 'Command cannot contain newlines';
-  }
-  if (profile.env !== undefined) {
-    if (typeof profile.env !== 'object' || profile.env === null) return 'Invalid env';
-    const entries = Object.entries(profile.env);
-    if (entries.length > MAX_ENV_ENTRIES) return `Max ${MAX_ENV_ENTRIES} environment variables`;
-    for (const [key, value] of entries) {
-      if (typeof key !== 'string' || key.length > MAX_ENV_KEY_LENGTH) return 'Invalid env key';
-      // Env keys are typically [A-Z_][A-Z0-9_]*; reject anything that would
-      // need quoting or could be misread as a flag.
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return `Invalid env key: ${key}`;
-      if (typeof value !== 'string' || value.length > MAX_ENV_VALUE_LENGTH) return 'Invalid env value';
-      if (/[\x00\r\n]/.test(value)) return 'Env value contains control characters';
-    }
-  }
-  if (profile.color !== undefined && profile.color !== null) {
-    if (typeof profile.color !== 'string' || !COLOR_HEX_PATTERN.test(profile.color)) {
-      return 'Color must be a hex color (e.g. #ff5500)';
-    }
-  }
-  if (profile.actions !== undefined) {
-    if (!Array.isArray(profile.actions)) return 'Actions must be an array';
-    if (profile.actions.length > MAX_ACTIONS) return `Max ${MAX_ACTIONS} quick actions`;
-    for (const action of profile.actions) {
-      if (!action.id || !action.name || !action.command) {
-        return 'Each action needs id, name, and command';
-      }
-    }
-  }
-  if (profile.group !== undefined) {
-    if (typeof profile.group !== 'string' || profile.group.length > 50) {
-      return 'Group name must be 50 characters or fewer';
-    }
-  }
-  return null;
+  return validateProfileShape(profile);
 }
 
 // ============================================================================

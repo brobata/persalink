@@ -18,7 +18,7 @@ import { TokenStore, hashPassword, verifyPassword, validatePassword } from '../a
 import { RateLimiter } from '../rateLimiter';
 import { audit } from '../auditLog';
 import type { ClientMessage, ServerMessage } from '@persalink/shared/protocol';
-import { PROTOCOL_VERSION } from '@persalink/shared/protocol';
+import { PROTOCOL_VERSION, parseClientMessage } from '@persalink/shared/protocol';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -738,11 +738,25 @@ function setupWebSocket(server: http.Server): void {
       // Parse first — JSON errors are distinct from handler errors.
       // Previously both fell through one catch and emitted "Invalid message",
       // hiding all real failures behind a misleading label.
-      let message: ClientMessage;
+      let json: unknown;
       try {
-        message = JSON.parse(str);
+        json = JSON.parse(str);
       } catch {
         send(client, { type: 'error', message: 'Malformed JSON' });
+        return;
+      }
+
+      // Schema-validate at the boundary — old hand-rolled checks happened
+      // ad-hoc inside handlers and missed cases (negative scrollback lines,
+      // wrong types, etc.). Zod gives us a structured rejection with the
+      // offending field name.
+      let message: ClientMessage;
+      try {
+        message = parseClientMessage(json);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : 'Invalid message shape';
+        const op = (json as { type?: unknown })?.type;
+        send(client, { type: 'error', message: detail, op: typeof op === 'string' ? op : undefined });
         return;
       }
 

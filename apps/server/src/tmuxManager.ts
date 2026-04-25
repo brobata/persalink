@@ -165,7 +165,7 @@ export class TmuxManager {
         name: this.customNames.get(parsed.name) || profile?.name || parsed.name.replace(SESSION_PREFIX, ''),
         profileId,
         profileName: profile?.name,
-        profileColor: profile?.color,
+        profileColor: profile?.color ?? undefined,
         profileIcon: profile?.icon,
         windows: windowsPerSession[i],
         createdAt: parsed.created * 1000,
