@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
+import { usePullToRefresh } from '../lib/usePullToRefresh';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // ============================================================================
@@ -25,39 +26,47 @@ function SessionPill({ session }: { session: SessionInfo }) {
   const [confirmKill, setConfirmKill] = useState(false);
 
   return (
-    <div className="shrink-0 flex items-center gap-1.5 bg-zinc-800 border border-zinc-700 rounded-lg pl-2.5 pr-1 py-1">
-      {session.profileIcon && (
-        <span className="text-xs shrink-0">{session.profileIcon}</span>
-      )}
-      {!session.profileIcon && (
-        <div
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{ backgroundColor: session.profileColor || '#22c55e' }}
-        />
-      )}
+    <div className="flex items-center gap-0 bg-emerald-950/30 border border-emerald-700/60 border-l-2 border-l-emerald-500 rounded-xl">
       <button
         onClick={() => attachSession(session.id)}
-        className="text-xs font-medium text-zinc-300 truncate max-w-[100px]
-                   active:text-zinc-100 transition-colors"
+        className="flex items-center gap-3 flex-1 min-w-0 px-4 py-3.5 active:bg-emerald-900/40 transition-colors text-left rounded-l-xl"
       >
-        {session.name}
+        {session.profileIcon ? (
+          <span className="text-lg shrink-0">{session.profileIcon}</span>
+        ) : (
+          <div
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ backgroundColor: session.profileColor || '#22c55e' }}
+          />
+        )}
+        <span className="flex-1 text-sm font-medium text-zinc-100 truncate">
+          {session.name || session.profileName}
+        </span>
+        {session.profileColor && (
+          <div
+            className="shrink-0 w-1.5 h-4 rounded-full"
+            style={{ backgroundColor: session.profileColor }}
+          />
+        )}
       </button>
       {confirmKill ? (
         <button
           onClick={() => { killSession(session.id); setConfirmKill(false); }}
           onBlur={() => setConfirmKill(false)}
-          className="px-1.5 py-0.5 text-[10px] font-medium bg-red-900/50 text-red-400
-                     rounded transition-colors active:bg-red-800/50"
+          className="shrink-0 px-3 py-3.5 text-xs font-medium text-red-400 active:text-red-300 transition-colors border-l border-emerald-700/60 rounded-r-xl"
         >
           Kill?
         </button>
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); setConfirmKill(true); }}
-          className="px-1 py-0.5 text-zinc-600 active:text-red-400 transition-colors text-sm leading-none"
+          className="shrink-0 px-3 py-3.5 text-zinc-500 active:text-red-400 transition-colors border-l border-emerald-700/60 rounded-r-xl"
           title="Kill session"
         >
-          &times;
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
         </button>
       )}
     </div>
@@ -161,8 +170,16 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
 // ============================================================================
 
 export function HomeScreen() {
-  const { sessions, profiles, serverName, openSettings, discoverProfiles, createSession, editProfile, reorderProfiles } = useAppStore();
+  const { sessions, profiles, serverName, openSettings, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
   const [reordering, setReordering] = useState(false);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const onRefresh = useCallback(() => refresh(), [refresh]);
+  const { pullDistance, phase, triggerDistance } = usePullToRefresh(scrollRef, onRefresh);
+
+  const pullProgress = Math.min(1, pullDistance / triggerDistance);
+  const indicatorActive = phase === 'refreshing' || pullDistance >= triggerDistance;
+  const animatePull = phase !== 'pulling';
 
   const groupedProfiles = useMemo(() => {
     const groups = new Map<string, Profile[]>();
@@ -221,15 +238,47 @@ export function HomeScreen() {
       </header>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
-        {/* Live Sessions — compact pill row */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto relative"
+        style={{ overscrollBehaviorY: 'contain', touchAction: 'pan-y' }}
+      >
+        {/* Pull-to-refresh indicator — sits in the gap revealed by the
+            translated content below. Hidden at rest. */}
+        <div
+          className="absolute left-0 right-0 top-0 flex items-center justify-center pointer-events-none"
+          style={{
+            height: pullDistance,
+            opacity: pullDistance > 8 ? 1 : 0,
+            transition: animatePull ? 'height 200ms ease-out, opacity 150ms' : 'none',
+          }}
+        >
+          <div
+            className={`w-5 h-5 rounded-full border-2 border-zinc-700 ${
+              phase === 'refreshing' ? 'border-t-zinc-200 animate-spin' : ''
+            }`}
+            style={{
+              transform: phase === 'refreshing' ? undefined : `rotate(${pullProgress * 270}deg)`,
+              borderTopColor: phase !== 'refreshing' && indicatorActive ? '#e4e4e7' : undefined,
+            }}
+          />
+        </div>
+
+        <div
+          className="px-4 py-4 space-y-6"
+          style={{
+            transform: `translateY(${pullDistance}px)`,
+            transition: animatePull ? 'transform 200ms ease-out' : 'none',
+          }}
+        >
+        {/* Live Sessions — full-width rows matching profile card size */}
         {sessions.length > 0 && (
           <section>
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
               Live ({sessions.length})
             </h2>
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="space-y-2">
               {sessions.map((session) => (
                 <SessionPill key={session.id} session={session} />
               ))}
@@ -290,6 +339,7 @@ export function HomeScreen() {
             + New Profile
           </button>
         </section>
+        </div>
       </div>
     </div>
   );

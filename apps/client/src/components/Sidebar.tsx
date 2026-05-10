@@ -26,59 +26,72 @@ function SessionPill({ session }: { session: SessionInfo }) {
   const paneNumber = paneIndex + 1;
 
   return (
-    <div className={`flex items-center gap-1.5 rounded-lg pl-2.5 pr-1 py-1.5 transition-colors ${
-      isInFocusedPane ? 'bg-zinc-700 border border-zinc-600'
-        : isActive ? 'bg-zinc-800 border border-zinc-700'
-        : 'bg-zinc-800/50 border border-zinc-800 hover:bg-zinc-800'
+    <div className={`flex items-center gap-0 rounded-lg transition-colors border-l-2 ${
+      isInFocusedPane
+        ? 'bg-emerald-900/50 border-emerald-400'
+        : isActive
+        ? 'bg-emerald-950/50 border-emerald-500 hover:bg-emerald-900/40'
+        : 'bg-emerald-950/30 border-emerald-700/60 hover:bg-emerald-950/50'
     }`}>
-      {session.profileIcon && (
-        <span className="text-xs shrink-0">{session.profileIcon}</span>
-      )}
-      {!session.profileIcon && (
-        <div
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{ backgroundColor: session.profileColor || '#22c55e' }}
-        />
-      )}
       <button
         onClick={() => assignSession(focusedPaneId, session.id)}
-        className={`text-xs font-medium truncate flex-1 text-left transition-colors ${
-          isInFocusedPane ? 'text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
-        }`}
+        className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 text-left"
         title={
           isInFocusedPane ? `In focused pane (${paneNumber})`
             : isActive ? `In pane ${paneNumber} — click to move to focused pane`
             : 'Attach to focused pane'
         }
       >
-        {session.profileName || session.name}
-      </button>
-      {isActive && (
-        <span
-          className={`shrink-0 inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold ${
-            isInFocusedPane ? 'bg-zinc-500 text-zinc-50' : 'bg-zinc-700 text-zinc-300'
-          }`}
-          title={`Pane ${paneNumber}`}
-        >
-          {paneNumber}
+        {session.profileIcon ? (
+          <span className="text-sm shrink-0">{session.profileIcon}</span>
+        ) : (
+          <div
+            className="w-2 h-2 rounded-full shrink-0"
+            style={{ backgroundColor: session.profileColor || '#22c55e' }}
+          />
+        )}
+        <span className={`flex-1 text-xs font-medium truncate transition-colors ${
+          isInFocusedPane ? 'text-zinc-50' : 'text-zinc-200'
+        }`}>
+          {session.name || session.profileName}
         </span>
-      )}
+        <div className="flex items-center gap-1 shrink-0">
+          {isActive && (
+            <span
+              className={`inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold ${
+                isInFocusedPane ? 'bg-emerald-400 text-emerald-950' : 'bg-emerald-700/80 text-emerald-100'
+              }`}
+              title={`Pane ${paneNumber}`}
+            >
+              {paneNumber}
+            </span>
+          )}
+          {session.profileColor && (
+            <div
+              className="w-1 h-3.5 rounded-full"
+              style={{ backgroundColor: session.profileColor }}
+            />
+          )}
+        </div>
+      </button>
       {confirmKill ? (
         <button
           onClick={() => { killSession(session.id); setConfirmKill(false); }}
           onBlur={() => setConfirmKill(false)}
-          className="px-1.5 py-0.5 text-[10px] font-medium bg-red-900/50 text-red-400
-                     rounded transition-colors hover:bg-red-800/50"
+          className="shrink-0 px-2 py-2 text-[10px] font-medium text-red-400 hover:text-red-300 transition-colors"
         >
           Kill?
         </button>
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); setConfirmKill(true); }}
-          className="px-1 py-0.5 text-zinc-600 hover:text-red-400 transition-colors text-sm leading-none"
+          className="shrink-0 px-2 py-2 text-zinc-600 hover:text-red-400 transition-colors"
           title="Kill session"
         >
-          &times;
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
         </button>
       )}
     </div>
@@ -101,11 +114,12 @@ function ProfileRow({ profile }: { profile: Profile }) {
   const focusedSessionId = panes.find(p => p.id === focusedPaneId)?.sessionId;
   const isActive = !!(focusedSessionId && liveSessions.some(s => s.id === focusedSessionId));
 
-  const handleClick = () => {
-    // If there's already a live session for this profile, attach it into the
-    // focused pane. Otherwise create a new one (routed via pendingAssign).
+  const handleClick = (e: React.MouseEvent) => {
+    // Shift/Alt-click forces a new instance even if one already exists.
+    // Plain click attaches the first existing session (default ergonomic).
+    const forceNew = e.shiftKey || e.altKey;
     const existing = liveSessions[0];
-    if (existing) {
+    if (existing && !forceNew) {
       useLayoutStore.getState().assignSession(focusedPaneId, existing.id);
       return;
     }
@@ -119,6 +133,7 @@ function ProfileRow({ profile }: { profile: Profile }) {
     }`}>
       <button
         onClick={handleClick}
+        title={liveCount > 0 ? 'Click to attach. Shift+click for a new instance.' : profile.name}
         className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 text-left"
       >
         <div className="relative shrink-0">

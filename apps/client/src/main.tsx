@@ -19,3 +19,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>
 );
+
+// Service worker registration — needed for PWA install prompts. Only
+// registers in secure contexts (https or localhost); the browser blocks
+// SW registration on insecure HTTP origins anyway.
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.warn('[PersaLink] SW registration failed:', err);
+    });
+  });
+}

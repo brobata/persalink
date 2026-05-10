@@ -60,6 +60,13 @@ interface AppState {
   initialScrollback: string | null;
   windows: TmuxWindowInfo[];
 
+  // Last-attached session id, persisted across reloads so the PWA / tab
+  // re-opens directly into the session you were on. pendingAutoAttach is
+  // the transient handshake: set on auth, consumed once sessions.list
+  // confirms the session still exists.
+  lastActiveSessionId: string | null;
+  pendingAutoAttach: string | null;
+
   // Session tabs (derived from live sessions when in terminal view)
   activeTabId: string | null;
   switchingToId: string | null;  // guards against rapid tab switches
@@ -94,6 +101,7 @@ interface AppState {
   saveProfile: (profile: Profile) => void;
   deleteProfile: (profileId: string) => void;
   discoverProfiles: () => void;
+  refresh: () => Promise<void>;
   acceptDiscoveredProfile: (profile: Profile) => void;
   editProfile: (profile: Profile | null) => void;
   reorderProfiles: (profileIds: string[]) => void;
@@ -162,6 +170,8 @@ export const useAppStore = create<AppState>()(
       showTabPicker: false,
       actionResult: null,
       notifications: [],
+      lastActiveSessionId: null,
+      pendingAutoAttach: null,
 
       pushNotification: (kind, message, op) => set((s) => ({
         notifications: [
@@ -179,12 +189,18 @@ export const useAppStore = create<AppState>()(
 
       connect: () => {
         const { serverUrl } = get();
-        if (!serverUrl) return;
 
-        // Always strip any scheme from stored serverUrl and rebuild from the
-        // current page protocol — avoids stale ws:// / http:// prefixes from
-        // past entries breaking the connection.
-        const hostOnly = serverUrl.trim().replace(/^(wss?|https?):\/\//i, '');
+        // Prefer the page's own host so the WS goes back to wherever the
+        // SPA was loaded from. This keeps the WebSocket origin check happy
+        // when the page is reached via mDNS / Tailscale / PWA install while
+        // the stored serverUrl points at an LAN IP. Fall back to the stored
+        // value only when there's no window context (tests, SSR).
+        const pageHost = typeof window !== 'undefined' && window.location?.host
+          ? window.location.host
+          : '';
+        const hostOnly = pageHost || serverUrl.trim().replace(/^(wss?|https?):\/\//i, '');
+        if (!hostOnly) return;
+
         const scheme = typeof window !== 'undefined' && window.location.protocol === 'https:'
           ? 'wss://'
           : 'ws://';
@@ -244,7 +260,7 @@ export const useAppStore = create<AppState>()(
 
       detachSession: () => {
         wsClient?.send({ type: 'session.detach' });
-        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null });
+        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null });
       },
 
       killSession: (sessionId) => {
@@ -294,6 +310,16 @@ export const useAppStore = create<AppState>()(
 
       discoverProfiles: () => {
         wsClient?.send({ type: 'profile.discover' });
+      },
+
+      refresh: async () => {
+        wsClient?.send({ type: 'sessions.list' });
+        wsClient?.send({ type: 'profiles.list' });
+        wsClient?.send({ type: 'health.status' });
+        wsClient?.send({ type: 'profile.discover' });
+        // Hold the spinner long enough that the gesture feels acknowledged
+        // even when the server replies in <50ms.
+        await new Promise<void>((resolve) => setTimeout(resolve, 600));
       },
 
       acceptDiscoveredProfile: (profile) => {
@@ -418,6 +444,7 @@ export const useAppStore = create<AppState>()(
         serverUrl: state.serverUrl,
         authToken: state.authToken,
         deviceName: state.deviceName,
+        lastActiveSessionId: state.lastActiveSessionId,
       }),
     }
   )
@@ -450,6 +477,9 @@ function handleServerMessage(
         serverName: msg.serverName,
         view: 'home',
         authError: null,
+        // Arm the auto-reattach handshake. If the persisted session still
+        // exists in the upcoming sessions.list, we'll attach to it.
+        pendingAutoAttach: get().lastActiveSessionId,
       });
       if (msg.token) {
         set({ authToken: msg.token });
@@ -465,9 +495,19 @@ function handleServerMessage(
       set({ authError: msg.message, authToken: null, view: 'auth' });
       break;
 
-    case 'sessions.list':
+    case 'sessions.list': {
       set({ sessions: msg.sessions });
+      // Consume the auto-reattach handshake if it's armed and the target
+      // session is still alive. One-shot: clear pendingAutoAttach so we
+      // never re-attach on subsequent broadcasts.
+      const { pendingAutoAttach } = get();
+      if (pendingAutoAttach) {
+        const stillAlive = msg.sessions.some((s) => s.id === pendingAutoAttach);
+        set({ pendingAutoAttach: null });
+        if (stillAlive) get().attachSession(pendingAutoAttach);
+      }
       break;
+    }
 
     case 'profiles.list':
       set({ profiles: msg.profiles });
@@ -494,6 +534,7 @@ function handleServerMessage(
         activeTabId: msg.session.id,
         switchingToId: null,  // switch complete
         showTabPicker: false,
+        lastActiveSessionId: msg.session.id,
       });
       break;
     }

@@ -13,6 +13,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { ServerMessage, SessionInfo, TmuxWindowInfo } from '@persalink/shared/protocol';
 import { WSClient } from '../lib/ws';
+import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 
 interface TerminalPaneProps {
@@ -27,6 +28,57 @@ interface TerminalPaneProps {
   onPickSession: () => void;
 }
 
+function WindowTab({ w, onSelect, onRename }: {
+  w: TmuxWindowInfo;
+  onSelect: () => void;
+  onRename: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(w.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEditing = () => {
+    setEditName(w.name);
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const commitRename = () => {
+    const trimmed = editName.trim();
+    if (trimmed && trimmed !== w.name) onRename(trimmed);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={editName}
+        onChange={(e) => setEditName(e.target.value)}
+        onBlur={commitRename}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commitRename();
+          if (e.key === 'Escape') setEditing(false);
+        }}
+        className="shrink-0 w-24 px-2 py-0.5 bg-zinc-800 border border-zinc-600 rounded text-[11px] text-zinc-100 outline-none"
+        autoFocus
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={onSelect}
+      onDoubleClick={startEditing}
+      title="Double-click to rename"
+      className={`shrink-0 px-2 py-0.5 text-[11px] rounded transition-colors ${
+        w.active ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+      }`}
+    >
+      {w.name}
+    </button>
+  );
+}
 
 export function TerminalPane({
   paneId, paneNumber, sessionId, serverUrl, authToken, isFocused, onFocus, onClear, onPickSession,
@@ -67,6 +119,18 @@ export function TerminalPane({
   const selectWindow = useCallback((index: number) => {
     wsRef.current?.send({ type: 'window.select', windowIndex: index });
   }, []);
+
+  const renameWindow = useCallback((index: number, name: string) => {
+    wsRef.current?.send({ type: 'window.rename', windowIndex: index, name });
+  }, []);
+
+  const renameSession = useCallback((sessionId: string, name: string) => {
+    wsRef.current?.send({ type: 'session.rename', sessionId, name });
+  }, []);
+
+  const [renamingSession, setRenamingSession] = useState(false);
+  const [sessionEditName, setSessionEditName] = useState('');
+  const sessionNameInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -174,6 +238,16 @@ export function TerminalPane({
             setAttachedSession(null);
             setWindows([]);
             break;
+          case 'sessions.list': {
+            // Pick up rename / metadata changes for the session this pane
+            // is currently attached to. Without this, custom names set via
+            // session.rename never reach the pane's local state.
+            const current = sessionIdRef.current;
+            if (!current) break;
+            const updated = msg.sessions.find((s) => s.id === current);
+            if (updated) setAttachedSession(updated);
+            break;
+          }
           case 'windows.list':
             setWindows(msg.windows);
             break;
@@ -249,16 +323,53 @@ export function TerminalPane({
     termRef.current = term;
     fitRef.current = fit;
 
-    // Paste
-    const clipboardWrite = (text: string) => {
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text).catch(() => {});
+    // Copy: copy xterm's selection to the clipboard. The modern API works
+    // on https/localhost; on insecure HTTP we fall back to a textarea +
+    // execCommand('copy') trick. Trigger on mouseup/touchend so we run
+    // once per selection in user-gesture context (execCommand needs that).
+    const legacyCopy = (text: string): boolean => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
       }
     };
-    term.onSelectionChange(() => {
+    const notify = (kind: 'info' | 'error', message: string) => {
+      try {
+        useAppStore.getState().pushNotification(kind, message, 'copy');
+      } catch { /* store unavailable */ }
+    };
+    const clipboardWrite = (text: string) => {
+      if (!text) return;
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(
+          () => notify('info', 'Copied'),
+          () => {
+            if (legacyCopy(text)) notify('info', 'Copied');
+            else notify('error', 'Copy blocked by browser');
+          },
+        );
+        return;
+      }
+      if (legacyCopy(text)) notify('info', 'Copied');
+      else notify('error', 'Copy blocked by browser');
+    };
+    const onSelectionEnd = () => {
       const sel = term.getSelection();
       if (sel) clipboardWrite(sel);
-    });
+    };
+    document.addEventListener('mouseup', onSelectionEnd);
+    document.addEventListener('touchend', onSelectionEnd);
 
     const onPaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData('text');
@@ -271,7 +382,15 @@ export function TerminalPane({
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
-      if (e.ctrlKey && e.key === 'v') {
+      // Ctrl/Cmd+C: copy if there's a selection, otherwise let it through
+      // as SIGINT to the terminal program. Matches VS Code terminal UX.
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && term.hasSelection()) {
+        const sel = term.getSelection();
+        if (sel) clipboardWrite(sel);
+        e.preventDefault();
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         document.execCommand('paste');
         return false;
       }
@@ -281,32 +400,32 @@ export function TerminalPane({
     // ------------------------------------------------------------------
     // Input handling — guards against the textarea-accumulation bug where
     // xterm's hidden <textarea> retains value across keystrokes (Chrome IME,
-    // Android GBoard/SwiftKey, browser autocomplete). Without this, each
-    // keystroke fires onData with the FULL accumulated buffer, the server
-    // echoes everything, and the user sees the text plus the new char each
-    // time. Symptom: "hello" prints "hhehelhellhello".
+    // Android GBoard/SwiftKey autocorrect/suggestions, browser autocomplete).
+    // Without this, each keystroke fires onData with the FULL accumulated
+    // buffer; symptom is typed text repeating itself or showing prior content
+    // each new word ("hello" prints "hhehelhellhello"; suggestion taps
+    // produce "hello world hello world how are").
+    //
+    // Strategy: always-on delta tracking. Compare each onData payload to
+    // what we last forwarded — if it's a prefix-extension, send only the
+    // new chars; if it's a prefix-shrink, send DELs for the removed chars;
+    // otherwise treat as fresh input. Equal-length payloads bypass the
+    // delta path so repeated identical keystrokes ("h","h") aren't dropped.
     // ------------------------------------------------------------------
     let composing = false;
-    let justComposed = false;
-    let compositionSent = '';
-    let compositionResetTimer: ReturnType<typeof setTimeout> | null = null;
+    let sentSoFar = '';
     // Generic dedup: drop identical onData fired within 2ms — defense
-    // against any other path that might double-fire.
+    // against any path that might double-fire.
     let lastSentData = '';
     let lastSentTime = 0;
 
     const resetComposition = () => {
       composing = false;
-      justComposed = false;
-      compositionSent = '';
+      sentSoFar = '';
       lastSentData = '';
       lastSentTime = 0;
-      if (compositionResetTimer) {
-        clearTimeout(compositionResetTimer);
-        compositionResetTimer = null;
-      }
       // Drain any stale value sitting in the helper textarea so the next
-      // composition starts from a clean slate.
+      // burst starts from a clean slate.
       const ta = term.textarea;
       if (ta) ta.value = '';
     };
@@ -314,10 +433,16 @@ export function TerminalPane({
 
     const textarea = term.textarea;
     const onCompositionStart = () => { composing = true; };
-    const onCompositionEnd = () => { composing = false; justComposed = true; };
+    const onCompositionEnd = () => { composing = false; };
     if (textarea) {
       textarea.addEventListener('compositionstart', onCompositionStart);
       textarea.addEventListener('compositionend', onCompositionEnd);
+      // Suppress mobile keyboard suggestions / browser autocomplete on the
+      // hidden input — reduces trigger frequency for the bug above.
+      textarea.setAttribute('autocomplete', 'off');
+      textarea.setAttribute('autocorrect', 'off');
+      textarea.setAttribute('autocapitalize', 'none');
+      textarea.setAttribute('spellcheck', 'false');
     }
 
     const safeSend = (data: string) => {
@@ -331,32 +456,29 @@ export function TerminalPane({
     term.onData((data) => {
       if (composing) return;
 
-      if (justComposed) {
-        justComposed = false;
-        if (compositionSent && data.startsWith(compositionSent)) {
-          // Textarea accumulated — data is prev + new chars. Send only delta.
-          const delta = data.slice(compositionSent.length);
-          compositionSent = data;
-          if (delta) safeSend(delta);
-        } else if (compositionSent && compositionSent.startsWith(data)) {
-          // Shrunk (backspace during composition) — send DEL for removed chars.
-          const removed = compositionSent.length - data.length;
-          compositionSent = data;
-          for (let i = 0; i < removed; i++) safeSend('\x7f');
-        } else {
-          // First keystroke or textarea was cleared — send as-is.
-          compositionSent = data;
-          safeSend(data);
-        }
-        if (compositionResetTimer) clearTimeout(compositionResetTimer);
-        compositionResetTimer = setTimeout(() => { compositionSent = ''; }, 1500);
-        return;
+      if (data.length > sentSoFar.length && sentSoFar && data.startsWith(sentSoFar)) {
+        // Textarea accumulated — data is prev + new chars. Send only delta.
+        const delta = data.slice(sentSoFar.length);
+        if (delta) safeSend(delta);
+      } else if (data.length < sentSoFar.length && sentSoFar.startsWith(data)) {
+        // Buffer shrank (backspace during composition / autocorrect undo) —
+        // send DEL for each removed char.
+        const removed = sentSoFar.length - data.length;
+        for (let i = 0; i < removed; i++) safeSend('\x7f');
+      } else {
+        // Fresh input — equal-length payloads, prefix mismatches, mid-buffer
+        // mutations, or first keystroke. Send as-is.
+        safeSend(data);
       }
+      sentSoFar = data;
 
-      // Plain key path. Reset composition tracking so the next composition
-      // burst starts fresh, otherwise prior composition residue interferes.
-      compositionSent = '';
-      safeSend(data);
+      // Belt-and-suspenders: clear the helper textarea after every emission.
+      // Setting value programmatically does NOT fire an input event (per
+      // DOM spec), so this is safe and doesn't loop. Combined with the
+      // delta logic above this prevents the textarea-accumulation bug
+      // regardless of which keyboard/autocorrect path got us here.
+      const ta = term.textarea;
+      if (ta && ta.value !== '') ta.value = '';
     });
 
     // Focus tracking — mark pane focused on user interaction.
@@ -426,9 +548,10 @@ export function TerminalPane({
       ro.disconnect();
       clearInterval(settle);
       clearTimeout(stopSettle);
-      if (compositionResetTimer) clearTimeout(compositionResetTimer);
       if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current);
       containerRef.current?.removeEventListener('paste', onPaste as EventListener);
+      document.removeEventListener('mouseup', onSelectionEnd);
+      document.removeEventListener('touchend', onSelectionEnd);
       term.textarea?.removeEventListener('focus', focusHandler);
       term.textarea?.removeEventListener('blur', blurHandler);
       if (textarea) {
@@ -449,7 +572,25 @@ export function TerminalPane({
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
-  const label = attachedSession?.profileName || attachedSession?.name || null;
+  // Custom session names (set via double-click rename) come back from the
+  // server in attachedSession.name and should win over the profile name —
+  // otherwise multi-instance panes can't be visually distinguished.
+  const label = attachedSession?.name || attachedSession?.profileName || null;
+
+  const startSessionRename = () => {
+    if (!attachedSession) return;
+    setSessionEditName(label || '');
+    setRenamingSession(true);
+    setTimeout(() => sessionNameInputRef.current?.select(), 0);
+  };
+  const commitSessionRename = () => {
+    if (!attachedSession) { setRenamingSession(false); return; }
+    const trimmed = sessionEditName.trim();
+    if (trimmed && trimmed !== label) {
+      renameSession(attachedSession.id, trimmed);
+    }
+    setRenamingSession(false);
+  };
   const focusRing = isFocused ? 'ring-1 ring-zinc-500' : 'ring-1 ring-transparent';
 
   return (
@@ -469,7 +610,28 @@ export function TerminalPane({
         </span>
         {label ? (
           <>
-            <span className="truncate flex-1 text-zinc-300">{label}</span>
+            {renamingSession ? (
+              <input
+                ref={sessionNameInputRef}
+                value={sessionEditName}
+                onChange={(e) => setSessionEditName(e.target.value)}
+                onBlur={commitSessionRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitSessionRename();
+                  if (e.key === 'Escape') setRenamingSession(false);
+                }}
+                className="flex-1 min-w-0 px-1.5 py-0.5 bg-zinc-800 border border-zinc-600 rounded text-xs text-zinc-100 outline-none"
+                autoFocus
+              />
+            ) : (
+              <span
+                className="truncate flex-1 text-zinc-300 cursor-text"
+                onDoubleClick={startSessionRename}
+                title="Double-click to rename"
+              >
+                {label}
+              </span>
+            )}
             {connState === 'reconnecting' && (
               <span className="px-1.5 py-0.5 rounded text-[10px] text-yellow-500 bg-yellow-500/10">reconnecting</span>
             )}
@@ -519,15 +681,12 @@ export function TerminalPane({
       {windows.length > 1 && (
         <div className="shrink-0 flex items-center gap-0.5 px-1.5 py-0.5 bg-zinc-900/40 border-b border-zinc-800/50 overflow-x-auto">
           {windows.map((w) => (
-            <button
+            <WindowTab
               key={w.index}
-              onClick={() => selectWindow(w.index)}
-              className={`shrink-0 px-2 py-0.5 text-[11px] rounded transition-colors ${
-                w.active ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              {w.name}
-            </button>
+              w={w}
+              onSelect={() => selectWindow(w.index)}
+              onRename={(name) => renameWindow(w.index, name)}
+            />
           ))}
         </div>
       )}

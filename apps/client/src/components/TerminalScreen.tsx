@@ -6,6 +6,50 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useAppStore } from '../stores/appStore';
 import type { Profile } from '@persalink/shared/protocol';
 
+// Soft-keyboard helper: keys absent from mobile keyboards but essential
+// for terminal use (Esc, arrows, Tab, common Ctrl combos). Each entry
+// maps a label to the byte sequence sent on tap.
+const TERMINAL_KEYS: Array<{ label: string; seq: string }> = [
+  { label: 'Esc', seq: '\x1b' },
+  { label: 'Tab', seq: '\t' },
+  { label: '⇧Tab', seq: '\x1b[Z' },
+  { label: '↑', seq: '\x1b[A' },
+  { label: '↓', seq: '\x1b[B' },
+  { label: '←', seq: '\x1b[D' },
+  { label: '→', seq: '\x1b[C' },
+  { label: '^C', seq: '\x03' },
+  { label: '^D', seq: '\x04' },
+  { label: '^L', seq: '\x0c' },
+  { label: '^R', seq: '\x12' },
+  { label: 'PgUp', seq: '\x1b[5~' },
+  { label: 'PgDn', seq: '\x1b[6~' },
+  { label: 'Home', seq: '\x1b[H' },
+  { label: 'End', seq: '\x1b[F' },
+];
+
+function TerminalKeyBar({ sendInput }: { sendInput: (data: string) => void }) {
+  return (
+    <div
+      className="shrink-0 flex gap-1 px-2 py-1.5 bg-zinc-900 border-t border-zinc-800 overflow-x-auto"
+      style={{ scrollbarWidth: 'none' }}
+    >
+      {TERMINAL_KEYS.map((k) => (
+        <button
+          key={k.label}
+          onPointerDown={(e) => {
+            // Keep terminal focus so the soft keyboard stays up between taps.
+            e.preventDefault();
+            sendInput(k.seq);
+          }}
+          className="shrink-0 min-w-[44px] px-2 py-2 text-xs font-mono bg-zinc-800 text-zinc-200 rounded-md active:bg-zinc-600 transition-colors select-none"
+        >
+          {k.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function WindowTab({ w, windowCount }: { w: { index: number; name: string; active: boolean }; windowCount: number }) {
   const { selectWindow, killWindow, renameWindow } = useAppStore();
   const [editing, setEditing] = useState(false);
@@ -149,6 +193,31 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const tabs = useMemo(() => getTabs(), [sessions]);
 
   const [uploading, setUploading] = useState(false);
+  const [showKeyBar, setShowKeyBar] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('persalink-show-keybar') === 'true';
+  });
+  const toggleKeyBar = () => {
+    setShowKeyBar((v) => {
+      const next = !v;
+      try { localStorage.setItem('persalink-show-keybar', String(next)); } catch { /* private mode */ }
+      return next;
+    });
+  };
+  const [selectText, setSelectText] = useState<string | null>(null);
+  const openSelectText = () => {
+    const term = terminalRef.current;
+    if (!term) return;
+    const buf = term.buffer.active;
+    const lines: string[] = [];
+    // Include scrollback + viewport. baseY = first scrollback row, length =
+    // total rows (scrollback + viewport).
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    setSelectText(lines.join('\n').replace(/\n+$/, ''));
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -286,33 +355,51 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       pendingOutputRef.current = [];
     }
 
-    // Auto-copy on select (like a real terminal)
-    const clipboardWrite = (text: string) => {
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text).catch(() => {
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-        });
-      } else {
+    // Auto-copy on select. Modern API works on https/localhost; insecure
+    // HTTP falls back to execCommand('copy') via a temp textarea. Trigger
+    // on mouseup/touchend so it runs once per selection in user-gesture
+    // context (execCommand needs that).
+    const legacyCopy = (text: string): boolean => {
+      try {
         const ta = document.createElement('textarea');
         ta.value = text;
-        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand('copy');
+        const ok = document.execCommand('copy');
         document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
       }
     };
-
-    term.onSelectionChange(() => {
+    const notify = (kind: 'info' | 'error', message: string) => {
+      try {
+        useAppStore.getState().pushNotification(kind, message, 'copy');
+      } catch { /* store unavailable */ }
+    };
+    const clipboardWrite = (text: string) => {
+      if (!text) return;
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(
+          () => notify('info', 'Copied'),
+          () => {
+            if (legacyCopy(text)) notify('info', 'Copied');
+            else notify('error', 'Copy blocked by browser');
+          },
+        );
+        return;
+      }
+      if (legacyCopy(text)) notify('info', 'Copied');
+      else notify('error', 'Copy blocked by browser');
+    };
+    const onSelectionEnd = () => {
       const sel = term.getSelection();
       if (sel) clipboardWrite(sel);
-    });
+    };
+    document.addEventListener('mouseup', onSelectionEnd);
+    document.addEventListener('touchend', onSelectionEnd);
 
     // Paste via browser paste event (works on HTTP)
     const onPaste = (e: ClipboardEvent) => {
@@ -324,80 +411,80 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     };
     termRef.current!.addEventListener('paste', onPaste as EventListener);
 
-    // Ctrl+V triggers native paste
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
-
-      if (e.ctrlKey && e.key === 'v') {
+      // Ctrl/Cmd+C: copy if there's a selection, otherwise let it through
+      // as SIGINT to the terminal program. Matches VS Code terminal UX.
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && term.hasSelection()) {
+        const sel = term.getSelection();
+        if (sel) clipboardWrite(sel);
+        e.preventDefault();
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         document.execCommand('paste');
         return false;
       }
-
       return true;
     });
 
-    // IME composition fix for Android keyboards (GBoard, SwiftKey).
+    // Textarea-accumulation guard for Android keyboards (GBoard, SwiftKey
+    // autocorrect/suggestions), browser autocomplete, and IME composition.
+    // xterm's hidden textarea retains value across keystrokes in those
+    // paths, and onData fires with the FULL accumulated buffer each time —
+    // typed text repeats itself or shows prior content on each new word.
     //
-    // Problem: xterm's hidden textarea accumulates value across compositions.
-    // After each compositionend, xterm reads textarea.value and fires onData
-    // with the FULL accumulated text, not just the new character. This causes
-    // every keystroke to re-send everything previously typed.
-    //
-    // Fix: track what we've already sent from composition results and compute
-    // the delta. Works regardless of whether textarea.value gets cleared
-    // between keystrokes or not.
+    // Strategy: always-on delta tracking. Each onData payload is compared
+    // to what we last forwarded; if it's a prefix-extension we send only
+    // the new chars, if a prefix-shrink we send DELs, otherwise it's
+    // treated as fresh input. Equal-length payloads bypass the delta path
+    // so repeated identical keystrokes ("h","h") aren't dropped.
     let composing = false;
-    let justComposed = false;
-    let compositionSent = '';   // accumulated text we've already forwarded
-    let compositionResetTimer: ReturnType<typeof setTimeout> | null = null;
+    let sentSoFar = '';
     const textarea = termRef.current!.querySelector('textarea');
     if (textarea) {
       textarea.addEventListener('compositionstart', () => { composing = true; });
-      textarea.addEventListener('compositionend', () => {
-        composing = false;
-        justComposed = true;
-      });
+      textarea.addEventListener('compositionend', () => { composing = false; });
+      // Suppress mobile keyboard suggestions / browser autocomplete on the
+      // hidden input — reduces trigger frequency for the bug above.
+      textarea.setAttribute('autocomplete', 'off');
+      textarea.setAttribute('autocorrect', 'off');
+      textarea.setAttribute('autocapitalize', 'none');
+      textarea.setAttribute('spellcheck', 'false');
     }
 
     term.onData((data) => {
       if (composing) return;
 
-      if (justComposed) {
-        justComposed = false;
-
-        if (compositionSent && data.startsWith(compositionSent)) {
-          // Textarea accumulated — data is prev + new chars. Send only delta.
-          const delta = data.slice(compositionSent.length);
-          compositionSent = data;
-          if (delta) sendInput(delta);
-        } else if (compositionSent && compositionSent.startsWith(data)) {
-          // Shrunk (backspace during composition) — send DEL for removed chars
-          const removed = compositionSent.length - data.length;
-          compositionSent = data;
-          for (let i = 0; i < removed; i++) sendInput('\x7f');
-        } else {
-          // First composition keystroke, or textarea was cleared between
-          // keystrokes (no accumulation). Send as-is.
-          compositionSent = data;
-          sendInput(data);
-        }
-
-        // Reset tracking after a typing pause so stale state doesn't
-        // interfere with the next burst of typing
-        if (compositionResetTimer) clearTimeout(compositionResetTimer);
-        compositionResetTimer = setTimeout(() => { compositionSent = ''; }, 1500);
-        return;
+      if (data.length > sentSoFar.length && sentSoFar && data.startsWith(sentSoFar)) {
+        const delta = data.slice(sentSoFar.length);
+        if (delta) sendInput(delta);
+      } else if (data.length < sentSoFar.length && sentSoFar.startsWith(data)) {
+        const removed = sentSoFar.length - data.length;
+        for (let i = 0; i < removed; i++) sendInput('\x7f');
+      } else {
+        sendInput(data);
       }
+      sentSoFar = data;
 
-      // Non-composition input (desktop keys, paste, arrow keys, etc.)
-      compositionSent = '';
-      sendInput(data);
+      // Clear xterm's helper textarea after every emission so the next
+      // keystroke can't read accumulated content. Setting .value
+      // programmatically doesn't fire input events (per DOM spec).
+      if (textarea && textarea.value !== '') textarea.value = '';
     });
 
     fitAddonRef.current = fitAddon;
 
     // Touch scroll for mobile — slow drags scroll 1:1, fast flicks add
     // momentum that decays over time (native iOS/Android feel).
+    //
+    // Routing depends on buffer mode:
+    //   normal buffer  → term.scrollLines() walks xterm's local scrollback.
+    //   alternate buffer (tmux/vim/less/Claude TUI) → xterm has no scrollback
+    //     for alt-screen, so we synthesize SGR mouse-wheel events and send
+    //     them to tmux (mouse mode is enabled server-side). tmux then either
+    //     enters copy-mode (outer scrollback) or forwards to the inner app
+    //     if the inner app requested mouse tracking.
     let touchStartY = 0;
     let lastMoveY = 0;
     let lastMoveTime = 0;
@@ -409,6 +496,21 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     const STOP_THRESHOLD_PX_PER_MS = 0.04; // stop momentum below this
     const FLING_THRESHOLD_PX_PER_MS = 0.25; // ignore stationary lifts
     const container = termRef.current;
+
+    const applyScroll = (lines: number) => {
+      if (lines === 0) return;
+      if (term.buffer.active.type === 'alternate') {
+        // SGR mouse encoding: ESC [ < Cb ; Cx ; Cy M  (press)
+        // Cb 64 = wheel up, Cb 65 = wheel down. Cx/Cy are 1-indexed cell
+        // coordinates; tmux ignores them for wheel events but they must
+        // be present and non-zero.
+        const code = lines < 0 ? 64 : 65;
+        const seq = `\x1b[<${code};1;1M`;
+        for (let i = 0; i < Math.abs(lines); i++) sendInput(seq);
+      } else {
+        term.scrollLines(lines);
+      }
+    };
 
     const cancelMomentum = () => {
       if (momentumRaf !== null) {
@@ -439,7 +541,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const lines = Math.trunc(scrollAccum / LINE_PX);
       if (lines !== 0) {
         scrollAccum -= lines * LINE_PX;
-        term.scrollLines(lines);
+        applyScroll(lines);
       }
     };
     const onTouchEnd = () => {
@@ -463,7 +565,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         const lines = Math.trunc(scrollAccum / LINE_PX);
         if (lines !== 0) {
           scrollAccum -= lines * LINE_PX;
-          term.scrollLines(lines);
+          applyScroll(lines);
         }
         if (Math.abs(velocity) > STOP_THRESHOLD_PX_PER_MS) {
           momentumRaf = requestAnimationFrame(tick);
@@ -482,6 +584,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // Handle resize — debounced, and only refit if the grid size actually changes.
     // xterm snaps to whole character cells, so a 1-2px jitter (e.g. tab bar
     // overflow recalculating) would drop a row then re-add it, causing flicker.
+    //
+    // 250ms debounce is tuned for Android keyboard animations (~200-400ms).
+    // Shorter values fired fit() mid-animation at an intermediate size, then
+    // again at the final size — two tmux redraws per keyboard event, which
+    // interleaved with streaming output and looked like content "jumbling."
     let lastCols = term.cols;
     let lastRows = term.rows;
     const doFit = () => {
@@ -492,11 +599,23 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         resize(term.cols, term.rows);
       }
     };
+    const RESIZE_DEBOUNCE_MS = 250;
     const resizeObserver = new ResizeObserver(() => {
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-      resizeTimeoutRef.current = setTimeout(doFit, 100);
+      resizeTimeoutRef.current = setTimeout(doFit, RESIZE_DEBOUNCE_MS);
     });
     resizeObserver.observe(termRef.current);
+
+    // visualViewport is the authoritative signal for keyboard show/hide on
+    // Android (with `interactive-widget=resizes-content` in the viewport
+    // meta). It fires *after* the keyboard animation completes, giving us a
+    // clean "now do the fit" trigger without waiting for ResizeObserver
+    // jitter to settle. Falls back gracefully if the API isn't supported.
+    const onViewportResize = () => {
+      if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+      resizeTimeoutRef.current = setTimeout(doFit, RESIZE_DEBOUNCE_MS);
+    };
+    window.visualViewport?.addEventListener('resize', onViewportResize);
 
     // Re-fit after layout settles — triple pass: immediate rAF, delayed rAF,
     // and a timer to catch slow CSS transitions or conditional bar changes.
@@ -514,7 +633,10 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       container.removeEventListener('touchend', onTouchEnd);
       container.removeEventListener('touchcancel', onTouchEnd);
       container.removeEventListener('paste', onPaste as EventListener);
+      document.removeEventListener('mouseup', onSelectionEnd);
+      document.removeEventListener('touchend', onSelectionEnd);
       resizeObserver.disconnect();
+      window.visualViewport?.removeEventListener('resize', onViewportResize);
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
       terminalRef.current = null;
       term.dispose();
@@ -536,48 +658,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           </button>
         )}
 
-        {/* Session tabs — mobile only (desktop uses sidebar) */}
+        {/* Mobile: just a label for the active session — switching happens
+            from the home screen's LIVE list, freeing up the top-bar space. */}
         {!sidebarVisible && (
-          <div className="flex gap-0.5 flex-1 overflow-x-auto scrollbar-none" style={{ scrollbarWidth: 'none' }}>
-            {tabs.map((tab) => (
-              <div
-                key={tab.sessionId}
-                className={`shrink-0 flex items-center gap-0.5 rounded-lg transition-colors ${
-                  tab.sessionId === activeTabId
-                    ? 'bg-zinc-700'
-                    : ''
-                }`}
-              >
-                <button
-                  onClick={() => switchTab(tab.sessionId)}
-                  className={`flex items-center gap-1.5 pl-2.5 pr-1 py-2 text-xs transition-colors ${
-                    tab.sessionId === activeTabId
-                      ? 'text-zinc-100'
-                      : 'text-zinc-500 active:text-zinc-300'
-                  }`}
-                >
-                  {tab.icon && <span className="text-xs">{tab.icon}</span>}
-                  {tab.color && (
-                    <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tab.color }} />
-                  )}
-                  <span className="truncate max-w-[70px]">{tab.name}</span>
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); killSession(tab.sessionId); }}
-                  className="px-1 py-1 text-zinc-600 active:text-red-400 transition-colors text-xs mr-0.5"
-                  title="Kill session"
-                >
-                  &times;
-                </button>
-              </div>
-            ))}
-            <button
-              onClick={() => setShowTabPicker(true)}
-              className="shrink-0 px-2.5 py-2 text-sm text-zinc-600 active:text-zinc-400 transition-colors"
-              title="Open new session"
-            >
-              +
-            </button>
+          <div className="flex items-center gap-1.5 flex-1 min-w-0 px-2">
+            {attachedSession?.profileIcon && (
+              <span className="text-sm shrink-0">{attachedSession.profileIcon}</span>
+            )}
+            <span className="truncate text-xs text-zinc-300">
+              {attachedSession?.name || attachedSession?.profileName || ''}
+            </span>
           </div>
         )}
 
@@ -596,6 +686,27 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           onChange={handleFileUpload}
           className="hidden"
         />
+        <button
+          onPointerDown={(e) => { e.preventDefault(); openSelectText(); }}
+          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
+          title="Open terminal output for native text selection"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h10M4 14h16M4 18h10" />
+          </svg>
+        </button>
+        <button
+          onPointerDown={(e) => { e.preventDefault(); toggleKeyBar(); }}
+          className={`shrink-0 px-2 py-2 transition-colors ${
+            showKeyBar ? 'text-zinc-200' : 'text-zinc-500 active:text-zinc-300'
+          }`}
+          title="Toggle terminal keys (Esc, arrows, Tab, Ctrl)"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <rect x="2" y="6" width="20" height="12" rx="2" />
+            <path strokeLinecap="round" d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h12" />
+          </svg>
+        </button>
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
@@ -632,8 +743,38 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         <div ref={termRef} className="absolute inset-0 overflow-hidden" />
       </div>
 
+      {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
+      {!sidebarVisible && showKeyBar && <TerminalKeyBar sendInput={sendInput} />}
+
       {/* Profile picker popup — mobile only */}
       {!sidebarVisible && showTabPicker && <TabPicker onClose={() => setShowTabPicker(false)} />}
+
+      {/* Native text-selection modal — mobile-friendly copy. xterm renders to
+          canvas so Android's long-press magnifier has nothing to grab.
+          Dumping the buffer into a real <textarea> gives back native selection
+          handles, magnifier, and the standard copy menu. */}
+      {selectText !== null && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex flex-col">
+          <div className="shrink-0 flex items-center justify-between px-4 py-3 bg-zinc-900 border-b border-zinc-800 pt-[max(12px,env(safe-area-inset-top))]">
+            <span className="text-sm font-semibold text-zinc-200">Select &amp; copy</span>
+            <button
+              onClick={() => setSelectText(null)}
+              className="px-3 py-1.5 text-sm text-zinc-300 bg-zinc-800 active:bg-zinc-700 rounded-lg"
+            >
+              Close
+            </button>
+          </div>
+          <textarea
+            value={selectText}
+            readOnly
+            spellCheck={false}
+            autoCapitalize="none"
+            autoCorrect="off"
+            className="flex-1 w-full p-4 bg-zinc-950 text-zinc-100 text-[13px] font-mono resize-none outline-none"
+            style={{ whiteSpace: 'pre' }}
+          />
+        </div>
+      )}
     </div>
   );
 }
