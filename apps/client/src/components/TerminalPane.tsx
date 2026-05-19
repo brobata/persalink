@@ -15,6 +15,7 @@ import type { ServerMessage, SessionInfo, TmuxWindowInfo } from '@persalink/shar
 import { WSClient } from '../lib/ws';
 import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
+import { useVoiceInput } from '../lib/voiceInput';
 
 interface TerminalPaneProps {
   paneId: string;
@@ -115,6 +116,14 @@ export function TerminalPane({
   const sendResize = useCallback((cols: number, rows: number) => {
     wsRef.current?.send({ type: 'session.resize', cols, rows });
   }, []);
+
+  const voice = useVoiceInput(useCallback((text: string) => {
+    sendInput(text);
+  }, [sendInput]));
+  useEffect(() => {
+    if (!voice.error) return;
+    useAppStore.getState().pushNotification('error', voice.error, 'voice');
+  }, [voice.error]);
 
   const selectWindow = useCallback((index: number) => {
     wsRef.current?.send({ type: 'window.select', windowIndex: index });
@@ -364,7 +373,17 @@ export function TerminalPane({
       if (legacyCopy(text)) notify('info', 'Copied');
       else notify('error', 'Copy blocked by browser');
     };
+    // Track "has a new selection been made since the last copy?" so a stale
+    // xterm selection doesn't re-fire copy on every subsequent click. xterm
+    // keeps the selection alive across clicks, so without this guard each
+    // mouseup re-reads the same text and toasts "Copied" again.
+    let hasFreshSelection = false;
+    const selectionChangeDisposable = term.onSelectionChange(() => {
+      if (term.hasSelection()) hasFreshSelection = true;
+    });
     const onSelectionEnd = () => {
+      if (!hasFreshSelection) return;
+      hasFreshSelection = false;
       const sel = term.getSelection();
       if (sel) clipboardWrite(sel);
     };
@@ -552,6 +571,7 @@ export function TerminalPane({
       containerRef.current?.removeEventListener('paste', onPaste as EventListener);
       document.removeEventListener('mouseup', onSelectionEnd);
       document.removeEventListener('touchend', onSelectionEnd);
+      selectionChangeDisposable.dispose();
       term.textarea?.removeEventListener('focus', focusHandler);
       term.textarea?.removeEventListener('blur', blurHandler);
       if (textarea) {
@@ -694,6 +714,23 @@ export function TerminalPane({
       {/* Terminal area (empty-state overlay when no session) */}
       <div className="flex-1 min-h-0 relative" onClick={() => termRef.current?.focus()}>
         <div ref={containerRef} className="absolute inset-0 overflow-hidden" />
+        {attachedSession && voice.isSupported && (
+          <button
+            onClick={(e) => { e.stopPropagation(); voice.toggle(); }}
+            className={`absolute right-3 bottom-3 z-10 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-colors ${
+              voice.isListening
+                ? 'bg-red-500 text-white animate-pulse'
+                : 'bg-zinc-800/90 text-zinc-300 hover:bg-zinc-700'
+            }`}
+            title={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+            aria-label={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
+            </svg>
+          </button>
+        )}
         {!attachedSession && (
           <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/95 pointer-events-auto">
             <button

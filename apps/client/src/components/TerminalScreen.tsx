@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useAppStore } from '../stores/appStore';
+import { useVoiceInput } from '../lib/voiceInput';
 import type { Profile } from '@persalink/shared/protocol';
 
 // Soft-keyboard helper: keys absent from mobile keyboards but essential
@@ -204,6 +205,14 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       return next;
     });
   };
+  const voice = useVoiceInput(useCallback((text: string) => {
+    sendInput(text);
+  }, [sendInput]));
+  useEffect(() => {
+    if (!voice.error) return;
+    useAppStore.getState().pushNotification('error', voice.error, 'voice');
+  }, [voice.error]);
+
   const [selectText, setSelectText] = useState<string | null>(null);
   const openSelectText = () => {
     const term = terminalRef.current;
@@ -394,7 +403,17 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       if (legacyCopy(text)) notify('info', 'Copied');
       else notify('error', 'Copy blocked by browser');
     };
+    // Track "has a new selection been made since the last copy?" so a stale
+    // xterm selection doesn't re-fire copy on every subsequent click. xterm
+    // keeps the selection alive across clicks, so without this guard each
+    // mouseup re-reads the same text and toasts "Copied" again.
+    let hasFreshSelection = false;
+    const selectionChangeDisposable = term.onSelectionChange(() => {
+      if (term.hasSelection()) hasFreshSelection = true;
+    });
     const onSelectionEnd = () => {
+      if (!hasFreshSelection) return;
+      hasFreshSelection = false;
       const sel = term.getSelection();
       if (sel) clipboardWrite(sel);
     };
@@ -635,6 +654,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       container.removeEventListener('paste', onPaste as EventListener);
       document.removeEventListener('mouseup', onSelectionEnd);
       document.removeEventListener('touchend', onSelectionEnd);
+      selectionChangeDisposable.dispose();
       resizeObserver.disconnect();
       window.visualViewport?.removeEventListener('resize', onViewportResize);
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -741,6 +761,24 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       {/* Terminal — absolute positioning gives xterm.js real pixel dimensions */}
       <div className="flex-1 min-h-0 relative" onClick={() => terminalRef.current?.focus()}>
         <div ref={termRef} className="absolute inset-0 overflow-hidden" />
+        {voice.isSupported && (
+          <button
+            onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); voice.toggle(); }}
+            className={`absolute right-3 bottom-3 z-10 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
+              voice.isListening
+                ? 'bg-red-500 text-white animate-pulse'
+                : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
+            }`}
+            style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
+            title={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+            aria-label={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
