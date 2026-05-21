@@ -16,6 +16,7 @@ import { WSClient } from '../lib/ws';
 import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { useVoiceInput } from '../lib/voiceInput';
+import { getInitialDims, saveDims } from '../lib/terminalDims';
 
 interface TerminalPaneProps {
   paneId: string;
@@ -189,7 +190,15 @@ export function TerminalPane({
             const target = sessionIdRef.current;
             if (target) {
               const lines = useTerminalStyleStore.getState().historyOnAttach;
-              client.send({ type: 'session.attach', sessionId: target, scrollbackLines: lines });
+              const t = termRef.current;
+              const fallback = getInitialDims();
+              client.send({
+                type: 'session.attach',
+                sessionId: target,
+                cols: t?.cols ?? fallback.cols,
+                rows: t?.rows ?? fallback.rows,
+                scrollbackLines: lines,
+              });
             }
             break;
           }
@@ -296,7 +305,15 @@ export function TerminalPane({
     compositionResetRef.current?.();
     if (sessionId) {
       const lines = useTerminalStyleStore.getState().historyOnAttach;
-      client.send({ type: 'session.attach', sessionId, scrollbackLines: lines });
+      const t = termRef.current;
+      const fallback = getInitialDims();
+      client.send({
+        type: 'session.attach',
+        sessionId,
+        cols: t?.cols ?? fallback.cols,
+        rows: t?.rows ?? fallback.rows,
+        scrollbackLines: lines,
+      });
     } else {
       client.send({ type: 'session.detach' });
       setAttachedSession(null);
@@ -521,6 +538,7 @@ export function TerminalPane({
         lastCols = term.cols;
         lastRows = term.rows;
         sendResize(term.cols, term.rows);
+        saveDims(term.cols, term.rows);
       }
     };
     const ro = new ResizeObserver((entries) => {
@@ -716,7 +734,13 @@ export function TerminalPane({
         <div ref={containerRef} className="absolute inset-0 overflow-hidden" />
         {attachedSession && voice.isSupported && (
           <button
-            onClick={(e) => { e.stopPropagation(); voice.toggle(); }}
+            // onMouseDown preventDefault stops the browser from moving focus
+            // from xterm's textarea to the button. Without this, after
+            // tapping the mic once, xterm never sees keypresses again —
+            // including Ctrl+C, which silently broke the "select + copy"
+            // workflow on desktop.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { voice.toggle(); termRef.current?.focus(); }}
             className={`absolute right-3 bottom-3 z-10 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-colors ${
               voice.isListening
                 ? 'bg-red-500 text-white animate-pulse'

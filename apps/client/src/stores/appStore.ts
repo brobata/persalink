@@ -14,6 +14,7 @@ import {
   isBiometricAvailable, verifyBiometric, saveCredentials,
   getCredentials, clearCredentials,
 } from '../lib/biometric';
+import { getInitialDims } from '../lib/terminalDims';
 
 // ============================================================================
 // Types
@@ -255,7 +256,16 @@ export const useAppStore = create<AppState>()(
       },
 
       attachSession: (sessionId, cols, rows) => {
-        wsClient?.send({ type: 'session.attach', sessionId, cols, rows });
+        // Always send dimensions — without them the server defaults to 120x40
+        // and the first PTY redraw arrives sized for a desktop terminal,
+        // wrapping into a ~40-col mobile xterm as visual garbage.
+        const fallback = (cols === undefined || rows === undefined) ? getInitialDims() : null;
+        wsClient?.send({
+          type: 'session.attach',
+          sessionId,
+          cols: cols ?? fallback!.cols,
+          rows: rows ?? fallback!.rows,
+        });
       },
 
       detachSession: () => {
@@ -346,7 +356,7 @@ export const useAppStore = create<AppState>()(
         set({ switchingToId: sessionId, initialScrollback: null });
         switchDebounce = setTimeout(() => {
           switchDebounce = null;
-          wsClient?.send({ type: 'session.attach', sessionId });
+          get().attachSession(sessionId);
         }, 150);
       },
 
@@ -358,7 +368,7 @@ export const useAppStore = create<AppState>()(
           if (remaining.length > 0) {
             const switchTo = remaining[remaining.length - 1];
             // Server auto-detaches on attach — no separate detach needed
-            wsClient?.send({ type: 'session.attach', sessionId: switchTo.id });
+            get().attachSession(switchTo.id);
             set({ switchingToId: switchTo.id });
           } else {
             wsClient?.send({ type: 'session.detach' });
@@ -552,7 +562,7 @@ function handleServerMessage(
       if (get().attachedSession?.id === msg.sessionId) {
         if (remaining.length > 0) {
           const switchTo = remaining[remaining.length - 1];
-          wsClient?.send({ type: 'session.attach', sessionId: switchTo.id });
+          get().attachSession(switchTo.id);
           set({ activeTabId: switchTo.id });
         } else {
           set({ attachedSession: null, view: 'home', windows: [], activeTabId: null });

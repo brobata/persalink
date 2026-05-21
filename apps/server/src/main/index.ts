@@ -611,7 +611,23 @@ async function attachToSession(
       ? await tmuxManager.captureScrollback(sessionName, scrollbackLines)
       : '';
 
-    // Create PTY bridge
+    // Get session info BEFORE spawning the PTY bridge, so we can send
+    // session.attached first. Previously the PTY started emitting redraw
+    // bytes (session.output) before session.attached reached the client,
+    // and any output that arrived before TerminalScreen mounted its event
+    // listener was silently dropped — visible as missing initial content
+    // or jumbled redraw on cold open.
+    const sessions = await tmuxManager.listSessions(profileManager.getMap());
+    const session = sessions.find(s => s.id === sessionName);
+    if (!session) {
+      throw new Error(`Session info not found for ${sessionName}`);
+    }
+
+    send(client, { type: 'session.attached', session, scrollback: scrollback || undefined });
+
+    // Now spawn the PTY bridge. Any output it emits will arrive at the
+    // client after session.attached, by which point React has scheduled
+    // the TerminalScreen mount and its output listener.
     bridge = tmuxManager.attachBridge(
       sessionName,
       cols,
@@ -635,14 +651,6 @@ async function attachToSession(
 
     client.bridge = bridge;
     client.attachedSession = sessionName;
-
-    // Get session info
-    const sessions = await tmuxManager.listSessions(profileManager.getMap());
-    const session = sessions.find(s => s.id === sessionName);
-
-    if (session) {
-      send(client, { type: 'session.attached', session, scrollback: scrollback || undefined });
-    }
 
     audit('tmux_session_attached', { ip: client.ip, sessionId: sessionName });
   } catch (err) {

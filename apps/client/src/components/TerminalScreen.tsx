@@ -5,6 +5,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useAppStore } from '../stores/appStore';
 import { useVoiceInput } from '../lib/voiceInput';
+import { saveDims } from '../lib/terminalDims';
 import type { Profile } from '@persalink/shared/protocol';
 
 // Soft-keyboard helper: keys absent from mobile keyboards but essential
@@ -347,6 +348,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     // Send initial size to server
     resize(term.cols, term.rows);
+    saveDims(term.cols, term.rows);
 
     // NOTE: Don't write initialScrollback here. The PTY bridge (tmux attach)
     // redraws the full screen with proper ANSI escape sequences. Writing the
@@ -494,6 +496,24 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     fitAddonRef.current = fitAddon;
 
+    // One-time hint when the user tries to scroll back in an alt-screen
+    // app (Claude Code, vim, less). xterm has no scrollback for alt-screen;
+    // tmux forwards wheel events to the inner app which usually doesn't
+    // map them to history navigation, so nothing visible happens. Without
+    // this hint the user just thinks scrolling is broken.
+    let altScreenWarned = false;
+    const maybeWarnAltScreenScroll = () => {
+      if (altScreenWarned) return;
+      altScreenWarned = true;
+      try {
+        useAppStore.getState().pushNotification(
+          'info',
+          'Scrollback is owned by this app — exit it to scroll the shell history.',
+          'scrollback',
+        );
+      } catch { /* store unavailable */ }
+    };
+
     // Touch scroll for mobile — slow drags scroll 1:1, fast flicks add
     // momentum that decays over time (native iOS/Android feel).
     //
@@ -523,9 +543,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         // Cb 64 = wheel up, Cb 65 = wheel down. Cx/Cy are 1-indexed cell
         // coordinates; tmux ignores them for wheel events but they must
         // be present and non-zero.
+        //
+        // Batch the sequence into a single sendInput. A fast flick used to
+        // produce one WS message per line (50+ for a hard fling), giving
+        // the inner app a long input stream to chew through that competed
+        // with streaming output and showed up as visible scroll lag.
         const code = lines < 0 ? 64 : 65;
         const seq = `\x1b[<${code};1;1M`;
-        for (let i = 0; i < Math.abs(lines); i++) sendInput(seq);
+        sendInput(seq.repeat(Math.abs(lines)));
+        maybeWarnAltScreenScroll();
       } else {
         term.scrollLines(lines);
       }
@@ -616,6 +642,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         lastCols = term.cols;
         lastRows = term.rows;
         resize(term.cols, term.rows);
+        saveDims(term.cols, term.rows);
       }
     };
     const RESIZE_DEBOUNCE_MS = 250;
@@ -763,7 +790,14 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         <div ref={termRef} className="absolute inset-0 overflow-hidden" />
         {voice.isSupported && (
           <button
-            onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); voice.toggle(); }}
+            // Belt-and-suspenders against the focus-steal that killed Ctrl+C
+            // on desktop: mousedown.preventDefault blocks the focus shift
+            // when the browser fires it; pointerdown.preventDefault covers
+            // touch. We don't toggle from pointerdown anymore — that fired
+            // twice on hybrid touch+mouse devices.
+            onMouseDown={(e) => e.preventDefault()}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={voice.toggle}
             className={`absolute right-3 bottom-3 z-10 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
               voice.isListening
                 ? 'bg-red-500 text-white animate-pulse'
