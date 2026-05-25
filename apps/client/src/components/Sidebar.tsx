@@ -220,6 +220,22 @@ export function Sidebar() {
           </div>
           <div className="flex gap-1">
             <button
+              // Hard reload to pull a fresh bundle. The PWA window has no
+              // address bar / reload affordance, so an installed desktop app
+              // can sit on a stale in-memory build indefinitely (this is how
+              // the mic button "disappeared"). The service worker caches
+              // nothing, so a plain reload re-fetches current assets; tmux
+              // sessions survive and the app auto-reconnects on load.
+              onClick={() => window.location.reload()}
+              className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
+              title="Refresh app"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/>
+              </svg>
+            </button>
+            <button
               onClick={discoverProfiles}
               className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
               title="Scan for projects"

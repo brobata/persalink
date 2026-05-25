@@ -17,6 +17,15 @@ const COLOR_PRESETS = [
   '#3b82f6', '#8b5cf6', '#a855f7', '#ec4899', '#6b7280',
 ];
 
+/** Slugify a display name into a valid profile id (alphanumeric/-/_). */
+function slugifyId(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 // ============================================================================
 // Sub-components
 // ============================================================================
@@ -203,6 +212,11 @@ export function ProfileEditor() {
   const { editingProfile, closeOverlay, saveProfile, deleteProfile } = useAppStore();
 
   const isNew = !editingProfile;
+  // The ID is immutable only for an existing profile that already *has* a real
+  // id. A profile reaching the editor with an empty id (new, or a discovered/
+  // legacy entry that never got one) must stay editable — otherwise the
+  // read-only field + "ID is required" check becomes an unrecoverable trap.
+  const idLocked = !isNew && !!editingProfile?.id?.trim();
   const [form, setForm] = useState<Partial<Profile>>(
     editingProfile ? { ...editingProfile } : { id: '', name: '', group: 'Projects' },
   );
@@ -218,22 +232,26 @@ export function ProfileEditor() {
   }, []);
 
   const autoId = useCallback((name: string) => {
-    if (isNew) {
-      const id = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-      patch({ name, id: id || '' });
+    // Keep the id in sync with the name unless it's locked to an existing
+    // profile's id. Covers new profiles and id-less legacy/discovered ones.
+    if (!idLocked) {
+      patch({ name, id: slugifyId(name) });
     } else {
       patch({ name });
     }
-  }, [isNew, patch]);
+  }, [idLocked, patch]);
 
   const handleSave = () => {
     if (!form.name?.trim()) { setError('Name is required'); return; }
-    if (!form.id?.trim()) { setError('ID is required'); return; }
-    if (!/^[a-zA-Z0-9_-]+$/.test(form.id)) { setError('ID must be alphanumeric with hyphens/underscores'); return; }
+    // Fall back to a slug of the name if the id is empty (id-less legacy/
+    // discovered profiles), so a blank id can never dead-end the form.
+    const id = form.id?.trim() || slugifyId(form.name);
+    if (!id) { setError('Could not derive an ID from the name — add letters or numbers'); return; }
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) { setError('ID must be alphanumeric with hyphens/underscores'); return; }
 
     // Clean up empty optional fields
     const profile: Profile = {
-      id: form.id,
+      id,
       name: form.name.trim(),
       ...(form.icon && { icon: form.icon }),
       ...(form.color && { color: form.color }),
@@ -317,16 +335,16 @@ export function ProfileEditor() {
           </div>
 
           <div>
-            <FieldLabel>ID {!isNew && <span className="text-zinc-600">(read-only)</span>}</FieldLabel>
+            <FieldLabel>ID {idLocked && <span className="text-zinc-600">(read-only)</span>}</FieldLabel>
             <input
               type="text"
               value={form.id || ''}
-              onChange={(e) => isNew && patch({ id: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })}
-              readOnly={!isNew}
+              onChange={(e) => !idLocked && patch({ id: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })}
+              readOnly={idLocked}
               placeholder="my-project"
               className={`w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm font-mono
                           text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500
-                          ${!isNew ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          ${idLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
             />
           </div>
 
