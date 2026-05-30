@@ -455,23 +455,38 @@ export function TerminalPane({
     let lastSentData = '';
     let lastSentTime = 0;
 
+    // Watchdog against a dropped compositionend (IME quirk, app backgrounding)
+    // leaving `composing` stuck true — which makes onData swallow every
+    // keystroke. Blur already recovers, but a focused pane could otherwise
+    // wedge until the user clicks away; this force-clears on a composing stall.
+    let compositionWatchdog: ReturnType<typeof setTimeout> | null = null;
     const resetComposition = () => {
       composing = false;
       sentSoFar = '';
       lastSentData = '';
       lastSentTime = 0;
+      if (compositionWatchdog) { clearTimeout(compositionWatchdog); compositionWatchdog = null; }
       // Drain any stale value sitting in the helper textarea so the next
       // burst starts from a clean slate.
       const ta = term.textarea;
       if (ta) ta.value = '';
     };
     compositionResetRef.current = resetComposition;
+    const kickCompositionWatchdog = () => {
+      if (compositionWatchdog) clearTimeout(compositionWatchdog);
+      compositionWatchdog = setTimeout(() => { composing = false; compositionWatchdog = null; }, 1500);
+    };
 
     const textarea = term.textarea;
-    const onCompositionStart = () => { composing = true; };
-    const onCompositionEnd = () => { composing = false; };
+    const onCompositionStart = () => { composing = true; kickCompositionWatchdog(); };
+    const onCompositionUpdate = () => { kickCompositionWatchdog(); };
+    const onCompositionEnd = () => {
+      composing = false;
+      if (compositionWatchdog) { clearTimeout(compositionWatchdog); compositionWatchdog = null; }
+    };
     if (textarea) {
       textarea.addEventListener('compositionstart', onCompositionStart);
+      textarea.addEventListener('compositionupdate', onCompositionUpdate);
       textarea.addEventListener('compositionend', onCompositionEnd);
       // Suppress mobile keyboard suggestions / browser autocomplete on the
       // hidden input — reduces trigger frequency for the bug above.
@@ -519,7 +534,9 @@ export function TerminalPane({
 
     // Focus tracking — mark pane focused on user interaction.
     // Use the ref so identity changes from the parent don't rebuild the term.
-    const focusHandler = () => onFocusRef.current();
+    // Reset composition on (re)focus too, not just blur — guarantees a pane
+    // that wedged while focused becomes typable again the moment it's focused.
+    const focusHandler = () => { resetComposition(); onFocusRef.current(); };
     // Blur clears composition state so the next time this pane is focused
     // and typed into, the textarea doesn't replay accumulated text.
     const blurHandler = () => resetComposition();
@@ -594,8 +611,10 @@ export function TerminalPane({
       term.textarea?.removeEventListener('blur', blurHandler);
       if (textarea) {
         textarea.removeEventListener('compositionstart', onCompositionStart);
+        textarea.removeEventListener('compositionupdate', onCompositionUpdate);
         textarea.removeEventListener('compositionend', onCompositionEnd);
       }
+      if (compositionWatchdog) clearTimeout(compositionWatchdog);
       compositionResetRef.current = null;
       term.dispose();
       termRef.current = null;

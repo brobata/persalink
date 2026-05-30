@@ -462,10 +462,34 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // so repeated identical keystrokes ("h","h") aren't dropped.
     let composing = false;
     let sentSoFar = '';
+    // Composition wedge guard. Android IMEs (GBoard/SwiftKey), the voice path,
+    // and app-backgrounding mid-word can DROP the compositionend event. With
+    // `if (composing) return` in onData below, a stuck `composing=true` then
+    // silently swallows EVERY subsequent keystroke — the "I can't type
+    // anything" hang, with no recovery on mobile (the session looks alive
+    // because output is a separate path). Two safety nets:
+    //   1. Watchdog — force-clear if composition goes quiet for 1.5s (kicked
+    //      on each compositionupdate so genuine long composing isn't cut off).
+    //   2. focus/blur — always reset on (re)focus so tapping the terminal
+    //      reliably recovers a wedged session.
+    let compositionWatchdog: ReturnType<typeof setTimeout> | null = null;
+    const clearComposing = () => {
+      composing = false;
+      if (compositionWatchdog) { clearTimeout(compositionWatchdog); compositionWatchdog = null; }
+    };
+    const kickWatchdog = () => {
+      if (compositionWatchdog) clearTimeout(compositionWatchdog);
+      compositionWatchdog = setTimeout(clearComposing, 1500);
+    };
     const textarea = termRef.current!.querySelector('textarea');
     if (textarea) {
-      textarea.addEventListener('compositionstart', () => { composing = true; });
-      textarea.addEventListener('compositionend', () => { composing = false; });
+      textarea.addEventListener('compositionstart', () => { composing = true; kickWatchdog(); });
+      textarea.addEventListener('compositionupdate', kickWatchdog);
+      textarea.addEventListener('compositionend', clearComposing);
+      // A (re)focus must always yield a typable terminal — clear any stuck
+      // composition and reset the delta tracker so a wedged session recovers.
+      textarea.addEventListener('focus', () => { clearComposing(); sentSoFar = ''; });
+      textarea.addEventListener('blur', () => { clearComposing(); sentSoFar = ''; });
       // Suppress mobile keyboard suggestions / browser autocomplete on the
       // hidden input — reduces trigger frequency for the bug above.
       textarea.setAttribute('autocomplete', 'off');
@@ -685,6 +709,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       resizeObserver.disconnect();
       window.visualViewport?.removeEventListener('resize', onViewportResize);
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+      if (compositionWatchdog) clearTimeout(compositionWatchdog);
       terminalRef.current = null;
       term.dispose();
     };
