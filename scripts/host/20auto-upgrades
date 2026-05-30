@@ -1,0 +1,8 @@
+// Installed to: /etc/apt/apt.conf.d/20auto-upgrades
+//
+// Automatic OS updates are DISABLED on the PersaLink host. Updates are manual
+// and session-gated via `sudo persalink-update`, which refuses to run while any
+// pl- tmux session is active. Both values 0 = APT's periodic timers do nothing.
+// (The apt-daily*.timer units are also masked — see scripts/host/README.md.)
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
