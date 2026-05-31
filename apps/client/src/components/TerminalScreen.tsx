@@ -195,12 +195,15 @@ function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={onClose}>
+    <div className="fixed inset-0 z-50" onClick={onClose}>
+      {/* Dropdown anchored just under the top bar, where the trigger lives —
+          opening a bottom sheet from a top button felt disorienting. */}
       <div
-        className="w-full max-h-[70vh] bg-zinc-900 border-t border-zinc-700 rounded-t-2xl overflow-y-auto pb-[env(safe-area-inset-bottom)]"
+        className="absolute left-2 right-2 max-h-[60vh] bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-y-auto"
+        style={{ top: 'calc(env(safe-area-inset-top) + 2.75rem)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between">
+        <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between rounded-t-2xl">
           <span className="text-sm font-semibold text-zinc-300">Switch session</span>
           <button onClick={onNew} className="text-xs text-emerald-400 active:text-emerald-300">+ New</button>
         </div>
