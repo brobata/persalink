@@ -23,6 +23,7 @@ type SpeechRecognitionLike = {
   onerror: ((e: SpeechRecognitionErrorEventLike) => void) | null;
   onend: (() => void) | null;
   onspeechstart: (() => void) | null;
+  onspeechend: (() => void) | null;
   start: () => void;
   stop: () => void;
   abort: () => void;
@@ -113,14 +114,14 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     const rec = new Ctor();
     rec.lang = 'en-US';
     rec.continuous = true;
-    // Interim results are NOT sent (we only forward finals), but they let us
-    // re-arm the silence timer continuously while you speak a long sentence.
-    rec.interimResults = true;
-    rec.onspeechstart = () => armSilenceTimer();
+    // Finals only — interim results on Android can make the engine emit
+    // cumulative phrases that ladder ("can you / can you check / ..."). The
+    // silence auto-stop is driven by speech-boundary events instead: clear the
+    // timer while talking, arm it when speech stops.
+    rec.interimResults = false;
+    rec.onspeechstart = () => clearSilenceTimer();
+    rec.onspeechend = () => armSilenceTimer();
     rec.onresult = (e) => {
-      // Any result — interim or final — means you're talking: push the
-      // auto-stop deadline back.
-      armSilenceTimer();
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
         if (r.isFinal) {
@@ -128,6 +129,8 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
           if (text) handlerRef.current(text + ' ');
         }
       }
+      // Re-arm after a recognized segment in case onspeechend doesn't fire.
+      armSilenceTimer();
     };
     rec.onerror = (e) => {
       if (e.error === 'no-speech' || e.error === 'aborted') return;
