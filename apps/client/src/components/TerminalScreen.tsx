@@ -6,7 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useAppStore } from '../stores/appStore';
 import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
-import type { Profile } from '@persalink/shared/protocol';
+import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // Soft-keyboard helper: keys absent from mobile keyboards but essential
 // for terminal use (Esc, arrows, Tab, common Ctrl combos). Each entry
@@ -185,16 +185,65 @@ function TabPicker({ onClose }: { onClose: () => void }) {
   );
 }
 
+// Quick session switcher — a bottom sheet of live sessions with their attention
+// badges, so you can hop between running agents without going home.
+function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
+  sessions: SessionInfo[];
+  currentId: string | null;
+  onPick: (id: string) => void;
+  onNew: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={onClose}>
+      <div
+        className="w-full max-h-[70vh] bg-zinc-900 border-t border-zinc-700 rounded-t-2xl overflow-y-auto pb-[env(safe-area-inset-bottom)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between">
+          <span className="text-sm font-semibold text-zinc-300">Switch session</span>
+          <button onClick={onNew} className="text-xs text-emerald-400 active:text-emerald-300">+ New</button>
+        </div>
+        <div className="px-2 py-2 space-y-0.5">
+          {sessions.length === 0 && (
+            <div className="px-3 py-6 text-center text-sm text-zinc-600">No live sessions</div>
+          )}
+          {sessions.map((s) => {
+            const active = s.id === currentId;
+            return (
+              <button
+                key={s.id}
+                onClick={() => { onPick(s.id); onClose(); }}
+                className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-colors ${active ? 'bg-zinc-800' : 'active:bg-zinc-800/60'}`}
+              >
+                <span className="text-base shrink-0">{s.profileIcon || '🖥️'}</span>
+                <span className="flex-1 min-w-0 truncate text-sm text-zinc-100">{s.name || s.profileName || s.id}</span>
+                {s.attention === 'working' && <span className="shrink-0 text-[10px] text-sky-300">working…</span>}
+                {s.attention === 'waiting' && <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full">needs you</span>}
+                {s.attention === 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />}
+                {s.unseen && s.attention !== 'waiting' && s.attention !== 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
+                {active && <span className="shrink-0 text-[10px] text-zinc-500">current</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: boolean }) {
   const {
     attachedSession, sendInput, exitScroll, resize, detachSession, killSession,
     initialScrollback, windows, selectWindow, createWindow, serverUrl, authToken,
     sessions, activeTabId, switchTab, closeTab, showTabPicker, setShowTabPicker, getTabs,
+    attachSession,
   } = useAppStore();
 
   const tabs = useMemo(() => getTabs(), [sessions]);
 
   const [uploading, setUploading] = useState(false);
+  const [showSwitcher, setShowSwitcher] = useState(false);
   // True when the user has scrolled the pane up (possibly into tmux copy-mode);
   // surfaces the "jump to live" button. Typing auto-exits copy-mode server-side.
   const [scrolledUp, setScrolledUp] = useState(false);
@@ -744,17 +793,34 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           </button>
         )}
 
-        {/* Mobile: just a label for the active session — switching happens
-            from the home screen's LIVE list, freeing up the top-bar space. */}
+        {/* Mobile: tap the active session to open the quick switcher — jump
+            between live agents without a trip back to the home screen. */}
         {!sidebarVisible && (
-          <div className="flex items-center gap-1.5 flex-1 min-w-0 px-2">
+          <button
+            onClick={() => setShowSwitcher(true)}
+            className="flex items-center gap-1.5 flex-1 min-w-0 px-2 py-1 active:bg-zinc-800 rounded-lg transition-colors"
+          >
             {attachedSession?.profileIcon && (
               <span className="text-sm shrink-0">{attachedSession.profileIcon}</span>
             )}
             <span className="truncate text-xs text-zinc-300">
               {attachedSession?.name || attachedSession?.profileName || ''}
             </span>
-          </div>
+            {/* Badge: how many OTHER live sessions want attention. */}
+            {(() => {
+              const others = sessions.filter((s) => s.id !== attachedSession?.id);
+              const flagged = others.filter((s) => s.attention === 'waiting' || s.attention === 'error' || s.unseen).length;
+              if (others.length === 0) return null;
+              return (
+                <span className={`shrink-0 text-[10px] px-1 rounded-full ${flagged ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-600'}`}>
+                  {flagged ? `${flagged}●` : `+${others.length}`}
+                </span>
+              );
+            })()}
+            <svg className="w-3 h-3 shrink-0 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
         )}
 
         {/* Desktop: show active session name + spacer */}
@@ -877,6 +943,17 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
       {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
       {!sidebarVisible && showKeyBar && <TerminalKeyBar sendInput={sendInput} />}
+
+      {/* Session quick-switcher — mobile only */}
+      {!sidebarVisible && showSwitcher && (
+        <SessionSwitcher
+          sessions={sessions}
+          currentId={attachedSession?.id ?? null}
+          onPick={(id) => attachSession(id)}
+          onNew={() => { setShowSwitcher(false); setShowTabPicker(true); }}
+          onClose={() => setShowSwitcher(false)}
+        />
+      )}
 
       {/* Profile picker popup — mobile only */}
       {!sidebarVisible && showTabPicker && <TabPicker onClose={() => setShowTabPicker(false)} />}
