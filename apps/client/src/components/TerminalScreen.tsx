@@ -237,8 +237,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     attachedSession, sendInput, exitScroll, resize, detachSession, killSession,
     initialScrollback, windows, selectWindow, createWindow, serverUrl, authToken,
     sessions, activeTabId, switchTab, closeTab, showTabPicker, setShowTabPicker, getTabs,
-    attachSession,
+    attachSession, connectionState,
   } = useAppStore();
+
+  // 'authenticated' is the only fully-usable state; anything else means input
+  // won't reach the session, so surface it instead of dropping keystrokes silently.
+  const online = connectionState === 'authenticated';
+  const connLabel = connectionState === 'reconnecting' ? 'Reconnecting…'
+    : connectionState === 'disconnected' ? 'Offline'
+    : connectionState === 'connecting' ? 'Connecting…'
+    : 'Authenticating…';
 
   const tabs = useMemo(() => getTabs(), [sessions]);
 
@@ -550,6 +558,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       textarea.setAttribute('spellcheck', 'false');
     }
 
+    let lastConnWarn = 0;
     term.onData((data) => {
       if (composing) return;
 
@@ -557,6 +566,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       // keystroke means the user is back at work — hide the jump button. The
       // server cancels copy-mode for printable input on its side.
       setScrolledUp(false);
+
+      // Typing while the socket is down would silently vanish — warn (throttled)
+      // so it doesn't feel like the earlier "can't type" bugs.
+      if (useAppStore.getState().connectionState !== 'authenticated') {
+        const now = performance.now();
+        if (now - lastConnWarn > 3000) {
+          lastConnWarn = now;
+          useAppStore.getState().pushNotification('error', 'Not connected — keystroke not sent.', 'conn');
+        }
+      }
 
       if (data.length > sentSoFar.length && sentSoFar && data.startsWith(sentSoFar)) {
         const delta = data.slice(sentSoFar.length);
@@ -828,6 +847,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           <div className="flex-1 px-2 text-xs text-zinc-500 truncate">
             {attachedSession?.profileName || attachedSession?.name || ''}
           </div>
+        )}
+
+        {/* Connection health — only shown when not fully connected. */}
+        {!online && (
+          <span className={`shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+            connectionState === 'disconnected' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-300'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${connectionState === 'disconnected' ? 'bg-red-500' : 'bg-amber-400 animate-pulse'}`} />
+            {connLabel}
+          </span>
         )}
 
         {/* Upload */}
