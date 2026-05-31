@@ -22,6 +22,7 @@ type SpeechRecognitionLike = {
   onresult: ((e: SpeechRecognitionEventLike) => void) | null;
   onerror: ((e: SpeechRecognitionErrorEventLike) => void) | null;
   onend: (() => void) | null;
+  onspeechstart: (() => void) | null;
   start: () => void;
   stop: () => void;
   abort: () => void;
@@ -75,6 +76,20 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     wakeLockRef.current = null;
   }, []);
 
+  // Auto-stop after a stretch of silence so the mic doesn't sit open (and drain
+  // battery / hold the wake lock) when you've stopped talking. Re-armed on every
+  // speech signal — including interim results — so it never cuts off mid-sentence.
+  const SILENCE_MS = 4000;
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopRef = useRef<() => void>(() => {});
+  const clearSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+  }, []);
+  const armSilenceTimer = useCallback(() => {
+    clearSilenceTimer();
+    silenceTimerRef.current = setTimeout(() => stopRef.current(), SILENCE_MS);
+  }, [clearSilenceTimer]);
+
   // Kill switch: `localStorage.persalink_voice = 'off'` fully disables voice
   // (no SpeechRecognition instance, no listeners, button hidden). Reload the
   // app after toggling. Default is on when the browser supports it.
@@ -98,8 +113,14 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     const rec = new Ctor();
     rec.lang = 'en-US';
     rec.continuous = true;
-    rec.interimResults = false;
+    // Interim results are NOT sent (we only forward finals), but they let us
+    // re-arm the silence timer continuously while you speak a long sentence.
+    rec.interimResults = true;
+    rec.onspeechstart = () => armSilenceTimer();
     rec.onresult = (e) => {
+      // Any result — interim or final — means you're talking: push the
+      // auto-stop deadline back.
+      armSilenceTimer();
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
         if (r.isFinal) {
@@ -133,23 +154,30 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
       rec.start();
       setIsListening(true);
       void acquireWakeLock();
+      // Start the silence countdown — if you never say anything, it stops itself.
+      armSilenceTimer();
     } catch (err) {
       recognitionRef.current = null;
       wantListeningRef.current = false;
       setIsListening(false);
       releaseWakeLock();
+      clearSilenceTimer();
       setError(err instanceof Error ? err.message : 'Failed to start');
     }
-  }, [acquireWakeLock, releaseWakeLock]);
+  }, [acquireWakeLock, releaseWakeLock, armSilenceTimer, clearSilenceTimer]);
 
   const stop = useCallback(() => {
     wantListeningRef.current = false;
+    clearSilenceTimer();
     releaseWakeLock();
     const rec = recognitionRef.current;
     if (rec) {
       try { rec.stop(); } catch { /* already stopped */ }
     }
-  }, [releaseWakeLock]);
+  }, [releaseWakeLock, clearSilenceTimer]);
+  // Keep stopRef current so the silence timer (armed before `stop` exists in
+  // closure scope) always calls the latest stop.
+  stopRef.current = stop;
 
   const toggle = useCallback(() => {
     if (recognitionRef.current) stop();
@@ -164,6 +192,7 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     const onVisibility = () => {
       if (document.visibilityState === 'hidden' && recognitionRef.current) {
         wantListeningRef.current = false;
+        clearSilenceTimer();
         releaseWakeLock();
         try { recognitionRef.current.abort(); } catch { /* ignore */ }
         recognitionRef.current = null;
@@ -172,11 +201,12 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [releaseWakeLock]);
+  }, [releaseWakeLock, clearSilenceTimer]);
 
   useEffect(() => {
     return () => {
       wantListeningRef.current = false;
+      clearSilenceTimer();
       releaseWakeLock();
       const rec = recognitionRef.current;
       if (rec) {
@@ -184,7 +214,7 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
         recognitionRef.current = null;
       }
     };
-  }, [releaseWakeLock]);
+  }, [releaseWakeLock, clearSilenceTimer]);
 
   return { isSupported, isListening, error, start, stop, toggle };
 }
