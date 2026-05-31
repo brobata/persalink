@@ -52,9 +52,12 @@ make `pl-` sessions come BACK after one, the box runs:
     graceful reboot loses zero state; only a hard crash falls back to the last
     15-min auto-save.
 
-Caveat: resurrect restores session/window/pane **layout, cwd, and scrollback** —
-it does NOT auto-relaunch arbitrary programs (e.g. `claude`, `ollama`). Panes
-come back at a shell prompt in the right directory; re-run the command.
+It restores session/window/pane **layout, cwd, and scrollback**, and — via
+`@resurrect-processes '"~claude" "~ollama" "~goose" "~aider" "~node" btop htop'`
+— **relaunches the agents with their full command line**, so a `claude '/apronops'`
+pane comes back running claude at that profile rather than a bare prompt. (The
+conversation itself lived in the old process and is gone; the command re-runs
+fresh. Add programs to that list to have them auto-restored too.)
 
 Re-apply on a fresh box: `loginctl enable-linger $USER`, install TPM, ensure the
 plugin block in `~/.tmux.conf`, `~/.tmux/plugins/tpm/bin/install_plugins`, then
