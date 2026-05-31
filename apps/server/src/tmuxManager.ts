@@ -171,6 +171,7 @@ export class TmuxManager {
         createdAt: parsed.created * 1000,
         attached: parsed.attached,
         idleSeconds,
+        activityAt: parsed.activity > 0 ? parsed.activity : undefined,
       };
     });
   }
@@ -332,6 +333,16 @@ export class TmuxManager {
       await tmux('bind-key', '-T', 'root', 'WheelDownPane',
         'if-shell -F -t = "#{?pane_in_mode,1,#{mouse_any_flag}}" "send-keys -M" "select-pane -t="');
     } catch { /* ignore */ }
+  }
+
+  /** Capture only the visible pane (current screen) for attention detection —
+   *  cheaper than scrollback and best-effort (returns '' on error). */
+  async captureVisible(sessionName: string): Promise<string> {
+    try {
+      return await tmux('capture-pane', '-p', '-t', sessionName);
+    } catch {
+      return '';
+    }
   }
 
   /** Cancel tmux copy-mode (scrollback) on a session, returning the pane to the

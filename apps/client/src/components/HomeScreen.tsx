@@ -42,6 +42,15 @@ function SessionPill({ session }: { session: SessionInfo }) {
         <span className="flex-1 text-sm font-medium text-zinc-100 truncate">
           {session.name || session.profileName}
         </span>
+        {session.attention === 'waiting' && (
+          <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full" title="Waiting for your input">needs you</span>
+        )}
+        {session.attention === 'error' && (
+          <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" title="Recent error" />
+        )}
+        {session.unseen && session.attention !== 'waiting' && session.attention !== 'error' && (
+          <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="New output" />
+        )}
         {session.profileColor && (
           <div
             className="shrink-0 w-1.5 h-4 rounded-full"
@@ -86,6 +95,11 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
   const health = healthStatuses.find(h => h.profileId === profile.id);
   const liveSessions = sessions.filter(s => s.profileId === profile.id);
   const liveCount = liveSessions.length;
+  // Surface attention/unseen state on the collapsed profile card too, so you
+  // don't have to expand the Live bar to know something wants you.
+  const needsAttention = liveSessions.some(s => s.attention === 'waiting' || s.attention === 'error');
+  const hasUnseen = liveSessions.some(s => s.unseen);
+  const liveDotColor = needsAttention ? 'bg-amber-400' : hasUnseen ? 'bg-emerald-400' : 'bg-green-500';
 
   const handleTap = () => {
     createSession(profile.id);
@@ -122,12 +136,12 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
         <div className="relative shrink-0">
           <span className="text-lg">{profile.icon || '\uD83D\uDCC2'}</span>
           {liveCount > 0 && liveCount < 2 && (
-            <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <div className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ${liveDotColor} ${(needsAttention || hasUnseen) ? 'animate-pulse' : ''}`} />
           )}
           {liveCount >= 2 && (
-            <div className="absolute -top-1 -right-1.5 min-w-[16px] h-[16px] px-1
-                            rounded-full bg-green-500 text-[10px] font-bold text-zinc-950
-                            flex items-center justify-center">
+            <div className={`absolute -top-1 -right-1.5 min-w-[16px] h-[16px] px-1
+                            rounded-full ${liveDotColor} text-[10px] font-bold text-zinc-950
+                            flex items-center justify-center`}>
               {liveCount}
             </div>
           )}

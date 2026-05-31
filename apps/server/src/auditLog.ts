@@ -18,6 +18,7 @@ export type AuditEvent =
   | 'ws_disconnected'
   | 'auth_timeout'
   | 'watchdog'
+  | 'attention'
   | 'tmux_session_created'
   | 'tmux_session_killed'
   | 'tmux_session_renamed'

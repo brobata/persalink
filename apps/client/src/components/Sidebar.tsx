@@ -56,6 +56,15 @@ function SessionPill({ session }: { session: SessionInfo }) {
           {session.name || session.profileName}
         </span>
         <div className="flex items-center gap-1 shrink-0">
+          {session.attention === 'waiting' && (
+            <span className="text-[9px] font-semibold text-amber-300 bg-amber-500/15 px-1 py-0.5 rounded" title="Waiting for your input">needs you</span>
+          )}
+          {session.attention === 'error' && (
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500" title="Recent error" />
+          )}
+          {session.unseen && session.attention !== 'waiting' && session.attention !== 'error' && (
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="New output" />
+          )}
           {isActive && (
             <span
               className={`inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold ${

@@ -17,7 +17,8 @@ import { createHttpHandler, type ServerInfo } from '../httpServer';
 import { TokenStore, hashPassword, verifyPassword, validatePassword } from '../auth';
 import { RateLimiter } from '../rateLimiter';
 import { audit } from '../auditLog';
-import type { ClientMessage, ServerMessage } from '@persalink/shared/protocol';
+import type { ClientMessage, ServerMessage, SessionInfo } from '@persalink/shared/protocol';
+import { classifyPane, type Attention } from '../attention';
 import { PROTOCOL_VERSION, parseClientMessage } from '@persalink/shared/protocol';
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,29 @@ let tokenStore: TokenStore;
 let rateLimiter: RateLimiter;
 const clients: Map<string, ConnectedClient> = new Map();
 
+// Per-session "last viewed" epoch seconds — a session shows an unseen badge
+// when its tmux activity is newer than this and it isn't currently attached.
+const lastSeen = new Map<string, number>();
+// Latest attention state per session, refreshed by the monitor loop and folded
+// into every sessions.list so badges/notifications stay consistent.
+const attentionCache = new Map<string, Attention>();
+// Tmux activity epoch we last classified a session at — lets the monitor skip
+// re-capturing panes that haven't changed (every state change bumps activity).
+const lastClassifiedActivity = new Map<string, number>();
+
+function markSeen(sessionId: string): void {
+  lastSeen.set(sessionId, Math.floor(Date.now() / 1000));
+}
+
+/** Fold server-tracked unseen + attention state into the raw tmux session list. */
+function enrichSessions(sessions: SessionInfo[]): SessionInfo[] {
+  return sessions.map((s) => ({
+    ...s,
+    unseen: !s.attached && (s.activityAt ?? 0) > (lastSeen.get(s.id) ?? 0),
+    attention: attentionCache.get(s.id),
+  }));
+}
+
 const MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024;
 let settingUpPassword = false;
 
@@ -126,12 +150,12 @@ function broadcastToAuthenticated(message: ServerMessage): void {
 
 async function sendSessionsList(client: ConnectedClient): Promise<void> {
   const sessions = await tmuxManager.listSessions(profileManager.getMap());
-  send(client, { type: 'sessions.list', sessions });
+  send(client, { type: 'sessions.list', sessions: enrichSessions(sessions) });
 }
 
 async function broadcastSessionsList(): Promise<void> {
   const sessions = await tmuxManager.listSessions(profileManager.getMap());
-  broadcastToAuthenticated({ type: 'sessions.list', sessions });
+  broadcastToAuthenticated({ type: 'sessions.list', sessions: enrichSessions(sessions) });
 }
 
 function detachClient(client: ConnectedClient): void {
@@ -141,6 +165,8 @@ function detachClient(client: ConnectedClient): void {
     try { client.bridge.ptyProcess.kill(); } catch { /* best effort */ }
     client.bridge = null;
   }
+  // You just looked at this session — clear its unseen state on the way out.
+  if (client.attachedSession) markSeen(client.attachedSession);
   client.attachedSession = null;
   client.scrolledBack = false;
 }
@@ -315,6 +341,7 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
 
       try {
         detachClient(client);
+        markSeen(message.sessionId);
         await attachToSession(client, message.sessionId, cols, rows, scrollbackLines);
       } catch (err) {
         send(client, { type: 'error', message: `Failed to attach: ${err instanceof Error ? err.message : err}` });
@@ -874,6 +901,54 @@ function startWatchdog(): void {
   }, 60_000).unref();
 }
 
+// Noteworthy attention transitions → an agent notification. Delivery (web push)
+// is attached in the notifications slice; for now it's audited.
+function onAttentionTransition(session: SessionInfo, prev: Attention, next: Attention): void {
+  let event: string | null = null;
+  if (prev === 'working' && next === 'idle') event = 'finished';
+  else if (next === 'waiting' && prev !== 'waiting') event = 'waiting';
+  else if (next === 'error' && prev !== 'error') event = 'error';
+  if (!event) return;
+  const name = session.name || session.profileName || session.id;
+  audit('attention', { sessionId: session.id, name, reason: `${prev}->${next} (${event})` });
+}
+
+// Fast monitor loop — drives live unseen badges + attention detection (and the
+// notifications built on top). Runs only while clients are connected.
+function startSessionMonitor(): void {
+  setInterval(async () => {
+    if (clients.size === 0) return;
+    try {
+      const sessions = await tmuxManager.listSessions(profileManager.getMap());
+      // Reclassify only sessions whose tmux activity changed since last tick —
+      // every state change (output, prompt, permission box) bumps activity, so
+      // this catches transitions while skipping idle panes.
+      for (const s of sessions) {
+        const act = s.activityAt ?? 0;
+        if (attentionCache.has(s.id) && lastClassifiedActivity.get(s.id) === act) continue;
+        lastClassifiedActivity.set(s.id, act);
+        const pane = await tmuxManager.captureVisible(s.id);
+        const next = classifyPane(pane, s.idleSeconds ?? 999);
+        const prev = attentionCache.get(s.id);
+        attentionCache.set(s.id, next);
+        if (prev && prev !== next) onAttentionTransition(s, prev, next);
+      }
+      // Drop tracking state for sessions that no longer exist.
+      const live = new Set(sessions.map((s) => s.id));
+      for (const id of [...attentionCache.keys()]) {
+        if (!live.has(id)) {
+          attentionCache.delete(id);
+          lastClassifiedActivity.delete(id);
+          lastSeen.delete(id);
+        }
+      }
+      broadcastToAuthenticated({ type: 'sessions.list', sessions: enrichSessions(sessions) });
+    } catch (err) {
+      console.error('[monitor] tick failed:', err);
+    }
+  }, 4_000).unref();
+}
+
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
@@ -911,6 +986,7 @@ async function main(): Promise<void> {
 
   setupWebSocket(server);
   startWatchdog();
+  startSessionMonitor();
 
   server.listen(config.port, '0.0.0.0', () => {
     console.log(`[PersaLink] Server running on port ${config.port}`);

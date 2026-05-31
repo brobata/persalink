@@ -87,6 +87,14 @@ export const SessionInfoSchema = z.object({
   createdAt: z.number(),
   attached: z.boolean(),
   idleSeconds: z.number().optional(),
+  /** Epoch seconds of the session's last tmux activity (output/input). */
+  activityAt: z.number().optional(),
+  /** New output since you last viewed this session (badge on the list). */
+  unseen: z.boolean().optional(),
+  /** Coarse attention state derived from pane content — drives badges +
+   *  notifications. 'working' = busy; 'idle' = at a ready prompt; 'waiting' =
+   *  blocked on a permission/approval prompt; 'error' = recent error output. */
+  attention: z.enum(['working', 'idle', 'waiting', 'error']).optional(),
 });
 
 export const HealthStatusSchema = z.object({
