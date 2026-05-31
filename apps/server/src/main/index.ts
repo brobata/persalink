@@ -19,6 +19,7 @@ import { RateLimiter } from '../rateLimiter';
 import { audit } from '../auditLog';
 import type { ClientMessage, ServerMessage, SessionInfo } from '@persalink/shared/protocol';
 import { classifyPane, type Attention } from '../attention';
+import { PushManager } from '../pushManager';
 import { PROTOCOL_VERSION, parseClientMessage } from '@persalink/shared/protocol';
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,7 @@ let profileManager: ProfileManager;
 let healthChecker: HealthChecker;
 let tokenStore: TokenStore;
 let rateLimiter: RateLimiter;
+let pushManager: PushManager;
 const clients: Map<string, ConnectedClient> = new Map();
 
 // Per-session "last viewed" epoch seconds — a session shows an unseen badge
@@ -301,6 +303,7 @@ function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCrea
   sendSessionsList(client);
   send(client, { type: 'profiles.list', profiles: profileManager.list() });
   send(client, { type: 'health.status', statuses: healthChecker.getStatuses() });
+  send(client, { type: 'push.key', publicKey: pushManager.getPublicKey() });
 }
 
 // ---------------------------------------------------------------------------
@@ -641,6 +644,29 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     }
 
     // ---- Keepalive ----
+    // ---- Web Push notifications ----
+    case 'push.getKey': {
+      send(client, { type: 'push.key', publicKey: pushManager.getPublicKey() });
+      break;
+    }
+
+    case 'push.subscribe': {
+      pushManager.subscribe(message.subscription);
+      break;
+    }
+
+    case 'push.unsubscribe': {
+      pushManager.unsubscribe(message.endpoint);
+      break;
+    }
+
+    case 'push.test': {
+      pushManager
+        .send({ title: '🔔 PersaLink', body: 'Test notification — push is working.', tag: 'pl-test' })
+        .catch((err) => console.error('[push] test send failed:', err));
+      break;
+    }
+
     case 'ping': {
       send(client, { type: 'pong' });
       break;
@@ -911,6 +937,18 @@ function onAttentionTransition(session: SessionInfo, prev: Attention, next: Atte
   if (!event) return;
   const name = session.name || session.profileName || session.id;
   audit('attention', { sessionId: session.id, name, reason: `${prev}->${next} (${event})` });
+
+  const copy: Record<string, { title: string; body: string }> = {
+    finished: { title: `✅ ${name}`, body: 'Finished — back at the prompt.' },
+    waiting: { title: `⏳ ${name}`, body: 'Needs your input (waiting on a prompt).' },
+    error: { title: `❌ ${name}`, body: 'Hit an error.' },
+  };
+  const c = copy[event];
+  // Tag includes the event so a "finished" doesn't silently replace a pending
+  // "waiting" for the same session.
+  pushManager
+    .send({ ...c, tag: `pl-${session.id}-${event}`, sessionId: session.id })
+    .catch((err) => console.error('[push] send failed:', err));
 }
 
 // Fast monitor loop — drives live unseen badges + attention detection (and the
@@ -965,6 +1003,8 @@ async function main(): Promise<void> {
 
   tokenStore = new TokenStore();
   rateLimiter = new RateLimiter();
+  pushManager = new PushManager();
+  pushManager.init();
 
   // Use cwd (PM2 sets it to project root via ecosystem.config.js)
   const staticDir = path.join(process.cwd(), 'apps', 'client', 'dist');

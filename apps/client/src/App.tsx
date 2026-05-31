@@ -45,10 +45,34 @@ export function App() {
   // Auto-connect on app open if we have saved credentials
   useEffect(() => {
     initBiometric();
+    // Notification tap on a fully-closed app opens '/?session=<id>'. Seed it as
+    // the auto-attach target (the post-auth handshake will attach once the
+    // session is confirmed live), then strip it from the URL.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const target = params.get('session');
+      if (target) {
+        useAppStore.setState({ lastActiveSessionId: target });
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    } catch { /* no-op */ }
     const { serverUrl, authToken, connectionState: cs } = useAppStore.getState();
     if (serverUrl && authToken && cs === 'disconnected') {
       useAppStore.getState().connect();
     }
+  }, []);
+
+  // Notification tap while the app is open/backgrounded: the service worker
+  // postMessages the session to focus. Attach to it.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'persalink:open-session' && e.data.sessionId) {
+        useAppStore.getState().attachSession(e.data.sessionId);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
   }, []);
 
   // Route newly-created sessions into the pane that asked for them

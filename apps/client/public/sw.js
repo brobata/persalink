@@ -19,3 +19,38 @@ self.addEventListener('install', () => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
+
+// --- Web Push: agent notifications (finished / waiting / error) ---------------
+// Payload is JSON: { title, body, tag, sessionId }. We deliberately keep this
+// the ONLY thing the SW does beyond install/activate — still no fetch handler.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
+  const title = data.title || 'PersaLink';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      tag: data.tag || undefined,
+      renotify: !!data.tag,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { sessionId: data.sessionId || null },
+    })
+  );
+});
+
+// Tapping a notification focuses an existing window (and asks it to open the
+// session) or opens a fresh one deep-linked to the session.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const sessionId = event.notification.data && event.notification.data.sessionId;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of wins) {
+      await c.focus();
+      if (sessionId) c.postMessage({ type: 'persalink:open-session', sessionId });
+      return;
+    }
+    await self.clients.openWindow(sessionId ? '/?session=' + encodeURIComponent(sessionId) : '/');
+  })());
+});

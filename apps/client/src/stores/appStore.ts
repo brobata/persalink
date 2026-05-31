@@ -10,6 +10,7 @@ import type {
   SessionInfo, Profile, HealthStatus, ServerMessage, TmuxWindowInfo,
 } from '@persalink/shared/protocol';
 import { WSClient, type ConnectionState } from '../lib/ws';
+import { subscribeToPush, unsubscribeFromPush } from '../lib/push';
 import {
   isBiometricAvailable, verifyBiometric, saveCredentials,
   getCredentials, clearCredentials,
@@ -81,6 +82,11 @@ interface AppState {
   // produces no visible signal on the client.
   notifications: { id: string; kind: 'error' | 'info'; message: string; op?: string; createdAt: number }[];
 
+  // Web Push — VAPID key arrives after auth; enabled flag is persisted so the
+  // UI reflects the saved preference.
+  vapidPublicKey: string | null;
+  notificationsEnabled: boolean;
+
   // Actions
   setServerUrl: (url: string) => void;
   connect: () => void;
@@ -94,6 +100,9 @@ interface AppState {
   renameSession: (sessionId: string, name: string) => void;
   sendInput: (data: string) => void;
   exitScroll: () => void;
+  enableNotifications: () => Promise<boolean>;
+  disableNotifications: () => Promise<void>;
+  testNotification: () => void;
   resize: (cols: number, rows: number) => void;
   selectWindow: (index: number) => void;
   createWindow: (name?: string) => void;
@@ -174,6 +183,8 @@ export const useAppStore = create<AppState>()(
       notifications: [],
       lastActiveSessionId: null,
       pendingAutoAttach: null,
+      vapidPublicKey: null,
+      notificationsEnabled: false,
 
       pushNotification: (kind, message, op) => set((s) => ({
         notifications: [
@@ -291,6 +302,42 @@ export const useAppStore = create<AppState>()(
       // explicit "jump to live" button.
       exitScroll: () => {
         wsClient?.send({ type: 'session.exitScroll' });
+      },
+
+      // Request notification permission, subscribe via the SW PushManager, and
+      // register the subscription with the server. Returns whether it stuck.
+      enableNotifications: async () => {
+        const key = get().vapidPublicKey;
+        if (!key) {
+          get().pushNotification('error', 'Notifications not ready — reconnect and try again.', 'push');
+          return false;
+        }
+        try {
+          const subscription = await subscribeToPush(key);
+          if (!subscription) {
+            get().pushNotification('error', 'Notification permission denied.', 'push');
+            set({ notificationsEnabled: false });
+            return false;
+          }
+          wsClient?.send({ type: 'push.subscribe', subscription });
+          set({ notificationsEnabled: true });
+          return true;
+        } catch (err) {
+          get().pushNotification('error', `Could not enable notifications: ${err instanceof Error ? err.message : err}`, 'push');
+          return false;
+        }
+      },
+
+      disableNotifications: async () => {
+        try {
+          const endpoint = await unsubscribeFromPush();
+          if (endpoint) wsClient?.send({ type: 'push.unsubscribe', endpoint });
+        } catch { /* best effort — still flip the flag off */ }
+        set({ notificationsEnabled: false });
+      },
+
+      testNotification: () => {
+        wsClient?.send({ type: 'push.test' });
       },
 
       resize: (cols, rows) => {
@@ -463,6 +510,7 @@ export const useAppStore = create<AppState>()(
         authToken: state.authToken,
         deviceName: state.deviceName,
         lastActiveSessionId: state.lastActiveSessionId,
+        notificationsEnabled: state.notificationsEnabled,
       }),
     }
   )
@@ -537,6 +585,10 @@ function handleServerMessage(
 
     case 'health.status':
       set({ healthStatuses: msg.statuses });
+      break;
+
+    case 'push.key':
+      set({ vapidPublicKey: msg.publicKey });
       break;
 
     case 'session.attached': {

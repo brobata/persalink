@@ -168,6 +168,14 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('health.status') }),
   // Scrollback
   z.object({ type: z.literal('session.scrollback'), lines: z.number().int().optional() }),
+  // Web Push notifications
+  z.object({ type: z.literal('push.getKey') }),
+  z.object({ type: z.literal('push.subscribe'), subscription: z.object({
+    endpoint: z.string().max(2000),
+    keys: z.object({ p256dh: z.string().max(500), auth: z.string().max(500) }),
+  }) }),
+  z.object({ type: z.literal('push.unsubscribe'), endpoint: z.string().max(2000) }),
+  z.object({ type: z.literal('push.test') }),
   // Keepalive
   z.object({ type: z.literal('ping') }),
 ]);
@@ -216,6 +224,8 @@ export type ServerMessage =
   | { type: 'health.status'; statuses: HealthStatus[] }
   // Scrollback
   | { type: 'session.scrollback'; data: string }
+  // Web Push — server hands the client its VAPID public key after auth.
+  | { type: 'push.key'; publicKey: string }
   // General
   | { type: 'pong' }
   | { type: 'error'; message: string; op?: string };
