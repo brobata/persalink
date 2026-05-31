@@ -56,6 +56,24 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
   // Track intent vs. browser-driven `onend` (Chrome auto-ends after silence).
   // If the user is still in "listening" mode we restart automatically.
   const wantListeningRef = useRef(false);
+  // Screen Wake Lock held while recording. Without it the phone screen times
+  // out mid-dictation, which kills SpeechRecognition (losing the in-flight
+  // utterance) and wedges the mic button until the user backs out and reopens
+  // the session. Holding the lock keeps the screen on so that never happens.
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  const acquireWakeLock = useCallback(async () => {
+    try {
+      if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+      }
+    } catch { /* unsupported / denied — dictation still works, just no keep-awake */ }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    try { wakeLockRef.current?.release(); } catch { /* ignore */ }
+    wakeLockRef.current = null;
+  }, []);
 
   // Kill switch: `localStorage.persalink_voice = 'off'` fully disables voice
   // (no SpeechRecognition instance, no listeners, button hidden). Reload the
@@ -105,6 +123,7 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
       } else {
         recognitionRef.current = null;
         setIsListening(false);
+        releaseWakeLock();
       }
     };
     recognitionRef.current = rec;
@@ -113,37 +132,59 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     try {
       rec.start();
       setIsListening(true);
+      void acquireWakeLock();
     } catch (err) {
       recognitionRef.current = null;
       wantListeningRef.current = false;
       setIsListening(false);
+      releaseWakeLock();
       setError(err instanceof Error ? err.message : 'Failed to start');
     }
-  }, []);
+  }, [acquireWakeLock, releaseWakeLock]);
 
   const stop = useCallback(() => {
     wantListeningRef.current = false;
+    releaseWakeLock();
     const rec = recognitionRef.current;
     if (rec) {
       try { rec.stop(); } catch { /* already stopped */ }
     }
-  }, []);
+  }, [releaseWakeLock]);
 
   const toggle = useCallback(() => {
     if (recognitionRef.current) stop();
     else start();
   }, [start, stop]);
 
+  // If the app is backgrounded / screen actually goes off while listening, the
+  // OS kills recognition and the wake lock auto-releases. Tear down cleanly so
+  // the mic button works again on return WITHOUT the user having to back out of
+  // and reopen the session.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden' && recognitionRef.current) {
+        wantListeningRef.current = false;
+        releaseWakeLock();
+        try { recognitionRef.current.abort(); } catch { /* ignore */ }
+        recognitionRef.current = null;
+        setIsListening(false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [releaseWakeLock]);
+
   useEffect(() => {
     return () => {
       wantListeningRef.current = false;
+      releaseWakeLock();
       const rec = recognitionRef.current;
       if (rec) {
         try { rec.abort(); } catch { /* ignore */ }
         recognitionRef.current = null;
       }
     };
-  }, []);
+  }, [releaseWakeLock]);
 
   return { isSupported, isListening, error, start, stop, toggle };
 }

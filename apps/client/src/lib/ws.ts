@@ -24,21 +24,25 @@ export class WSClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectDelay = 1000;
-  private maxReconnectDelay = 30000;
+  // Capped low: on mobile the socket drops often, and a 30s backoff left users
+  // staring at "Connecting…" (or force-closing the app). 6s ceiling keeps
+  // retries brisk; foregrounding/online events reset it to 0 anyway.
+  private maxReconnectDelay = 6000;
   private intentionalClose = false;
   private hasConnectedOnce = false;
   private lastInboundAt = 0;
   private visibilityHandler: (() => void) | null = null;
+  private onlineHandler: (() => void) | null = null;
 
-  // Liveness tuning. The server sends pings on its own cadence; we also send
-  // ours every PING_INTERVAL_MS. If we go LIVENESS_TIMEOUT_MS without ANY
-  // inbound traffic, we declare the socket a zombie and force-reconnect.
-  // 25s ping + 45s timeout means up to 1 missed ping before we tear down —
-  // tolerant of brief network blips, but catches the OS-dropped-the-socket
-  // case where readyState lies and onclose never fires.
-  private readonly PING_INTERVAL_MS = 25_000;
-  private readonly LIVENESS_TIMEOUT_MS = 45_000;
-  private readonly LIVENESS_CHECK_MS = 5_000;
+  // Liveness tuning. We ping every PING_INTERVAL_MS; if we go
+  // LIVENESS_TIMEOUT_MS without ANY inbound traffic, the socket is a zombie and
+  // we force-reconnect. The server broadcasts sessions.list every ~4s, so a
+  // healthy socket never approaches 15s of silence — a dead one is caught fast,
+  // while still tolerating a brief blip. (readyState lies and onclose often
+  // never fires when a mobile OS drops a backgrounded socket.)
+  private readonly PING_INTERVAL_MS = 10_000;
+  private readonly LIVENESS_TIMEOUT_MS = 15_000;
+  private readonly LIVENESS_CHECK_MS = 3_000;
 
   constructor(options: WSClientOptions) {
     this.url = options.url;
@@ -49,6 +53,9 @@ export class WSClient {
   connect(): void {
     this.intentionalClose = false;
     this.onStateChange('connecting');
+    // Always-on so foregrounding/network-return can force a reconnect even when
+    // a connect attempt is stuck and onopen never fired. Idempotent.
+    this.attachVisibilityHandler();
 
     try {
       this.ws = new WebSocket(this.url);
@@ -140,6 +147,27 @@ export class WSClient {
     }, this.reconnectDelay);
   }
 
+  /**
+   * Reconnect NOW, resetting backoff and tearing down any existing socket.
+   * Used when the app is foregrounded or the network returns — we never want
+   * the user to wait out a backoff timer (the thing that made them force-close
+   * the app to "wake it up"). The old socket's handlers are detached first so
+   * its onclose can't race a competing reconnect.
+   */
+  forceReconnect(): void {
+    if (this.intentionalClose) return;
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.reconnectDelay = 1000;
+    this.stopPing();
+    this.stopLivenessCheck();
+    if (this.ws) {
+      this.ws.onopen = this.ws.onmessage = this.ws.onclose = this.ws.onerror = null;
+      try { this.ws.close(); } catch { /* ignore */ }
+      this.ws = null;
+    }
+    this.connect();
+  }
+
   private startPing(): void {
     this.pingTimer = setInterval(() => {
       this.send({ type: 'ping' });
@@ -182,24 +210,50 @@ export class WSClient {
   }
 
   private attachVisibilityHandler(): void {
-    if (this.visibilityHandler) return;
-    this.visibilityHandler = () => {
-      if (document.visibilityState !== 'visible') return;
-      // Tab just came back to focus. If the OS suspended us, the socket
-      // may already be dead. Force an immediate liveness check instead of
-      // waiting up to LIVENESS_CHECK_MS for the timer to tick.
-      this.checkLiveness();
-      // Also send a ping so server knows we're alive and so an inbound
-      // pong refreshes lastInboundAt for the next liveness window.
-      this.send({ type: 'ping' });
-    };
-    document.addEventListener('visibilitychange', this.visibilityHandler);
+    if (!this.visibilityHandler) {
+      this.visibilityHandler = () => {
+        if (document.visibilityState !== 'visible') return;
+        // Back to the foreground. Mobile OSes routinely kill backgrounded
+        // sockets WITHOUT firing onclose, so readyState can't be trusted. If
+        // we're not cleanly OPEN, reconnect immediately — no backoff wait.
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          this.forceReconnect();
+          return;
+        }
+        // Socket claims OPEN — prove it. Ping, then if no inbound (pong /
+        // sessions.list) lands within ~3s, treat it as a zombie and reconnect.
+        this.send({ type: 'ping' });
+        setTimeout(() => {
+          if (
+            document.visibilityState === 'visible' &&
+            !this.intentionalClose &&
+            Date.now() - this.lastInboundAt > 3000
+          ) {
+            this.forceReconnect();
+          }
+        }, 3000);
+      };
+      document.addEventListener('visibilitychange', this.visibilityHandler);
+    }
+    // The network coming back is an equally strong signal to reconnect now.
+    if (!this.onlineHandler) {
+      this.onlineHandler = () => {
+        if (!this.intentionalClose && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
+          this.forceReconnect();
+        }
+      };
+      window.addEventListener('online', this.onlineHandler);
+    }
   }
 
   private detachVisibilityHandler(): void {
     if (this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
       this.visibilityHandler = null;
+    }
+    if (this.onlineHandler) {
+      window.removeEventListener('online', this.onlineHandler);
+      this.onlineHandler = null;
     }
   }
 }

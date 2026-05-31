@@ -268,6 +268,12 @@ export const useAppStore = create<AppState>()(
       },
 
       attachSession: (sessionId, cols, rows) => {
+        // Track the in-flight target so the session.attached handler accepts
+        // THIS attach's response. Self-healing: a previously stuck switchingToId
+        // (e.g. an attach whose response was lost on a dropped socket) is
+        // overwritten here, so a tap always opens instead of being filtered out
+        // forever — the bug behind "taps highlight but nothing opens".
+        set({ switchingToId: sessionId });
         // Always send dimensions — without them the server defaults to 120x40
         // and the first PTY redraw arrives sized for a desktop terminal,
         // wrapping into a ~40-col mobile xterm as visual garbage.
@@ -282,7 +288,7 @@ export const useAppStore = create<AppState>()(
 
       detachSession: () => {
         wsClient?.send({ type: 'session.detach' });
-        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null });
+        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null, switchingToId: null });
       },
 
       killSession: (sessionId) => {
@@ -537,11 +543,16 @@ function handleServerMessage(
       }
       break;
 
-    case 'auth.ok':
+    case 'auth.ok': {
+      // On a RECONNECT the user is already past auth (in a terminal or on home)
+      // — forcing view:'home' yanked them out of their session every time the
+      // socket blipped. Only land on home from a pre-auth view (first login).
+      const preAuthViews = ['connect', 'auth', 'locked'];
+      const currentView = get().view;
       set({
         connectionState: 'authenticated',
         serverName: msg.serverName,
-        view: 'home',
+        view: preAuthViews.includes(currentView) ? 'home' : currentView,
         authError: null,
         // Arm the auto-reattach handshake. If the persisted session still
         // exists in the upcoming sessions.list, we'll attach to it.
@@ -556,6 +567,7 @@ function handleServerMessage(
         }
       }
       break;
+    }
 
     case 'auth.failed':
       set({ authError: msg.message, authToken: null, view: 'auth' });
