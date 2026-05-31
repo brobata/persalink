@@ -35,6 +35,31 @@ interface ConnectedClient {
   bridge: TmuxSessionBridge | null;
   /** Which tmux session this client is attached to */
   attachedSession: string | null;
+  /** True once this client scrolled the pane up (wheel-up forwarded to tmux),
+   *  until the next real keystroke or explicit exit. Lets session.input cancel
+   *  copy-mode so typing lands at the prompt instead of navigating scrollback. */
+  scrolledBack: boolean;
+}
+
+// SGR mouse wheel-up report: ESC [ < 64 ; col ; row M. This is what the client
+// forwards to tmux when the user scrolls up, which can drop the pane into
+// copy-mode.
+function isWheelUp(data: string): boolean {
+  return /\x1b\[<64;/.test(data);
+}
+
+// "Live typing" = printable text or Enter — the inputs that should yank the user
+// out of scrollback back to the prompt. Escape sequences (arrows, fn keys, mouse
+// reports all contain ESC), bare control chars, and backspace are excluded, so
+// arrow-key navigation within copy-mode still works.
+function isLiveTypingInput(data: string): boolean {
+  if (data === '\r' || data === '\n' || data === '\r\n') return true;
+  if (data.includes('\x1b')) return false;
+  for (const ch of data) {
+    const c = ch.codePointAt(0)!;
+    if (c >= 0x20 && c !== 0x7f) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +142,7 @@ function detachClient(client: ConnectedClient): void {
     client.bridge = null;
   }
   client.attachedSession = null;
+  client.scrolledBack = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +328,30 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       break;
     }
 
+    case 'session.exitScroll': {
+      client.scrolledBack = false;
+      if (client.attachedSession) {
+        await tmuxManager.exitCopyMode(client.attachedSession);
+      }
+      break;
+    }
+
     case 'session.input': {
       if (client.bridge) {
+        // Copy-mode escape. Scrolling up forwards a wheel-up to tmux, which can
+        // drop the pane into copy-mode where keystrokes navigate scrollback
+        // instead of reaching the shell — the "I can't type" trap. Track the
+        // scroll, then when the user types a real character cancel copy-mode
+        // FIRST (awaited, so it completes before the write — no race) so the
+        // keystroke lands at the live prompt.
+        if (isWheelUp(message.data)) {
+          client.scrolledBack = true;
+        } else if (client.scrolledBack && isLiveTypingInput(message.data)) {
+          client.scrolledBack = false;
+          if (client.attachedSession) {
+            await tmuxManager.exitCopyMode(client.attachedSession);
+          }
+        }
         try {
           client.bridge.ptyProcess.write(message.data);
         } catch (err) {
@@ -717,6 +765,7 @@ function setupWebSocket(server: http.Server): void {
       tokenName: null,
       bridge: null,
       attachedSession: null,
+      scrolledBack: false,
     };
 
     clients.set(clientId, client);

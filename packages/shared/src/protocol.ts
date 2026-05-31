@@ -136,6 +136,9 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.attach'), sessionId: z.string().max(256), cols: ColsField, rows: RowsField, scrollbackLines: z.number().int().min(0).max(10000).optional() }),
   z.object({ type: z.literal('session.detach') }),
   z.object({ type: z.literal('session.input'), data: z.string().max(1_000_000) }),
+  // Drop the attached pane out of tmux copy-mode (scrollback) back to the live
+  // prompt. Sent by the "jump to live" affordance; typing auto-exits server-side.
+  z.object({ type: z.literal('session.exitScroll') }),
   z.object({ type: z.literal('session.resize'), cols: z.number().int().min(10).max(500), rows: z.number().int().min(2).max(200) }),
   z.object({ type: z.literal('session.kill'), sessionId: z.string().max(256) }),
   z.object({ type: z.literal('session.rename'), sessionId: z.string().max(256), name: z.string().max(100) }),

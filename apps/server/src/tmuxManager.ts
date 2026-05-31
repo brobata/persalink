@@ -334,6 +334,15 @@ export class TmuxManager {
     } catch { /* ignore */ }
   }
 
+  /** Cancel tmux copy-mode (scrollback) on a session, returning the pane to the
+   *  live prompt. A no-op if the pane isn't in copy-mode, so it's always safe to
+   *  call — used to rescue a user who scrolled up and then started typing. */
+  async exitCopyMode(sessionName: string): Promise<void> {
+    try {
+      await tmux('send-keys', '-X', '-t', sessionName, 'cancel');
+    } catch { /* not in copy-mode, or session gone — nothing to cancel */ }
+  }
+
   /** Select a window within the attached session */
   async selectWindow(sessionName: string, windowIndex: number): Promise<void> {
     await tmux('select-window', '-t', `${sessionName}:${windowIndex}`);

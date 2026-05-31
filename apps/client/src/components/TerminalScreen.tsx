@@ -187,7 +187,7 @@ function TabPicker({ onClose }: { onClose: () => void }) {
 
 export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: boolean }) {
   const {
-    attachedSession, sendInput, resize, detachSession, killSession,
+    attachedSession, sendInput, exitScroll, resize, detachSession, killSession,
     initialScrollback, windows, selectWindow, createWindow, serverUrl, authToken,
     sessions, activeTabId, switchTab, closeTab, showTabPicker, setShowTabPicker, getTabs,
   } = useAppStore();
@@ -195,6 +195,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const tabs = useMemo(() => getTabs(), [sessions]);
 
   const [uploading, setUploading] = useState(false);
+  // True when the user has scrolled the pane up (possibly into tmux copy-mode);
+  // surfaces the "jump to live" button. Typing auto-exits copy-mode server-side.
+  const [scrolledUp, setScrolledUp] = useState(false);
   const [showKeyBar, setShowKeyBar] = useState(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('persalink-show-keybar') === 'true';
@@ -501,6 +504,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     term.onData((data) => {
       if (composing) return;
 
+      // Real typing arrives via onData (touch-scroll is a separate path), so a
+      // keystroke means the user is back at work — hide the jump button. The
+      // server cancels copy-mode for printable input on its side.
+      setScrolledUp(false);
+
       if (data.length > sentSoFar.length && sentSoFar && data.startsWith(sentSoFar)) {
         const delta = data.slice(sentSoFar.length);
         if (delta) sendInput(delta);
@@ -576,8 +584,14 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         const seq = `\x1b[<${code};1;1M`;
         sendInput(seq.repeat(Math.abs(lines)));
         maybeWarnAltScreenScroll();
+        // alt-screen owns its buffer, so we can't tell when we're back at the
+        // bottom — surface the jump button on any up-scroll and clear it when
+        // the user types (server auto-exits) or taps it.
+        if (lines < 0) setScrolledUp(true);
       } else {
         term.scrollLines(lines);
+        const buf = term.buffer.active;
+        setScrolledUp(buf.viewportY < buf.baseY);
       }
     };
 
@@ -813,6 +827,27 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       {/* Terminal — absolute positioning gives xterm.js real pixel dimensions */}
       <div className="flex-1 min-h-0 relative" onClick={() => terminalRef.current?.focus()}>
         <div ref={termRef} className="absolute inset-0 overflow-hidden" />
+        {/* Jump to live — escapes tmux copy-mode/scrollback back to the prompt.
+            Discoverable counterpart to typing (which auto-exits server-side). */}
+        {scrolledUp && (
+          <button
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              exitScroll();
+              terminalRef.current?.scrollToBottom();
+              setScrolledUp(false);
+              terminalRef.current?.focus();
+            }}
+            className="absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3.5 h-9 rounded-full bg-zinc-700/95 text-zinc-100 text-xs font-medium shadow-lg active:bg-zinc-600"
+            style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+            Jump to live
+          </button>
+        )}
         {voice.isSupported && (
           <button
             // Belt-and-suspenders against the focus-steal that killed Ctrl+C

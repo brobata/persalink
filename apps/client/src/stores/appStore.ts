@@ -93,6 +93,7 @@ interface AppState {
   killSession: (sessionId: string) => void;
   renameSession: (sessionId: string, name: string) => void;
   sendInput: (data: string) => void;
+  exitScroll: () => void;
   resize: (cols: number, rows: number) => void;
   selectWindow: (index: number) => void;
   createWindow: (name?: string) => void;
@@ -283,6 +284,13 @@ export const useAppStore = create<AppState>()(
 
       sendInput: (data) => {
         wsClient?.send({ type: 'session.input', data });
+      },
+
+      // Drop the pane out of tmux copy-mode (scrollback) back to the live
+      // prompt. Typing already auto-exits server-side; this powers the
+      // explicit "jump to live" button.
+      exitScroll: () => {
+        wsClient?.send({ type: 'session.exitScroll' });
       },
 
       resize: (cols, rows) => {
