@@ -38,6 +38,24 @@ function getCtor(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+// The silence auto-stop only earns its keep where leaving the mic open is
+// costly: phones (battery drain + holding the screen wake lock). On a desktop
+// the mic is manually toggled and there's no battery/wake-lock pressure, so the
+// auto-stop is pure downside there — and actively harmful. Its kill-timer can
+// only be held off by a "still speaking" signal, but with interimResults
+// disabled (to avoid Android laddering, see below) the only such signals are
+// speechstart/speechend, which desktop Chrome fires late and unreliably. The
+// timer then counts down against live speech and calls stop() mid-sentence. So
+// gate the auto-stop to touch devices; on desktop, recognition stays open until
+// the user stops it (or Chrome ends it on its own and we transparently restart).
+const AUTO_STOP_ON_SILENCE = (() => {
+  try {
+    return typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches;
+  } catch { return false; }
+})();
+
 export type VoiceInputState = {
   isSupported: boolean;
   isListening: boolean;
@@ -78,15 +96,19 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
   }, []);
 
   // Auto-stop after a stretch of silence so the mic doesn't sit open (and drain
-  // battery / hold the wake lock) when you've stopped talking. Re-armed on every
-  // speech signal — including interim results — so it never cuts off mid-sentence.
-  const SILENCE_MS = 4000;
+  // battery / hold the wake lock) when you've stopped talking. TOUCH DEVICES
+  // ONLY — see AUTO_STOP_ON_SILENCE above; on desktop this timer is never armed
+  // because its speech-boundary heartbeat is unreliable and it cuts off live
+  // speech. Kept generous (15s) so a mid-sentence "thinking" pause on a phone
+  // doesn't trip it.
+  const SILENCE_MS = 15000;
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopRef = useRef<() => void>(() => {});
   const clearSilenceTimer = useCallback(() => {
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
   }, []);
   const armSilenceTimer = useCallback(() => {
+    if (!AUTO_STOP_ON_SILENCE) return; // desktop: never auto-stop (would cut live speech)
     clearSilenceTimer();
     silenceTimerRef.current = setTimeout(() => stopRef.current(), SILENCE_MS);
   }, [clearSilenceTimer]);
