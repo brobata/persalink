@@ -10,7 +10,6 @@ import type { PasswordHash } from './auth';
 import { atomicWriteFileSync } from './atomicWrite';
 
 export interface SecurityConfig {
-  localhostTrusted: boolean;
   tokenTtlDays: number | null;
   allowedOrigins: string[];
   maxConnectionsPerIp: number;
@@ -36,7 +35,6 @@ export const CONFIG_DIR = process.env.PERSALINK_CONFIG_DIR || path.join(os.homed
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 const DEFAULT_SECURITY: SecurityConfig = {
-  localhostTrusted: false,
   tokenTtlDays: 365,
   allowedOrigins: [],
   maxConnectionsPerIp: 10,

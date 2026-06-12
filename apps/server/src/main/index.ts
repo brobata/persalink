@@ -284,7 +284,7 @@ function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCrea
   let token: string | undefined;
   if (!skipTokenCreate) {
     const name = tokenName || client.ip;
-    const { stored, plaintext } = tokenStore.createAccessToken(name, 365);
+    const { stored, plaintext } = tokenStore.createAccessToken(name, config.security.tokenTtlDays);
     token = plaintext;
     audit('token_created', { ip: client.ip, name: stored.name, tokenId: stored.id });
   }
@@ -319,6 +319,14 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       const rows = Math.max(2, Math.min(200, message.rows || 40));
 
       try {
+        // Enforce the configured cap so an authenticated client can't spawn
+        // tmux sessions until the box runs out of memory.
+        const liveSessions = await tmuxManager.listSessions();
+        if (liveSessions.length >= config.security.maxTotalSessions) {
+          send(client, { type: 'error', message: `Session limit reached (${config.security.maxTotalSessions}). Close a session before creating a new one.` });
+          break;
+        }
+
         const sessionName = await tmuxManager.createSession(profile || undefined, cols, rows);
         audit('tmux_session_created', { ip: client.ip, sessionId: sessionName, profileId: message.profileId });
 
@@ -631,7 +639,7 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       saveConfig(config);
       tokenStore.revokeAll();
       const name = client.tokenName || client.ip;
-      const { plaintext } = tokenStore.createAccessToken(name, 365);
+      const { plaintext } = tokenStore.createAccessToken(name, config.security.tokenTtlDays);
       send(client, { type: 'password.changed', token: plaintext });
       for (const c of clients.values()) {
         if (c.id !== client.id && c.authenticated) {
