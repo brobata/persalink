@@ -128,6 +128,8 @@ export interface StoredToken {
 
 const CONFIG_DIR = process.env.PERSALINK_CONFIG_DIR || path.join(os.homedir(), '.persalink');
 const TOKENS_FILE = path.join(CONFIG_DIR, 'tokens.json');
+// Persist `lastUsedAt` at most this often per token (see TokenStore.touch).
+const TOUCH_THROTTLE_MS = 5 * 60_000;
 
 function ensureConfigDir(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
@@ -190,10 +192,16 @@ export class TokenStore {
 
   touch(tokenHash: string): void {
     const token = this.tokens.find((t) => t.tokenHash === tokenHash);
-    if (token) {
-      token.lastUsedAt = new Date().toISOString();
-      this.save();
-    }
+    if (!token) return;
+    // `lastUsedAt` is informational, not security-critical. Rewriting the whole
+    // tokens.json synchronously on every token use meant a disk write per
+    // reconnect — heavy on mobile, which reconnects constantly. Persist at most
+    // once per throttle window; in-memory state stays cheap.
+    const now = Date.now();
+    const last = new Date(token.lastUsedAt).getTime();
+    if (Number.isFinite(last) && now - last < TOUCH_THROTTLE_MS) return;
+    token.lastUsedAt = new Date(now).toISOString();
+    this.save();
   }
 
   add(stored: StoredToken): void {
