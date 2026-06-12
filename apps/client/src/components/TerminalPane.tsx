@@ -17,6 +17,7 @@ import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { useVoiceInput } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
+import { uploadFiles } from '../lib/upload';
 
 interface TerminalPaneProps {
   paneId: string;
@@ -143,24 +144,14 @@ export function TerminalPane({
   const sessionNameInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append('file', file);
-      const hostOnly = serverUrl.trim().replace(/^(wss?|https?):\/\//i, '');
-      const scheme = window.location.protocol === 'https:' ? 'https://' : 'http://';
-      const res = await fetch(`${scheme}${hostOnly}/api/upload`, {
-        method: 'POST',
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-        body: form,
-      });
-      if (!res.ok) throw new Error('upload failed');
-      const result = await res.json();
-      sendInput(result.path);
-    } catch (err) {
-      console.error('[PersaLink] upload failed:', err);
+      const paths = await uploadFiles(files, { serverUrl, authToken });
+      // Paste all uploaded paths space-separated, with a trailing space so the
+      // user can keep typing (e.g. a command in front of the file list).
+      if (paths.length > 0) sendInput(paths.join(' ') + ' ');
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -698,6 +689,7 @@ export function TerminalPane({
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               accept="image/*,video/*,.pdf,.txt,.log,.json,.csv,.zip,.tar,.gz"
               onChange={handleFileUpload}
               className="hidden"

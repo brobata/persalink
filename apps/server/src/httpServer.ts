@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as zlib from 'zlib';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import Busboy from 'busboy';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -119,106 +120,7 @@ export function createHttpHandler(
 
     // File upload endpoint (requires authentication)
     if (urlPath === '/api/upload' && req.method === 'POST') {
-      const authHeader = req.headers['authorization'];
-      const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-      if (!token || !validateAuthToken?.(token)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Authentication required' }));
-        return;
-      }
-
-      const uploadDir = path.join(os.homedir(), 'shared', 'persalink-uploads');
-      fs.mkdirSync(uploadDir, { recursive: true });
-
-      // Parse multipart form data (simple single-file parser)
-      const contentType = req.headers['content-type'] || '';
-      if (!contentType.includes('multipart/form-data')) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Expected multipart/form-data' }));
-        return;
-      }
-
-      const boundaryMatch = contentType.match(/boundary=(.+)/);
-      if (!boundaryMatch) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Missing boundary' }));
-        return;
-      }
-
-      const chunks: Buffer[] = [];
-      let totalSize = 0;
-      const MAX_SIZE = 50 * 1024 * 1024; // 50MB limit
-
-      req.on('data', (chunk: Buffer) => {
-        totalSize += chunk.length;
-        if (totalSize > MAX_SIZE) {
-          res.writeHead(413, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'File too large (max 50MB)' }));
-          req.destroy();
-          return;
-        }
-        chunks.push(chunk);
-      });
-
-      req.on('end', () => {
-        if (res.writableEnded) return;
-        try {
-          const body = Buffer.concat(chunks);
-          const boundary = '--' + boundaryMatch![1];
-          const bodyStr = body.toString('binary');
-
-          // Find the file content between boundaries
-          const parts = bodyStr.split(boundary);
-          let fileName = '';
-          let fileContent: Buffer | null = null;
-
-          for (const part of parts) {
-            if (!part.includes('Content-Disposition')) continue;
-            const headerEnd = part.indexOf('\r\n\r\n');
-            if (headerEnd === -1) continue;
-
-            const headers = part.slice(0, headerEnd);
-            const filenameMatch = headers.match(/filename="([^"]+)"/);
-            if (!filenameMatch) continue;
-
-            fileName = filenameMatch[1];
-            // Extract binary content after headers
-            const contentStart = headerEnd + 4;
-            const contentEnd = part.lastIndexOf('\r\n');
-            const rawContent = part.slice(contentStart, contentEnd > contentStart ? contentEnd : undefined);
-            fileContent = Buffer.from(rawContent, 'binary');
-            break;
-          }
-
-          if (!fileName || !fileContent) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'No file found in upload' }));
-            return;
-          }
-
-          // Sanitize filename and add timestamp to avoid collisions
-          const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-          const timestamp = Date.now();
-          const ext = path.extname(safeName);
-          const base = path.basename(safeName, ext);
-          const finalName = `${base}_${timestamp}${ext}`;
-          const filePath = path.join(uploadDir, finalName);
-
-          fs.writeFileSync(filePath, fileContent);
-
-          const serverPath = filePath.replace(os.homedir(), '~');
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            path: serverPath,
-            absolutePath: filePath,
-            name: finalName,
-            size: fileContent.length,
-          }));
-        } catch (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Upload failed' }));
-        }
-      });
+      handleUpload(req, res, validateAuthToken);
       return;
     }
 
@@ -256,6 +158,141 @@ export function createHttpHandler(
       });
     });
   };
+}
+
+const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB per file
+const MAX_UPLOAD_FILES = 20;              // per request
+
+interface UploadedFile {
+  name: string;
+  path: string;          // ~-relative, pasted into the terminal
+  absolutePath: string;
+  size: number;
+}
+
+/**
+ * Stream a multipart upload to ~/shared/persalink-uploads using busboy.
+ * Handles multiple files per request, enforces a per-file size cap by
+ * streaming (never buffering whole files in memory), and returns the saved
+ * paths in upload order. Replaces the old hand-rolled boundary parser.
+ */
+function handleUpload(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  validateAuthToken?: (token: string) => boolean,
+): void {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || !validateAuthToken?.(token)) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Authentication required' }));
+    return;
+  }
+
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('multipart/form-data')) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Expected multipart/form-data' }));
+    return;
+  }
+
+  const uploadDir = path.join(os.homedir(), 'shared', 'persalink-uploads');
+  try {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Could not create upload directory' }));
+    return;
+  }
+
+  let bb: ReturnType<typeof Busboy>;
+  try {
+    bb = Busboy({
+      headers: req.headers,
+      limits: { fileSize: MAX_UPLOAD_SIZE, files: MAX_UPLOAD_FILES },
+    });
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Malformed multipart request' }));
+    return;
+  }
+
+  const pending: Promise<UploadedFile | null>[] = [];
+  // Per-request counter so files arriving in the same millisecond don't collide.
+  let seq = 0;
+  let tooLarge = false;
+  let responded = false;
+
+  const fail = (status: number, error: string) => {
+    if (responded) return;
+    responded = true;
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error }));
+    req.unpipe(bb);
+    req.resume(); // drain the rest so the socket isn't left hanging
+  };
+
+  bb.on('file', (_field, stream, info) => {
+    const filename = info.filename;
+    // A form field with no filename (or busboy's files-limit reached) — skip it.
+    if (!filename) { stream.resume(); return; }
+
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const ext = path.extname(safeName);
+    const base = path.basename(safeName, ext) || 'file';
+    const finalName = `${base}_${Date.now()}_${seq++}${ext}`;
+    const filePath = path.join(uploadDir, finalName);
+
+    let truncated = false;
+    let size = 0;
+    stream.on('data', (d: Buffer) => { size += d.length; });
+    stream.on('limit', () => { truncated = true; tooLarge = true; });
+
+    const writeStream = fs.createWriteStream(filePath);
+    pending.push(new Promise<UploadedFile | null>((resolve) => {
+      const cleanupAndFail = () => { fs.unlink(filePath, () => {}); resolve(null); };
+      writeStream.on('error', cleanupAndFail);
+      stream.on('error', cleanupAndFail);
+      writeStream.on('close', () => {
+        // Over-limit file is partial garbage — discard it rather than hand back
+        // a truncated path the user would unknowingly use.
+        if (truncated) { cleanupAndFail(); return; }
+        resolve({
+          name: finalName,
+          path: filePath.replace(os.homedir(), '~'),
+          absolutePath: filePath,
+          size,
+        });
+      });
+    }));
+
+    stream.pipe(writeStream);
+  });
+
+  bb.on('error', () => fail(400, 'Upload parse error'));
+
+  bb.on('close', async () => {
+    const files = (await Promise.all(pending)).filter((f): f is UploadedFile => f !== null);
+    if (responded) return;
+
+    if (files.length === 0) {
+      res.writeHead(tooLarge ? 413 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: tooLarge ? 'File too large (max 50MB per file)' : 'No file found in upload' }));
+      return;
+    }
+
+    responded = true;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      paths: files.map((f) => f.path),
+      files,
+      // Back-compat: single-file callers can still read `.path`.
+      path: files[0].path,
+      partial: tooLarge, // true if some file(s) were dropped for exceeding the cap
+    }));
+  });
+
+  req.pipe(bb);
 }
 
 function serveFile(

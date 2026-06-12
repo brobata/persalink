@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useAppStore } from '../stores/appStore';
 import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
+import { uploadFiles } from '../lib/upload';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // Soft-keyboard helper: keys absent from mobile keyboards but essential
@@ -300,34 +301,18 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const sessionIdRef = useRef<string | null>(null);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const hostOnly = serverUrl.trim().replace(/^(wss?|https?):\/\//i, '');
-      const scheme = window.location.protocol === 'https:' ? 'https://' : 'http://';
-      const url = `${scheme}${hostOnly}`;
-
-      const res = await fetch(`${url}/api/upload`, {
-        method: 'POST',
-        headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {},
-        body: formData,
-      });
-
-      if (!res.ok) throw new Error('Upload failed');
-
-      const result = await res.json();
-      // Paste the file path into the terminal
-      sendInput(result.path);
-    } catch (err) {
-      console.error('[PersaLink] Upload failed:', err);
+      const paths = await uploadFiles(files, { serverUrl, authToken });
+      // Paste all uploaded paths space-separated, with a trailing space so the
+      // user can keep typing (e.g. a command in front of the file list).
+      if (paths.length > 0) sendInput(paths.join(' ') + ' ');
     } finally {
       setUploading(false);
-      // Reset input so same file can be re-selected
+      // Reset input so the same file(s) can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -866,6 +851,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept="image/*,video/*,.pdf,.txt,.log,.json,.csv,.zip,.tar,.gz"
           onChange={handleFileUpload}
           className="hidden"
