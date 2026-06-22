@@ -220,18 +220,30 @@ export class WSClient {
           this.forceReconnect();
           return;
         }
-        // Socket claims OPEN — prove it. Ping, then if no inbound (pong /
-        // sessions.list) lands within ~3s, treat it as a zombie and reconnect.
+        // Socket claims OPEN — but mobile readyState lies (see above). The
+        // server broadcasts sessions.list every ~4s, so a genuinely-live
+        // foregrounded socket has had inbound traffic very recently. If it's
+        // been silent past the liveness timeout, it's a zombie from being
+        // backgrounded — reconnect NOW instead of paying a ping round-trip
+        // plus a multi-second grace wait (the "stuck on Connecting…" stall
+        // after the phone was asleep).
+        if (Date.now() - this.lastInboundAt > this.LIVENESS_TIMEOUT_MS) {
+          this.forceReconnect();
+          return;
+        }
+        // Recently active but ambiguous (e.g. a quick tab switch). Prove the
+        // socket with a ping; if no inbound (pong / sessions.list) lands
+        // within a short grace, treat it as a zombie and reconnect.
         this.send({ type: 'ping' });
         setTimeout(() => {
           if (
             document.visibilityState === 'visible' &&
             !this.intentionalClose &&
-            Date.now() - this.lastInboundAt > 3000
+            Date.now() - this.lastInboundAt > 1500
           ) {
             this.forceReconnect();
           }
-        }, 3000);
+        }, 1500);
       };
       document.addEventListener('visibilitychange', this.visibilityHandler);
     }
