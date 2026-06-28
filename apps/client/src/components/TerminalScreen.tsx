@@ -300,6 +300,28 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const pendingOutputRef = useRef<Array<{ data: string; sessionId: string }>>([]);
   const sessionIdRef = useRef<string | null>(null);
 
+  // Wheel-down events to drive an alt-screen app (Claude Code, vim, less) back
+  // to its live bottom. These apps own their scrollback via mouse mode, so the
+  // pane is NOT in tmux copy-mode and exitScroll is a no-op — the only way back
+  // to the bottom is to feed the app wheel-down. A generous burst clamps
+  // harmlessly at the bottom regardless of how far up the user scrolled.
+  const SNAP_WHEEL_BURST = 250;
+
+  // "Jump to live" / return-to-bottom. Routes by buffer mode:
+  //   alternate (Claude/vim/less) → wheel-down burst to the inner app.
+  //   normal shell buffer        → cancel tmux copy-mode + scroll xterm down.
+  const jumpToLive = useCallback(() => {
+    const term = terminalRef.current;
+    if (term && term.buffer.active.type === 'alternate') {
+      sendInput('\x1b[<65;1;1M'.repeat(SNAP_WHEEL_BURST));
+    } else {
+      exitScroll();
+      term?.scrollToBottom();
+    }
+    setScrolledUp(false);
+    term?.focus();
+  }, [sendInput, exitScroll]);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -720,6 +742,49 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     container.addEventListener('touchend', onTouchEnd, { passive: true });
     container.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
+    // Desktop scroll-up detection. When an alt-screen app owns the mouse
+    // (Claude Code, vim, less), xterm forwards the wheel straight to the app
+    // and never fires its own scroll events — so the touch-path `scrolledUp`
+    // flag never trips and the "Jump to live" button never appears on desktop.
+    // Observe wheel direction passively (xterm still forwards the event) so the
+    // button surfaces here too. Cleared when the user types (onData) or jumps.
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0 && term.buffer.active.type === 'alternate') {
+        setScrolledUp(true);
+      }
+    };
+    container.addEventListener('wheel', onWheel, { passive: true });
+
+    // One-time select hint. With Claude holding the mouse, a plain drag goes to
+    // Claude instead of selecting text. The first time the user tries to
+    // drag-select in an alt-screen mouse app, point them at the two ways that
+    // still work: Shift+drag, or the "select" icon (native copy modal).
+    let selectHintShown = (() => {
+      try { return localStorage.getItem('persalink-select-hint-seen') === 'true'; }
+      catch { return false; }
+    })();
+    let dragCandidate = false;
+    const onMouseDownHint = (e: MouseEvent) => {
+      dragCandidate = !e.shiftKey && term.buffer.active.type === 'alternate';
+    };
+    const onMouseMoveHint = () => {
+      if (!dragCandidate || selectHintShown) return;
+      dragCandidate = false;
+      selectHintShown = true;
+      try { localStorage.setItem('persalink-select-hint-seen', 'true'); } catch { /* private mode */ }
+      try {
+        useAppStore.getState().pushNotification(
+          'info',
+          'Claude is using the mouse here — Shift+drag to select text, or tap the select icon to copy output.',
+          'selecthint',
+        );
+      } catch { /* store unavailable */ }
+    };
+    const onMouseUpHint = () => { dragCandidate = false; };
+    container.addEventListener('mousedown', onMouseDownHint);
+    container.addEventListener('mousemove', onMouseMoveHint);
+    container.addEventListener('mouseup', onMouseUpHint);
+
     // Handle resize — debounced, and only refit if the grid size actually changes.
     // xterm snaps to whole character cells, so a 1-2px jitter (e.g. tab bar
     // overflow recalculating) would drop a row then re-add it, causing flicker.
@@ -772,6 +837,10 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
       container.removeEventListener('touchcancel', onTouchEnd);
+      container.removeEventListener('wheel', onWheel);
+      container.removeEventListener('mousedown', onMouseDownHint);
+      container.removeEventListener('mousemove', onMouseMoveHint);
+      container.removeEventListener('mouseup', onMouseUpHint);
       container.removeEventListener('paste', onPaste as EventListener);
       document.removeEventListener('mouseup', onSelectionEnd);
       document.removeEventListener('touchend', onSelectionEnd);
@@ -918,10 +987,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             onPointerDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
-              exitScroll();
-              terminalRef.current?.scrollToBottom();
-              setScrolledUp(false);
-              terminalRef.current?.focus();
+              jumpToLive();
             }}
             className="absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3.5 h-9 rounded-full bg-zinc-700/95 text-zinc-100 text-xs font-medium shadow-lg active:bg-zinc-600"
             style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
