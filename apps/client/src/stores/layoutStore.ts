@@ -27,6 +27,13 @@ interface LayoutState {
   setFocusedPane: (id: string) => void;
   assignSession: (paneId: string, sessionId: string) => void;
   clearPane: (paneId: string) => void;
+  /** Vacate every pane currently holding this session (e.g. after a kill). */
+  clearSession: (sessionId: string) => void;
+  /** Drop any pane assignment whose session is no longer live. Called whenever
+   *  a fresh sessions list arrives so killed / externally-gone sessions don't
+   *  linger in a pane (or get silently re-attached to a name-reused successor
+   *  after a reopen). */
+  reconcile: (liveSessionIds: string[]) => void;
   /** Put a newly created session into the focused pane (or first empty). */
   autoAssign: (sessionId: string) => void;
   /** Mark a pane to receive the next newly-created session. */
@@ -81,6 +88,21 @@ export const useLayoutStore = create<LayoutState>()(
       clearPane: (paneId) => set((state) => ({
         panes: state.panes.map(p => (p.id === paneId ? { ...p, sessionId: null } : p)),
       })),
+
+      clearSession: (sessionId) => set((state) => {
+        if (!state.panes.some(p => p.sessionId === sessionId)) return state;
+        return {
+          panes: state.panes.map(p => (p.sessionId === sessionId ? { ...p, sessionId: null } : p)),
+        };
+      }),
+
+      reconcile: (liveSessionIds) => set((state) => {
+        const live = new Set(liveSessionIds);
+        if (state.panes.every(p => !p.sessionId || live.has(p.sessionId))) return state;
+        return {
+          panes: state.panes.map(p => (p.sessionId && !live.has(p.sessionId) ? { ...p, sessionId: null } : p)),
+        };
+      }),
 
       autoAssign: (sessionId) => set((state) => {
         const focused = state.panes.find(p => p.id === state.focusedPaneId);

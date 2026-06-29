@@ -241,6 +241,10 @@ export function TerminalPane({
             if (msg.sessionId === sessionIdRef.current) {
               setAttachedSession(null);
               setWindows([]);
+              // Clear the dead session's last frame immediately. The pane slot
+              // is reconciled to null on the next sessions.list, but resetting
+              // here avoids showing a stale screen in the gap.
+              termRef.current?.reset();
             }
             break;
           case 'session.detached':

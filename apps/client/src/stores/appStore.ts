@@ -16,6 +16,7 @@ import {
   getCredentials, clearCredentials,
 } from '../lib/biometric';
 import { getInitialDims } from '../lib/terminalDims';
+import { useLayoutStore } from './layoutStore';
 
 // ============================================================================
 // Types
@@ -293,6 +294,16 @@ export const useAppStore = create<AppState>()(
 
       killSession: (sessionId) => {
         wsClient?.send({ type: 'session.kill', sessionId });
+        // Optimistically vacate the session locally so it never lingers on
+        // screen. The server's session.detached can be dropped (e.g. gated by
+        // an in-flight switch), and the desktop pane assignment is persisted —
+        // both leave the killed session visible without this. The authoritative
+        // sessions.list broadcast follows and reconciles anything else.
+        useLayoutStore.getState().clearSession(sessionId);
+        if (get().attachedSession?.id === sessionId) {
+          set({ attachedSession: null, view: 'home', windows: [], activeTabId: null, switchingToId: null });
+        }
+        set(s => ({ sessions: s.sessions.filter(x => x.id !== sessionId) }));
       },
 
       renameSession: (sessionId, name) => {
@@ -424,6 +435,8 @@ export const useAppStore = create<AppState>()(
       closeTab: (sessionId) => {
         const { sessions, activeTabId } = get();
         wsClient?.send({ type: 'session.kill', sessionId });
+        useLayoutStore.getState().clearSession(sessionId);
+        set({ sessions: sessions.filter(x => x.id !== sessionId) });
         if (activeTabId === sessionId) {
           const remaining = sessions.filter(s => s.id !== sessionId);
           if (remaining.length > 0) {
@@ -575,6 +588,10 @@ function handleServerMessage(
 
     case 'sessions.list': {
       set({ sessions: msg.sessions });
+      // Authoritative reconcile: drop any persisted desktop pane assignment
+      // whose session is no longer live. Without this, killed sessions (or a
+      // name-reused successor after reopen) keep showing in a pane.
+      useLayoutStore.getState().reconcile(msg.sessions.map((s) => s.id));
       // Consume the auto-reattach handshake if it's armed and the target
       // session is still alive. One-shot: clear pendingAutoAttach so we
       // never re-attach on subsequent broadcasts.
