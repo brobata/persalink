@@ -777,6 +777,18 @@ async function attachToSession(
     client.bridge = bridge;
     client.attachedSession = sessionName;
 
+    // Reopening the app should land at the live bottom, not wherever the
+    // pane's program was last scrolled (Claude Code keeps its internal scroll
+    // position across detach/reattach). After the attach redraw + resize
+    // reflow settle, if the pane still shows Claude's scrolled-up indicator,
+    // nudge it with its own jump-to-latest key. Best-effort; skipped when the
+    // client has already moved on (detach/switch).
+    const snapBridge = bridge;
+    setTimeout(() => {
+      if (client.bridge !== snapBridge || snapBridge.intentionalDetach) return;
+      void tmuxManager.snapToLatestIfScrolled(sessionName);
+    }, 600);
+
     audit('tmux_session_attached', { ip: client.ip, sessionId: sessionName });
   } catch (err) {
     // Bridge spawned but a downstream step (listSessions, etc.) failed.

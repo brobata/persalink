@@ -345,6 +345,24 @@ export class TmuxManager {
     }
   }
 
+  /** If the pane's program is showing Claude Code's scrolled-up indicator
+   *  ("Jump to bottom (ctrl+End) ↓" / "N new messages (ctrl+End) ↓"), send
+   *  Ctrl+End to snap its viewport to the live bottom. Claude Code keeps its
+   *  internal scroll position across detach/reattach, so without this a phone
+   *  reopening the app lands mid-conversation with no fast way down (its 2.x
+   *  input loop drops large wheel bursts). Only fires when the app itself
+   *  advertises the key on screen, so other TUIs are never poked. */
+  async snapToLatestIfScrolled(sessionName: string): Promise<boolean> {
+    const visible = await this.captureVisible(sessionName);
+    if (!/\(ctrl\+End\)/i.test(visible)) return false;
+    try {
+      await tmux('send-keys', '-t', sessionName, 'C-End');
+      return true;
+    } catch {
+      return false; // session gone — nothing to snap
+    }
+  }
+
   /** Cancel tmux copy-mode (scrollback) on a session, returning the pane to the
    *  live prompt. A no-op if the pane isn't in copy-mode, so it's always safe to
    *  call — used to rescue a user who scrolled up and then started typing. */
