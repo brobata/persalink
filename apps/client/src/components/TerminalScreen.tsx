@@ -300,22 +300,29 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const pendingOutputRef = useRef<Array<{ data: string; sessionId: string }>>([]);
   const sessionIdRef = useRef<string | null>(null);
 
-  // Wheel-down events to drive an alt-screen app (Claude Code, vim, less) back
-  // to its live bottom. These apps own their scrollback via mouse mode, so the
-  // pane is NOT in tmux copy-mode and exitScroll is a no-op — the only way back
-  // to the bottom is to feed the app wheel-down. A generous burst clamps
-  // harmlessly at the bottom regardless of how far up the user scrolled.
+  // Wheel-down burst for alt-screen apps that own their scrollback via mouse
+  // mode (vim, less). Claude Code 2.x can NOT be driven this way anymore — its
+  // redesigned input loop coalesces/drops large wheel bursts, so even
+  // thousands of wheel-down events fail to reach the bottom of a long
+  // conversation (measured: 13×250 events still short). It advertises
+  // Ctrl+End as its jump-to-latest key instead; we send both.
   const SNAP_WHEEL_BURST = 250;
+  const CLAUDE_JUMP_TO_LATEST = '\x1b[1;5F'; // Ctrl+End
 
   // "Jump to live" / return-to-bottom. Routes by buffer mode:
-  //   alternate (Claude/vim/less) → wheel-down burst to the inner app.
-  //   normal shell buffer        → cancel tmux copy-mode + scroll xterm down.
+  //   alternate (Claude/vim/less) → Ctrl+End (Claude's own jump-to-latest
+  //     key, instant on any conversation length) followed by a wheel-down
+  //     burst for apps that don't bind Ctrl+End but do track the mouse.
+  //   normal shell buffer → scroll xterm's own viewport down.
+  // Both paths also cancel tmux copy-mode (a safe no-op otherwise) — an
+  // alt-screen app WITHOUT mouse tracking leaves wheel-up scrolling tmux
+  // itself, and only the cancel brings that back to live.
   const jumpToLive = useCallback(() => {
     const term = terminalRef.current;
+    exitScroll();
     if (term && term.buffer.active.type === 'alternate') {
-      sendInput('\x1b[<65;1;1M'.repeat(SNAP_WHEEL_BURST));
+      sendInput(CLAUDE_JUMP_TO_LATEST + '\x1b[<65;1;1M'.repeat(SNAP_WHEEL_BURST));
     } else {
-      exitScroll();
       term?.scrollToBottom();
     }
     setScrolledUp(false);
@@ -409,10 +416,35 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     term.open(termRef.current);
 
-    // Try WebGL, fall back gracefully
-    try {
-      term.loadAddon(new WebglAddon());
-    } catch { /* canvas fallback */ }
+    // Try WebGL, fall back gracefully. Mobile browsers (Android especially)
+    // evict GPU contexts from backgrounded tabs/PWAs; without a context-loss
+    // handler the canvas stays permanently blank after reopening the app —
+    // output keeps arriving but is drawn into a dead context. On loss we
+    // dispose the addon (xterm swaps back to the DOM renderer and repaints),
+    // and try to re-acquire WebGL next time the tab becomes visible.
+    let webgl: WebglAddon | null = null;
+    const loadWebgl = () => {
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => {
+          addon.dispose();
+          webgl = null;
+        });
+        term.loadAddon(addon);
+        webgl = addon;
+      } catch {
+        webgl = null; /* DOM renderer fallback */
+      }
+    };
+    loadWebgl();
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!webgl) loadWebgl();
+      // Repaint unconditionally — a context lost while backgrounded can leave
+      // stale or blank pixels even after the renderer swap.
+      term.refresh(0, term.rows - 1);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     fitAddon.fit();
 
@@ -844,6 +876,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       container.removeEventListener('paste', onPaste as EventListener);
       document.removeEventListener('mouseup', onSelectionEnd);
       document.removeEventListener('touchend', onSelectionEnd);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       selectionChangeDisposable.dispose();
       resizeObserver.disconnect();
       window.visualViewport?.removeEventListener('resize', onViewportResize);

@@ -155,9 +155,25 @@ async function sendSessionsList(client: ConnectedClient): Promise<void> {
   send(client, { type: 'sessions.list', sessions: enrichSessions(sessions) });
 }
 
-async function broadcastSessionsList(): Promise<void> {
-  const sessions = await tmuxManager.listSessions(profileManager.getMap());
-  broadcastToAuthenticated({ type: 'sessions.list', sessions: enrichSessions(sessions) });
+// Serialized broadcast chain. `ws.on('message')` runs handlers concurrently
+// (it's async and not awaited between messages), so two handlers can each call
+// broadcastSessionsList and run `listSessions()` at the same time. Those async
+// snapshots can resolve OUT OF ORDER — an older one (taken before a kill
+// completed) landing last would leave every client stuck showing a session that
+// no longer exists. Chaining each broadcast behind the previous one guarantees
+// snapshots are taken and delivered in submission order, so the final broadcast
+// always reflects the latest tmux state.
+let broadcastChain: Promise<void> = Promise.resolve();
+
+function broadcastSessionsList(): Promise<void> {
+  broadcastChain = broadcastChain.then(async () => {
+    const sessions = await tmuxManager.listSessions(profileManager.getMap());
+    broadcastToAuthenticated({ type: 'sessions.list', sessions: enrichSessions(sessions) });
+  }).catch((err) => {
+    // Keep the chain alive: a rejected link would wedge every later broadcast.
+    console.error('[broadcastSessionsList] failed:', err);
+  });
+  return broadcastChain;
 }
 
 function detachClient(client: ConnectedClient): void {
@@ -760,6 +776,18 @@ async function attachToSession(
 
     client.bridge = bridge;
     client.attachedSession = sessionName;
+
+    // Reopening the app should land at the live bottom, not wherever the
+    // pane's program was last scrolled (Claude Code keeps its internal scroll
+    // position across detach/reattach). After the attach redraw + resize
+    // reflow settle, if the pane still shows Claude's scrolled-up indicator,
+    // nudge it with its own jump-to-latest key. Best-effort; skipped when the
+    // client has already moved on (detach/switch).
+    const snapBridge = bridge;
+    setTimeout(() => {
+      if (client.bridge !== snapBridge || snapBridge.intentionalDetach) return;
+      void tmuxManager.snapToLatestIfScrolled(sessionName);
+    }, 600);
 
     audit('tmux_session_attached', { ip: client.ip, sessionId: sessionName });
   } catch (err) {
