@@ -357,12 +357,20 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   };
 
   // Handle output events — only write if sessionId matches, otherwise buffer
+  // until the matching terminal mounts (covers the attach handshake window).
   const handleOutput = useCallback((e: Event) => {
     const { data, sessionId } = (e as CustomEvent).detail;
     if (terminalRef.current && sessionId === sessionIdRef.current) {
       terminalRef.current.write(data);
     } else {
-      pendingOutputRef.current.push({ data, sessionId });
+      const buf = pendingOutputRef.current;
+      buf.push({ data, sessionId });
+      // Cap the buffer. In steady state the server streams only the attached
+      // session, so this only fills during a brief switch race and drains on
+      // remount — but a stray broadcast of a non-attached session while the
+      // user sits on one session for hours would otherwise grow it without
+      // bound (raw terminal bytes). Keep only the most recent entries.
+      if (buf.length > 500) buf.splice(0, buf.length - 500);
     }
   }, []);
 

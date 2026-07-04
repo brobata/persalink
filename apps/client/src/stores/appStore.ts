@@ -638,6 +638,23 @@ function handleServerMessage(
         set({ pendingAutoAttach: null });
         if (stillAlive) get().attachSession(pendingAutoAttach);
       }
+      // Dead-session reconciliation (mobile has no pane-reconcile to lean on
+      // like desktop does). If we're still showing a session that has vanished
+      // from the live list — it exited or was killed elsewhere during an
+      // outage, or a session.ended got dropped — transition out instead of
+      // wedging on the dead session's last frame with keystrokes going nowhere.
+      // Skip while a switch is in flight (switchingToId): the target may not be
+      // in this snapshot yet, and session.attached will resolve it.
+      const { attachedSession: att, switchingToId } = get();
+      if (att && !switchingToId && !live.some((s) => s.id === att.id)) {
+        if (live.length > 0) {
+          const switchTo = live[live.length - 1];
+          get().attachSession(switchTo.id);
+          set({ activeTabId: switchTo.id });
+        } else {
+          set({ attachedSession: null, view: 'home', windows: [], activeTabId: null });
+        }
+      }
       break;
     }
 
