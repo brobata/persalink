@@ -1011,8 +1011,17 @@ function onAttentionTransition(session: SessionInfo, prev: Attention, next: Atte
 // Fast monitor loop — drives live unseen badges + attention detection (and the
 // notifications built on top). Runs only while clients are connected.
 function startSessionMonitor(): void {
+  // Reentrancy guard: this tick does a tmux fan-out (list + per-session
+  // capture) that normally finishes in well under 4s, but if the tmux server
+  // gets slow (heavy box, many sessions, a wedged pane hitting the 10s command
+  // timeout) a tick can outlast the interval. setInterval doesn't wait, so
+  // without this guard ticks stack — each new one piling more concurrent tmux
+  // calls onto an already-struggling server, a feedback loop that only gets
+  // worse. Skip a tick whenever the previous one is still in flight.
+  let running = false;
   setInterval(async () => {
-    if (clients.size === 0) return;
+    if (clients.size === 0 || running) return;
+    running = true;
     try {
       const sessions = await tmuxManager.listSessions(profileManager.getMap());
       // Reclassify only sessions whose tmux activity changed since last tick —
@@ -1037,9 +1046,16 @@ function startSessionMonitor(): void {
           lastSeen.delete(id);
         }
       }
+      // Also prune custom display names for sessions killed outside PersaLink
+      // (killSession cleans its own, but a `tmux kill-session` from another
+      // client, or a crashed pane, would otherwise leak a customNames entry
+      // forever). This sweep is the single place that sees the full live set.
+      tmuxManager.pruneNames(live);
       broadcastToAuthenticated({ type: 'sessions.list', sessions: enrichSessions(sessions) });
     } catch (err) {
       console.error('[monitor] tick failed:', err);
+    } finally {
+      running = false;
     }
   }, 4_000).unref();
 }
