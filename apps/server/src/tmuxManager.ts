@@ -223,6 +223,16 @@ export class TmuxManager {
 
     await tmux(...args);
 
+    // Keep the tmux server alive when its last session is killed. If the
+    // server exits (default exit-empty on), the next createSession boots a
+    // fresh server — and on hosts running tmux-continuum with auto-restore,
+    // that boot resurrects the session the user just deliberately killed and
+    // switches attached clients to it (killed session reappears, new tab
+    // shows the wrong session's content). Server-scoped and idempotent.
+    try {
+      await tmux('set-option', '-s', 'exit-empty', 'off');
+    } catch { /* ignore — tmux < 2.7 lacks exit-empty */ }
+
     // Increase per-session scrollback buffer. tmux defaults to 2000 lines
     // which makes long Claude/build outputs unreadable after a refresh or
     // reattach. 50k gives plenty of headroom (~20MB per session worst case).
@@ -297,6 +307,11 @@ export class TmuxManager {
     if (!sessionName.startsWith(SESSION_PREFIX)) {
       throw new Error('Cannot kill non-PersaLink sessions');
     }
+    // Ensure the server outlives its last session (see createSession) even if
+    // this session was created by an older build or outside PersaLink.
+    try {
+      await tmux('set-option', '-s', 'exit-empty', 'off');
+    } catch { /* ignore — tmux < 2.7 lacks exit-empty */ }
     await tmux('kill-session', '-t', sessionName);
     this.customNames.delete(sessionName);
   }
