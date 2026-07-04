@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useAppStore } from '../stores/appStore';
 import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
+import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
@@ -564,6 +565,10 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // so repeated identical keystrokes ("h","h") aren't dropped.
     let composing = false;
     let sentSoFar = '';
+    // Swipe-typing auto-space: re-adds the between-word space that glide
+    // keyboards omit because the cleared helper textarea gives them no
+    // before-cursor context. See lib/swipeAutoSpace.ts.
+    const autoSpacer = createSwipeAutoSpacer();
     // Composition wedge guard. Android IMEs (GBoard/SwiftKey), the voice path,
     // and app-backgrounding mid-word can DROP the compositionend event. With
     // `if (composing) return` in onData below, a stuck `composing=true` then
@@ -587,11 +592,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     if (textarea) {
       textarea.addEventListener('compositionstart', () => { composing = true; kickWatchdog(); });
       textarea.addEventListener('compositionupdate', kickWatchdog);
-      textarea.addEventListener('compositionend', clearComposing);
+      textarea.addEventListener('compositionend', () => { autoSpacer.noteCompositionEnd(); clearComposing(); });
       // A (re)focus must always yield a typable terminal — clear any stuck
       // composition and reset the delta tracker so a wedged session recovers.
-      textarea.addEventListener('focus', () => { clearComposing(); sentSoFar = ''; });
-      textarea.addEventListener('blur', () => { clearComposing(); sentSoFar = ''; });
+      textarea.addEventListener('focus', () => { clearComposing(); sentSoFar = ''; autoSpacer.reset(); });
+      textarea.addEventListener('blur', () => { clearComposing(); sentSoFar = ''; autoSpacer.reset(); });
       // Suppress mobile keyboard suggestions / browser autocomplete on the
       // hidden input — reduces trigger frequency for the bug above.
       textarea.setAttribute('autocomplete', 'off');
@@ -619,14 +624,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         }
       }
 
+      const forward = (chunk: string) => sendInput(autoSpacer.process(chunk));
       if (data.length > sentSoFar.length && sentSoFar && data.startsWith(sentSoFar)) {
         const delta = data.slice(sentSoFar.length);
-        if (delta) sendInput(delta);
+        if (delta) forward(delta);
       } else if (data.length < sentSoFar.length && sentSoFar.startsWith(data)) {
         const removed = sentSoFar.length - data.length;
-        for (let i = 0; i < removed; i++) sendInput('\x7f');
+        for (let i = 0; i < removed; i++) forward('\x7f');
       } else {
-        sendInput(data);
+        forward(data);
       }
       sentSoFar = data;
 
