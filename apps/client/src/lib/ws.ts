@@ -141,10 +141,17 @@ export class WSClient {
 
   private scheduleReconnect(): void {
     if (this.intentionalClose) return;
+    // Jitter the wait so multiple sockets don't retry in lockstep. A desktop
+    // grid runs one WSClient per pane (up to ~5) plus the store's; without
+    // jitter, on a server restart they all start from the same base delay and
+    // multiply by the same 1.5 in unison, hammering the server in synchronized
+    // bursts. Randomize the actual sleep 0.5×–1.5× while advancing backoff from
+    // the (un-jittered) base so the ceiling still holds.
+    const jitter = 0.5 + Math.random();
     this.reconnectTimer = setTimeout(() => {
-      this.reconnectDelay = Math.min(this.reconnectDelay * 1.5, this.maxReconnectDelay);
       this.connect();
-    }, this.reconnectDelay);
+    }, this.reconnectDelay * jitter);
+    this.reconnectDelay = Math.min(this.reconnectDelay * 1.5, this.maxReconnectDelay);
   }
 
   /**

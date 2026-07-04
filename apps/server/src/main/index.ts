@@ -14,7 +14,7 @@ import { TmuxManager, type TmuxSessionBridge } from '../tmuxManager';
 import { ProfileManager } from '../profileManager';
 import { HealthChecker } from '../healthChecker';
 import { createHttpHandler, type ServerInfo } from '../httpServer';
-import { TokenStore, hashPassword, verifyPassword, validatePassword } from '../auth';
+import { TokenStore, hashPassword, verifyPassword, validatePassword, needsRehash } from '../auth';
 import { RateLimiter } from '../rateLimiter';
 import { audit } from '../auditLog';
 import type { ClientMessage, ServerMessage, SessionInfo } from '@persalink/shared/protocol';
@@ -209,7 +209,13 @@ function handleFailedAuth(client: ConnectedClient, method: 'password' | 'token',
   const rate = rateLimiter.recordFailure(client.ip);
   audit('auth_failed', { ip: client.ip, method, failures: rate.failures, permanentLock: rate.permanentLock });
   if (rate.permanentLock) {
-    tokenStore.revokeAll();
+    // The per-IP permanent lock IS the defense — this IP can never auth again
+    // without clearing rate-limits.json. Do NOT revokeAll() here: that let any
+    // single unauthenticated IP (LAN/tailnet) force-log-out every paired device
+    // globally just by failing the password 10 times — a griefing DoS that
+    // punished the legitimate owner, not the attacker (whose IP is already
+    // dead). Real credential compromise is handled by password.change, which
+    // still rotates all tokens deliberately.
     audit('permanent_lock', { ip: client.ip, failures: rate.failures });
     sendRateLimited(client, rate);
     return;
@@ -265,6 +271,18 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       if (!valid) {
         handleFailedAuth(client, 'password', 'Incorrect password');
         return;
+      }
+      // Transparent strength upgrade: if this hash predates a params bump,
+      // re-derive at the current cost now that we hold the plaintext. Best
+      // effort — a failure here must not block a valid login.
+      if (needsRehash(config.passwordHash)) {
+        try {
+          config.passwordHash = await hashPassword(message.password);
+          saveConfig(config);
+          audit('password_set', { ip: client.ip });
+        } catch (err) {
+          console.error('[auth] password rehash failed:', err);
+        }
       }
     }
 
@@ -521,9 +539,12 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
           await tmuxManager.killWindow(client.attachedSession, message.windowIndex);
           const windows = await tmuxManager.listWindows(client.attachedSession);
           if (windows.length === 0) {
-            // Last window killed — session is gone
+            // Last window killed — session is gone. Capture the id BEFORE
+            // detachClient nulls attachedSession, otherwise session.ended ships
+            // sessionId: null and the client can't reconcile which pane closed.
+            const endedSession = client.attachedSession;
             detachClient(client);
-            send(client, { type: 'session.ended', sessionId: client.attachedSession });
+            send(client, { type: 'session.ended', sessionId: endedSession });
             await broadcastSessionsList();
           } else {
             send(client, { type: 'windows.list', windows });
@@ -990,8 +1011,17 @@ function onAttentionTransition(session: SessionInfo, prev: Attention, next: Atte
 // Fast monitor loop — drives live unseen badges + attention detection (and the
 // notifications built on top). Runs only while clients are connected.
 function startSessionMonitor(): void {
+  // Reentrancy guard: this tick does a tmux fan-out (list + per-session
+  // capture) that normally finishes in well under 4s, but if the tmux server
+  // gets slow (heavy box, many sessions, a wedged pane hitting the 10s command
+  // timeout) a tick can outlast the interval. setInterval doesn't wait, so
+  // without this guard ticks stack — each new one piling more concurrent tmux
+  // calls onto an already-struggling server, a feedback loop that only gets
+  // worse. Skip a tick whenever the previous one is still in flight.
+  let running = false;
   setInterval(async () => {
-    if (clients.size === 0) return;
+    if (clients.size === 0 || running) return;
+    running = true;
     try {
       const sessions = await tmuxManager.listSessions(profileManager.getMap());
       // Reclassify only sessions whose tmux activity changed since last tick —
@@ -1016,9 +1046,16 @@ function startSessionMonitor(): void {
           lastSeen.delete(id);
         }
       }
+      // Also prune custom display names for sessions killed outside PersaLink
+      // (killSession cleans its own, but a `tmux kill-session` from another
+      // client, or a crashed pane, would otherwise leak a customNames entry
+      // forever). This sweep is the single place that sees the full live set.
+      tmuxManager.pruneNames(live);
       broadcastToAuthenticated({ type: 'sessions.list', sessions: enrichSessions(sessions) });
     } catch (err) {
       console.error('[monitor] tick failed:', err);
+    } finally {
+      running = false;
     }
   }, 4_000).unref();
 }
@@ -1064,10 +1101,15 @@ async function main(): Promise<void> {
   startWatchdog();
   startSessionMonitor();
 
-  server.listen(config.port, '0.0.0.0', () => {
-    console.log(`[PersaLink] Server running on port ${config.port}`);
+  const bindHost = config.security.bindHost || '0.0.0.0';
+  server.listen(config.port, bindHost, () => {
+    console.log(`[PersaLink] Server running on ${bindHost}:${config.port}`);
     console.log(`[PersaLink] Config dir: ~/.persalink/`);
     console.log(`[PersaLink] ${profileManager.list().length} profiles loaded`);
+    if (bindHost === '0.0.0.0') {
+      console.log('[PersaLink] Bound to all interfaces — reachable over plaintext HTTP on the LAN.');
+      console.log('[PersaLink] For loopback-only (TLS front door proxies from localhost), set security.bindHost="127.0.0.1" in ~/.persalink/config.json.');
+    }
   });
 
   // Graceful shutdown

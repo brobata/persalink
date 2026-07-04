@@ -302,6 +302,15 @@ export class TmuxManager {
     }
   }
 
+  /** Drop custom display names for sessions no longer alive. Called by the
+   *  monitor's dead-session sweep so names set on sessions that vanished
+   *  outside PersaLink (external kill, crashed pane) don't accumulate. */
+  pruneNames(liveSessionIds: Set<string>): void {
+    for (const id of this.customNames.keys()) {
+      if (!liveSessionIds.has(id)) this.customNames.delete(id);
+    }
+  }
+
   /** Kill a tmux session */
   async killSession(sessionName: string): Promise<void> {
     if (!sessionName.startsWith(SESSION_PREFIX)) {

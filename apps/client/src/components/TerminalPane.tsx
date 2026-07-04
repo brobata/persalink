@@ -153,6 +153,13 @@ export function TerminalPane({
       // Paste all uploaded paths space-separated, with a trailing space so the
       // user can keep typing (e.g. a command in front of the file list).
       if (paths.length > 0) sendInput(paths.join(' ') + ' ');
+    } catch (err) {
+      // Surface upload failures instead of leaving an unhandled rejection.
+      useAppStore.getState().pushNotification(
+        'error',
+        `Upload failed: ${err instanceof Error ? err.message : err}`,
+        'upload',
+      );
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -340,7 +347,34 @@ export function TerminalPane({
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
     term.open(containerRef.current);
-    try { term.loadAddon(new WebglAddon()); } catch { /* canvas fallback */ }
+
+    // WebGL with context-loss recovery. Desktop panes stay open for days; the
+    // browser evicts GPU contexts under memory pressure / GPU reset / long
+    // backgrounding, and without a loss handler the pane's canvas stays
+    // permanently blank while output keeps streaming into a dead context. On
+    // loss, dispose the addon (xterm swaps to the DOM renderer and repaints)
+    // and re-acquire WebGL next time the tab is visible. (Ported from
+    // TerminalScreen, which already handled this.)
+    let webgl: WebglAddon | null = null;
+    const loadWebgl = () => {
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => { addon.dispose(); webgl = null; });
+        term.loadAddon(addon);
+        webgl = addon;
+      } catch {
+        webgl = null; /* DOM renderer fallback */
+      }
+    };
+    loadWebgl();
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!webgl) loadWebgl();
+      // Repaint unconditionally — a context lost while backgrounded can leave
+      // stale or blank pixels even after the renderer swap.
+      term.refresh(0, term.rows - 1);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     termRef.current = term;
     fitRef.current = fit;
@@ -619,6 +653,7 @@ export function TerminalPane({
       }
       if (compositionWatchdog) clearTimeout(compositionWatchdog);
       compositionResetRef.current = null;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
