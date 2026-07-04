@@ -17,6 +17,7 @@ import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { useVoiceInput } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
+import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
 
 interface TerminalPaneProps {
@@ -454,12 +455,18 @@ export function TerminalPane({
     // leaving `composing` stuck true — which makes onData swallow every
     // keystroke. Blur already recovers, but a focused pane could otherwise
     // wedge until the user clicks away; this force-clears on a composing stall.
+    // Swipe-typing auto-space: re-adds the between-word space that glide
+    // keyboards omit because the cleared helper textarea gives them no
+    // before-cursor context. See lib/swipeAutoSpace.ts.
+    const autoSpacer = createSwipeAutoSpacer();
+
     let compositionWatchdog: ReturnType<typeof setTimeout> | null = null;
     const resetComposition = () => {
       composing = false;
       sentSoFar = '';
       lastSentData = '';
       lastSentTime = 0;
+      autoSpacer.reset();
       if (compositionWatchdog) { clearTimeout(compositionWatchdog); compositionWatchdog = null; }
       // Drain any stale value sitting in the helper textarea so the next
       // burst starts from a clean slate.
@@ -477,6 +484,7 @@ export function TerminalPane({
     const onCompositionUpdate = () => { kickCompositionWatchdog(); };
     const onCompositionEnd = () => {
       composing = false;
+      autoSpacer.noteCompositionEnd();
       if (compositionWatchdog) { clearTimeout(compositionWatchdog); compositionWatchdog = null; }
     };
     if (textarea) {
@@ -496,7 +504,7 @@ export function TerminalPane({
       if (data === lastSentData && now - lastSentTime < 2) return;
       lastSentData = data;
       lastSentTime = now;
-      sendInput(data);
+      sendInput(autoSpacer.process(data));
     };
 
     term.onData((data) => {
