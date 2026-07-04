@@ -340,6 +340,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       // Paste all uploaded paths space-separated, with a trailing space so the
       // user can keep typing (e.g. a command in front of the file list).
       if (paths.length > 0) sendInput(paths.join(' ') + ' ');
+    } catch (err) {
+      // Without this, a rejected upload (auth failure, size cap, network drop)
+      // was an unhandled rejection: the spinner cleared and the user got no
+      // feedback at all. Surface it.
+      useAppStore.getState().pushNotification(
+        'error',
+        `Upload failed: ${err instanceof Error ? err.message : err}`,
+        'upload',
+      );
     } finally {
       setUploading(false);
       // Reset input so the same file(s) can be re-selected

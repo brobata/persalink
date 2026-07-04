@@ -54,6 +54,22 @@ export async function hashPassword(password: string): Promise<PasswordHash> {
   };
 }
 
+/**
+ * True when a stored hash was derived with weaker params than the current
+ * target (e.g. an old N=2^14 hash on a server now targeting N=2^17). Callers
+ * use this to transparently re-hash the password at login so strength keeps
+ * pace with the code without forcing a password reset.
+ */
+export function needsRehash(stored: PasswordHash): boolean {
+  return (
+    stored.algorithm !== 'scrypt' ||
+    stored.params.N < SCRYPT_PARAMS.N ||
+    stored.params.r < SCRYPT_PARAMS.r ||
+    stored.params.p < SCRYPT_PARAMS.p ||
+    stored.params.keylen < SCRYPT_PARAMS.keylen
+  );
+}
+
 export async function verifyPassword(password: string, stored: PasswordHash): Promise<boolean> {
   // Reject obviously-weak stored params — defense if config.json is ever
   // attacker-influenced and gets downgraded to N=1024.

@@ -84,14 +84,11 @@ export function createHttpHandler(
     const url = req.url || '/';
     const urlPath = url.split('?')[0];
 
-    // CORS for API endpoints — reflect the request origin (same-origin by default)
+    // Same-origin only. The client is served from this same origin, so it never
+    // needs cross-origin CORS. We previously reflected any Origin back as
+    // Access-Control-Allow-Origin (effectively `*`), which bought nothing and
+    // widened the surface. The upload endpoint is token-authenticated regardless.
     if (urlPath.startsWith('/health') || urlPath.startsWith('/api/')) {
-      const origin = req.headers.origin;
-      if (origin) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-        res.setHeader('Vary', 'Origin');
-      }
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();

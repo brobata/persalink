@@ -153,6 +153,13 @@ export function TerminalPane({
       // Paste all uploaded paths space-separated, with a trailing space so the
       // user can keep typing (e.g. a command in front of the file list).
       if (paths.length > 0) sendInput(paths.join(' ') + ' ');
+    } catch (err) {
+      // Surface upload failures instead of leaving an unhandled rejection.
+      useAppStore.getState().pushNotification(
+        'error',
+        `Upload failed: ${err instanceof Error ? err.message : err}`,
+        'upload',
+      );
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

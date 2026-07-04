@@ -20,6 +20,13 @@ export interface SecurityConfig {
   // the password between server start and operator setup. Set true if you
   // need to set the password from the LAN.
   allowRemoteSetup: boolean;
+  // Interface the HTTP/WS server binds to. Default '0.0.0.0' (all interfaces,
+  // reachable from the LAN over plaintext HTTP). Set to '127.0.0.1' to accept
+  // only loopback — recommended when a TLS front door (e.g. `tailscale serve`)
+  // already proxies from localhost, so credentials never cross the LAN in the
+  // clear. Direct http://<lan-ip>:<port> access stops working when set to
+  // loopback; tailnet/HTTPS access is unaffected.
+  bindHost: string;
 }
 
 export interface ServerConfig {
@@ -41,6 +48,7 @@ const DEFAULT_SECURITY: SecurityConfig = {
   trustProxy: false,
   maxTotalSessions: 50,
   allowRemoteSetup: false,
+  bindHost: '0.0.0.0',
 };
 
 const DEFAULT_CONFIG: ServerConfig = {
