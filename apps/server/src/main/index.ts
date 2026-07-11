@@ -41,6 +41,12 @@ interface ConnectedClient {
    *  until the next real keystroke or explicit exit. Lets session.input cancel
    *  copy-mode so typing lands at the prompt instead of navigating scrollback. */
   scrolledBack: boolean;
+  /** Latest terminal dims this client reported. Message handlers run
+   *  concurrently, so a session.resize can arrive while attachToSession is
+   *  still awaiting setup (bridge === null) — it used to be dropped silently,
+   *  leaving tmux at a stale size until the next viewport change. Stashing it
+   *  lets the attach flow apply the freshest size once the bridge exists. */
+  lastResize: { cols: number; rows: number } | null;
 }
 
 // SGR mouse wheel-up report: ESC [ < 64 ; col ; row M. This is what the client
@@ -443,6 +449,7 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     case 'session.resize': {
       const cols = Math.max(10, Math.min(500, message.cols));
       const rows = Math.max(2, Math.min(200, message.rows));
+      client.lastResize = { cols, rows };
       if (client.bridge) {
         try {
           client.bridge.ptyProcess.resize(cols, rows);
@@ -798,6 +805,16 @@ async function attachToSession(
     client.bridge = bridge;
     client.attachedSession = sessionName;
 
+    // A session.resize that raced this attach (handlers aren't serialized) was
+    // stashed instead of applied — the bridge didn't exist yet. Apply it now so
+    // tmux ends up at the client's real size, not the attach-time estimate.
+    const stashed = client.lastResize;
+    if (stashed && (stashed.cols !== cols || stashed.rows !== rows)) {
+      try {
+        bridge.ptyProcess.resize(stashed.cols, stashed.rows);
+      } catch { /* dead PTY surfaces via onExit */ }
+    }
+
     // Reopening the app should land at the live bottom, not wherever the
     // pane's program was last scrolled (Claude Code keeps its internal scroll
     // position across detach/reattach). After the attach redraw + resize
@@ -876,6 +893,7 @@ function setupWebSocket(server: http.Server): void {
       bridge: null,
       attachedSession: null,
       scrolledBack: false,
+      lastResize: null,
     };
 
     clients.set(clientId, client);

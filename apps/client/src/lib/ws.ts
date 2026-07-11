@@ -21,6 +21,7 @@ export class WSClient {
   private onMessage: MessageHandler;
   private onStateChange: (state: ConnectionState) => void;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectDelay = 1000;
@@ -43,6 +44,14 @@ export class WSClient {
   private readonly PING_INTERVAL_MS = 10_000;
   private readonly LIVENESS_TIMEOUT_MS = 15_000;
   private readonly LIVENESS_CHECK_MS = 3_000;
+  // Bound the CONNECTING phase. `new WebSocket()` to an unreachable host (e.g. a
+  // cold Tailscale tunnel on Android app launch) can sit in CONNECTING for the
+  // OS TCP timeout — 30-120s — without ever firing onopen or onclose. The
+  // liveness check doesn't help: it only starts after onopen. Without this
+  // watchdog the very first connect after a cold launch pins the UI on
+  // "Connecting…" with nothing scheduling a retry (no visibilitychange fires on
+  // an already-visible fresh launch). 8s is far above a warm handshake (<1s).
+  private readonly CONNECT_TIMEOUT_MS = 8_000;
 
   constructor(options: WSClientOptions) {
     this.url = options.url;
@@ -64,7 +73,10 @@ export class WSClient {
       return;
     }
 
+    this.startConnectWatchdog();
+
     this.ws.onopen = () => {
+      this.clearConnectWatchdog();
       this.reconnectDelay = 1000;
       this.hasConnectedOnce = true;
       this.lastInboundAt = Date.now();
@@ -88,6 +100,7 @@ export class WSClient {
     };
 
     this.ws.onclose = (event) => {
+      this.clearConnectWatchdog();
       this.stopPing();
       this.stopLivenessCheck();
 
@@ -128,6 +141,7 @@ export class WSClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearConnectWatchdog();
     this.stopPing();
     this.stopLivenessCheck();
     this.detachVisibilityHandler();
@@ -137,6 +151,37 @@ export class WSClient {
 
   updateUrl(url: string): void {
     this.url = url;
+  }
+
+  /**
+   * Watch a CONNECTING socket and give up if it never opens. A stalled connect
+   * (dead/cold tunnel) otherwise hangs in CONNECTING silently — see
+   * CONNECT_TIMEOUT_MS. On expiry we tear the zombie socket down and retry with
+   * normal backoff, so the moment the network/tunnel is reachable a retry lands.
+   */
+  private startConnectWatchdog(): void {
+    this.clearConnectWatchdog();
+    this.connectTimer = setTimeout(() => {
+      if (this.intentionalClose) return;
+      if (!this.ws || this.ws.readyState !== WebSocket.CONNECTING) return;
+      console.warn('[ws] connect stalled in CONNECTING, aborting and retrying');
+      // Detach handlers so the doomed socket's late onclose can't race the new
+      // connect (same guard as forceReconnect).
+      this.ws.onopen = this.ws.onmessage = this.ws.onclose = this.ws.onerror = null;
+      try { this.ws.close(); } catch { /* ignore */ }
+      this.ws = null;
+      // Keep 'connecting' if we've never been up (an honest "still trying"),
+      // else 'reconnecting' so the overlay reflects a dropped live session.
+      this.onStateChange(this.hasConnectedOnce ? 'reconnecting' : 'connecting');
+      this.scheduleReconnect();
+    }, this.CONNECT_TIMEOUT_MS);
+  }
+
+  private clearConnectWatchdog(): void {
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
   }
 
   private scheduleReconnect(): void {
@@ -164,6 +209,7 @@ export class WSClient {
   forceReconnect(): void {
     if (this.intentionalClose) return;
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.clearConnectWatchdog();
     this.reconnectDelay = 1000;
     this.stopPing();
     this.stopLivenessCheck();

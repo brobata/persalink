@@ -852,12 +852,21 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     let lastRows = term.rows;
     const doFit = () => {
       fitAddon.fit();
+      const shrunk = term.rows < lastRows;
       if (term.cols !== lastCols || term.rows !== lastRows) {
         lastCols = term.cols;
         lastRows = term.rows;
-        resize(term.cols, term.rows);
         saveDims(term.cols, term.rows);
       }
+      // Always re-send, even when the grid didn't change. A resize message can
+      // be lost server-side (it races the async attach flow) or client-side
+      // (WS reconnect window); the grid then never changes again while the
+      // keyboard is up, so a change-gated send would leave tmux at the stale
+      // size for the whole typing session — bottom rows (the input box) clamp
+      // onto xterm's last line and the status bar overprints them.
+      resize(term.cols, term.rows);
+      // Keyboard opening = rows shrink. Land at the prompt, not mid-scrollback.
+      if (shrunk) term.scrollToBottom();
     };
     const RESIZE_DEBOUNCE_MS = 250;
     const resizeObserver = new ResizeObserver(() => {
@@ -876,6 +885,17 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       resizeTimeoutRef.current = setTimeout(doFit, RESIZE_DEBOUNCE_MS);
     };
     window.visualViewport?.addEventListener('resize', onViewportResize);
+
+    // Focus = the user is about to type (and on mobile, the keyboard is about
+    // to open). Schedule a reconciling fit so tmux and xterm agree on size at
+    // exactly the moment a stale size would hide the input box. The shared
+    // debounce timer means the visualViewport events that follow simply push
+    // this back until the keyboard animation settles.
+    const onTermFocus = () => {
+      if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+      resizeTimeoutRef.current = setTimeout(doFit, RESIZE_DEBOUNCE_MS + 150);
+    };
+    term.textarea?.addEventListener('focus', onTermFocus);
 
     // Re-fit after layout settles — triple pass: immediate rAF, delayed rAF,
     // and a timer to catch slow CSS transitions or conditional bar changes.
@@ -903,6 +923,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       selectionChangeDisposable.dispose();
       resizeObserver.disconnect();
       window.visualViewport?.removeEventListener('resize', onViewportResize);
+      term.textarea?.removeEventListener('focus', onTermFocus);
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
       if (compositionWatchdog) clearTimeout(compositionWatchdog);
       terminalRef.current = null;
