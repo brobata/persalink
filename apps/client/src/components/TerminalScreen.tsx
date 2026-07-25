@@ -260,6 +260,18 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // True when the user has scrolled the pane up (possibly into tmux copy-mode);
   // surfaces the "jump to live" button. Typing auto-exits copy-mode server-side.
   const [scrolledUp, setScrolledUp] = useState(false);
+  // Alt-screen apps own their buffer, so there's no scroll position to read.
+  // Track net up-scrolled lines as a proxy so the jump button can clear when
+  // the user scrolls back down to live themselves (it used to stick until a
+  // keystroke). Reset by typing, jumping, or paying the count back to zero.
+  const altUpLinesRef = useRef(0);
+  // Momentum-fling cancel, reachable from jumpToLive — tapping the button
+  // mid-fling must stop the fling, or its queued wheel-ups scroll away from
+  // live again and instantly re-surface the button.
+  const cancelMomentumRef = useRef<(() => void) | null>(null);
+  // Trailing scroll events (OS wheel inertia, in-flight touch momentum) right
+  // after a jump would re-arm the button — ignore re-arms briefly.
+  const suppressRearmUntilRef = useRef(0);
   const [showKeyBar, setShowKeyBar] = useState(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('persalink-show-keybar') === 'true';
@@ -293,6 +305,39 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     }
     setSelectText(lines.join('\n').replace(/\n+$/, ''));
   };
+  // Ref so the terminal-setup effect's touch handlers (long-press) can open
+  // the modal without adding it to the effect's deps.
+  const openSelectTextRef = useRef(openSelectText);
+  openSelectTextRef.current = openSelectText;
+
+  // Toolbar paste — the only paste path a phone user can reach (no Ctrl+V,
+  // and xterm's canvas offers no long-press paste menu).
+  const pasteFromClipboard = useCallback(async () => {
+    try {
+      if (!navigator.clipboard?.readText || !window.isSecureContext) throw new Error('clipboard unavailable');
+      const text = await navigator.clipboard.readText();
+      if (text) sendInput(text);
+    } catch {
+      useAppStore.getState().pushNotification(
+        'error',
+        'Paste blocked — clipboard needs HTTPS and permission.',
+        'paste',
+      );
+    }
+    terminalRef.current?.focus();
+  }, [sendInput]);
+
+  const copyAllSelectText = useCallback(() => {
+    if (!selectText) return;
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      navigator.clipboard.writeText(selectText).then(
+        () => useAppStore.getState().pushNotification('info', 'Copied', 'copy'),
+        () => useAppStore.getState().pushNotification('error', 'Copy blocked by browser', 'copy'),
+      );
+    } else {
+      useAppStore.getState().pushNotification('error', 'Copy blocked by browser', 'copy');
+    }
+  }, [selectText]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -320,6 +365,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // itself, and only the cancel brings that back to live.
   const jumpToLive = useCallback(() => {
     const term = terminalRef.current;
+    cancelMomentumRef.current?.();
+    altUpLinesRef.current = 0;
+    suppressRearmUntilRef.current = performance.now() + 600;
     exitScroll();
     if (term && term.buffer.active.type === 'alternate') {
       sendInput(CLAUDE_JUMP_TO_LATEST + '\x1b[<65;1;1M'.repeat(SNAP_WHEEL_BURST));
@@ -563,7 +611,17 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         return false;
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-        document.execCommand('paste');
+        // execCommand('paste') is a no-op in modern browsers (security);
+        // the async Clipboard API is the path that actually works. Keep
+        // execCommand only as a legacy fallback.
+        if (navigator.clipboard?.readText && window.isSecureContext) {
+          navigator.clipboard.readText().then(
+            (text) => { if (text) sendInput(text); },
+            () => notify('error', 'Paste blocked — allow clipboard access for this site.'),
+          );
+        } else {
+          document.execCommand('paste');
+        }
         return false;
       }
       return true;
@@ -630,6 +688,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       // keystroke means the user is back at work — hide the jump button. The
       // server cancels copy-mode for printable input on its side.
       setScrolledUp(false);
+      altUpLinesRef.current = 0;
 
       // Typing while the socket is down would silently vanish — warn (throttled)
       // so it doesn't feel like the earlier "can't type" bugs.
@@ -717,10 +776,13 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         const seq = `\x1b[<${code};1;1M`;
         sendInput(seq.repeat(Math.abs(lines)));
         maybeWarnAltScreenScroll();
-        // alt-screen owns its buffer, so we can't tell when we're back at the
-        // bottom — surface the jump button on any up-scroll and clear it when
-        // the user types (server auto-exits) or taps it.
-        if (lines < 0) setScrolledUp(true);
+        // alt-screen owns its buffer, so we can't read the real scroll
+        // position — track net up-lines instead. Down-scroll pays the count
+        // back off; at zero the user is back at (or past) live, so the jump
+        // button clears without requiring a keystroke.
+        altUpLinesRef.current = Math.max(0, altUpLinesRef.current - lines);
+        if (altUpLinesRef.current === 0) setScrolledUp(false);
+        else if (performance.now() >= suppressRearmUntilRef.current) setScrolledUp(true);
       } else {
         term.scrollLines(lines);
         const buf = term.buffer.active;
@@ -734,18 +796,54 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         momentumRaf = null;
       }
     };
+    cancelMomentumRef.current = cancelMomentum;
+    altUpLinesRef.current = 0;
+
+    // Long-press (hold without moving) → native select modal. xterm draws to
+    // canvas, so the OS long-press text selection has nothing to grab; this
+    // restores the expected "hold to highlight" gesture on mobile.
+    const LONG_PRESS_MS = 500;
+    const LONG_PRESS_SLOP_PX = 12;
+    let touchStartX = 0;
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+    let longPressFired = false;
+    const cancelLongPress = () => {
+      if (longPressTimer !== null) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    };
 
     const onTouchStart = (e: TouchEvent) => {
       cancelMomentum();
       touchStartY = e.touches[0].clientY;
+      touchStartX = e.touches[0].clientX;
       lastMoveY = touchStartY;
       lastMoveTime = performance.now();
       scrollAccum = 0;
       velocity = 0;
+      longPressFired = false;
+      cancelLongPress();
+      if (e.touches.length === 1) {
+        longPressTimer = setTimeout(() => {
+          longPressTimer = null;
+          longPressFired = true;
+          try { navigator.vibrate?.(15); } catch { /* unsupported */ }
+          openSelectTextRef.current();
+        }, LONG_PRESS_MS);
+      }
     };
     const onTouchMove = (e: TouchEvent) => {
       const now = performance.now();
       const y = e.touches[0].clientY;
+      if (longPressTimer !== null) {
+        const totalDx = e.touches[0].clientX - touchStartX;
+        const totalDy = y - touchStartY;
+        if (Math.hypot(totalDx, totalDy) > LONG_PRESS_SLOP_PX) cancelLongPress();
+      }
+      // The hold already opened the modal — the rest of this gesture must not
+      // also scroll the terminal underneath it.
+      if (longPressFired) return;
       const dy = lastMoveY - y; // positive when finger moves up = scroll content up
       const dt = Math.max(1, now - lastMoveTime);
       // Smooth velocity with EMA so a single jittery sample doesn't dominate.
@@ -761,6 +859,12 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       }
     };
     const onTouchEnd = () => {
+      cancelLongPress();
+      if (longPressFired) {
+        longPressFired = false;
+        velocity = 0;
+        return;
+      }
       // If the finger was essentially stopped before lift, no fling.
       // Stale velocity from earlier in the gesture also gets dropped if
       // the last few ms were quiet (touchmove not fired recently).
@@ -802,11 +906,17 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // and never fires its own scroll events — so the touch-path `scrolledUp`
     // flag never trips and the "Jump to live" button never appears on desktop.
     // Observe wheel direction passively (xterm still forwards the event) so the
-    // button surfaces here too. Cleared when the user types (onData) or jumps.
+    // button surfaces here too. Same net-lines proxy as the touch path, so
+    // wheeling back down to live clears the button without a keystroke.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0 && term.buffer.active.type === 'alternate') {
-        setScrolledUp(true);
-      }
+      if (term.buffer.active.type !== 'alternate' || e.deltaY === 0) return;
+      const wheelLines = Math.max(1, Math.round(Math.abs(e.deltaY) / LINE_PX));
+      altUpLinesRef.current = Math.max(
+        0,
+        altUpLinesRef.current + (e.deltaY < 0 ? wheelLines : -wheelLines),
+      );
+      if (altUpLinesRef.current === 0) setScrolledUp(false);
+      else if (performance.now() >= suppressRearmUntilRef.current) setScrolledUp(true);
     };
     container.addEventListener('wheel', onWheel, { passive: true });
 
@@ -908,6 +1018,8 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     return () => {
       cancelMomentum();
+      cancelMomentumRef.current = null;
+      cancelLongPress();
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
@@ -1002,6 +1114,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           onChange={handleFileUpload}
           className="hidden"
         />
+        <button
+          onPointerDown={(e) => { e.preventDefault(); pasteFromClipboard(); }}
+          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
+          title="Paste from clipboard"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+        </button>
         <button
           onPointerDown={(e) => { e.preventDefault(); openSelectText(); }}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
@@ -1127,12 +1248,20 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         <div className="fixed inset-0 z-50 bg-black/80 flex flex-col">
           <div className="shrink-0 flex items-center justify-between px-4 py-3 bg-zinc-900 border-b border-zinc-800 pt-[max(12px,env(safe-area-inset-top))]">
             <span className="text-sm font-semibold text-zinc-200">Select &amp; copy</span>
-            <button
-              onClick={() => setSelectText(null)}
-              className="px-3 py-1.5 text-sm text-zinc-300 bg-zinc-800 active:bg-zinc-700 rounded-lg"
-            >
-              Close
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={copyAllSelectText}
+                className="px-3 py-1.5 text-sm text-zinc-300 bg-zinc-800 active:bg-zinc-700 rounded-lg"
+              >
+                Copy all
+              </button>
+              <button
+                onClick={() => setSelectText(null)}
+                className="px-3 py-1.5 text-sm text-zinc-300 bg-zinc-800 active:bg-zinc-700 rounded-lg"
+              >
+                Close
+              </button>
+            </div>
           </div>
           <textarea
             value={selectText}
