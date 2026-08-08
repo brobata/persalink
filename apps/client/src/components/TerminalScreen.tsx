@@ -187,6 +187,69 @@ function TabPicker({ onClose }: { onClose: () => void }) {
   );
 }
 
+// Harvested-links sheet. tmux hard-wraps long URLs at the pane width, so the
+// in-terminal WebLinksAddon only ever sees the split halves — unclickable, and
+// selecting them copies a mid-URL line break. The server rejoins wrapped lines
+// (capture-pane -J) and extracts whole URLs; this sheet lists them newest
+// first as big tappable targets with a per-row copy.
+function LinkSheet({ links, onClose }: { links: string[]; onClose: () => void }) {
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const copy = async (url: string, idx: number) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx(null), 1200);
+    } catch { /* clipboard denied — opening via the anchor still works */ }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="w-full max-h-[70vh] bg-zinc-900 border-t border-zinc-700 rounded-t-2xl overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between">
+          <span className="text-sm font-semibold text-zinc-300">Links on screen</span>
+          <button onClick={onClose} className="px-2 py-1 text-zinc-500 text-sm">Close</button>
+        </div>
+        <div className="px-3 py-2 pb-[max(12px,env(safe-area-inset-bottom))]">
+          {links.length === 0 && (
+            <div className="px-3 py-8 text-center text-sm text-zinc-600">
+              No links found in recent output
+            </div>
+          )}
+          {links.map((url, i) => (
+            <div key={`${url}-${i}`} className="flex items-center gap-1">
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 min-w-0 px-3 py-3 text-sm text-sky-400 active:bg-zinc-800 rounded-lg break-all leading-snug"
+              >
+                {url}
+              </a>
+              <button
+                onClick={() => copy(url, i)}
+                className="shrink-0 px-2.5 py-2.5 text-zinc-500 active:text-zinc-200 transition-colors"
+                title="Copy link"
+              >
+                {copiedIdx === i ? (
+                  <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Quick session switcher — a bottom sheet of live sessions with their attention
 // badges, so you can hop between running agents without going home.
 function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
@@ -242,7 +305,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     attachedSession, sendInput, exitScroll, resize, detachSession, killSession,
     initialScrollback, windows, selectWindow, createWindow, serverUrl, authToken,
     sessions, activeTabId, switchTab, closeTab, showTabPicker, setShowTabPicker, getTabs,
-    attachSession, connectionState,
+    attachSession, connectionState, requestLinks, sessionLinks, clearSessionLinks,
   } = useAppStore();
 
   // 'authenticated' is the only fully-usable state; anything else means input
@@ -1115,6 +1178,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           className="hidden"
         />
         <button
+          onPointerDown={(e) => { e.preventDefault(); requestLinks(); }}
+          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
+          title="Links on screen — wrapped URLs rejoined"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.172 13.828a4 4 0 010-5.656l3-3a4 4 0 015.656 5.656l-1.5 1.5" />
+          </svg>
+        </button>
+        <button
           onPointerDown={(e) => { e.preventDefault(); pasteFromClipboard(); }}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
           title="Paste from clipboard"
@@ -1239,6 +1312,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
       {/* Profile picker popup — mobile only */}
       {!sidebarVisible && showTabPicker && <TabPicker onClose={() => setShowTabPicker(false)} />}
+
+      {/* Harvested links — opens when the server's session.links reply lands */}
+      {sessionLinks !== null && <LinkSheet links={sessionLinks} onClose={clearSessionLinks} />}
 
       {/* Native text-selection modal — mobile-friendly copy. xterm renders to
           canvas so Android's long-press magnifier has nothing to grab.

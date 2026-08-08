@@ -333,6 +333,14 @@ export class TmuxManager {
     return tmux('capture-pane', '-t', sessionName, '-p', '-S', `-${lines}`);
   }
 
+  /** Capture pane text with tmux's wrapped lines rejoined (-J), so a URL that
+   *  was hard-wrapped at the pane width comes back whole. Raw material for the
+   *  session.links harvester. */
+  async captureJoined(sessionName: string, lines: number = 2000): Promise<string> {
+    if (lines <= 0) return '';
+    return tmux('capture-pane', '-t', sessionName, '-p', '-J', '-S', `-${lines}`);
+  }
+
   /** Resize a tmux session — sets aggressive-resize so our PTY size wins */
   async resizeSession(sessionName: string): Promise<void> {
     try {

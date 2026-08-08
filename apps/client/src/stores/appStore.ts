@@ -78,6 +78,10 @@ interface AppState {
   // Quick action results
   actionResult: { actionId: string; profileId?: string; output: string; exitCode: number; timedOut?: boolean; truncated?: boolean; spawnError?: boolean } | null;
 
+  // Harvested links — non-null opens the link sheet (set when the server's
+  // session.links response arrives, cleared on close/detach).
+  sessionLinks: string[] | null;
+
   // Toast notifications — server-side errors and other transient messages.
   // Without this, a 'window.create' or 'profile.save' failure on the server
   // produces no visible signal on the client.
@@ -119,6 +123,8 @@ interface AppState {
   reorderProfiles: (profileIds: string[]) => void;
   goBack: () => void;
   requestScrollback: (lines?: number) => void;
+  requestLinks: () => void;
+  clearSessionLinks: () => void;
   clearActionResult: () => void;
   initBiometric: () => Promise<void>;
   unlockWithBiometric: () => Promise<boolean>;
@@ -208,6 +214,7 @@ export const useAppStore = create<AppState>()(
       switchingToId: null,
       showTabPicker: false,
       actionResult: null,
+      sessionLinks: null,
       notifications: [],
       lastActiveSessionId: null,
       pendingAutoAttach: null,
@@ -316,7 +323,7 @@ export const useAppStore = create<AppState>()(
 
       detachSession: () => {
         wsClient?.send({ type: 'session.detach' });
-        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null, switchingToId: null });
+        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null, switchingToId: null, sessionLinks: null });
       },
 
       killSession: (sessionId) => {
@@ -511,6 +518,12 @@ export const useAppStore = create<AppState>()(
       requestScrollback: (lines) => {
         wsClient?.send({ type: 'session.scrollback', lines });
       },
+
+      requestLinks: () => {
+        wsClient?.send({ type: 'session.links' });
+      },
+
+      clearSessionLinks: () => set({ sessionLinks: null }),
 
       openSettings: () => {
         // Allowed from any post-auth view (home/terminal/settings — re-entering
@@ -727,6 +740,10 @@ function handleServerMessage(
 
     case 'session.scrollback':
       window.dispatchEvent(new CustomEvent('persalink:scrollback', { detail: msg.data }));
+      break;
+
+    case 'session.links':
+      set({ sessionLinks: msg.links });
       break;
 
     case 'windows.list':

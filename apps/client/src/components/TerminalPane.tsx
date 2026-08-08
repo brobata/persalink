@@ -92,6 +92,10 @@ export function TerminalPane({
   const [connState, setConnState] = useState<'connecting' | 'ready' | 'reconnecting' | 'disconnected'>('connecting');
 
   const [uploading, setUploading] = useState(false);
+  // Harvested links — non-null shows the in-pane panel (server rejoins
+  // tmux-wrapped URLs via capture-pane -J; see LinkSheet in TerminalScreen).
+  const [paneLinks, setPaneLinks] = useState<string[] | null>(null);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WSClient | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -275,6 +279,9 @@ export function TerminalPane({
           case 'session.scrollback':
             if (termRef.current) termRef.current.write(msg.data);
             break;
+          case 'session.links':
+            setPaneLinks(msg.links);
+            break;
         }
       },
       onStateChange: (state) => {
@@ -302,6 +309,7 @@ export function TerminalPane({
     const client = wsRef.current;
     if (!client || !authedRef.current) return;
     pendingRef.current = [];
+    setPaneLinks(null); // links belong to the previous session
     // Drop any partial-composition residue carried over from the previous
     // session — otherwise the first keystroke into the new session can
     // re-send the prior session's buffered text.
@@ -742,6 +750,19 @@ export function TerminalPane({
               className="hidden"
             />
             <button
+              onClick={() => {
+                if (paneLinks !== null) setPaneLinks(null);
+                else wsRef.current?.send({ type: 'session.links' });
+              }}
+              className={`p-1 transition-colors ${paneLinks !== null ? 'text-zinc-200' : 'text-zinc-600 hover:text-zinc-300'}`}
+              title="Links on screen — wrapped URLs rejoined"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.172 13.828a4 4 0 010-5.656l3-3a4 4 0 015.656 5.656l-1.5 1.5" />
+              </svg>
+            </button>
+            <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
               className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
@@ -790,6 +811,64 @@ export function TerminalPane({
       {/* Terminal area (empty-state overlay when no session) */}
       <div className="flex-1 min-h-0 relative" onClick={() => termRef.current?.focus()}>
         <div ref={containerRef} className="absolute inset-0 overflow-hidden" />
+        {/* Harvested-links panel — anchored to the top so it reads like a
+            dropdown from the header button that opened it. */}
+        {paneLinks !== null && (
+          <div
+            className="absolute inset-x-2 top-2 z-20 max-h-[70%] overflow-y-auto bg-zinc-900/95 border border-zinc-700 rounded-lg shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-zinc-900 px-3 pt-2 pb-1.5 border-b border-zinc-800 flex items-center justify-between rounded-t-lg">
+              <span className="text-[11px] font-semibold text-zinc-400">Links on screen</span>
+              <button
+                onClick={() => setPaneLinks(null)}
+                className="px-1.5 text-zinc-600 hover:text-zinc-300 text-xs"
+              >
+                &times;
+              </button>
+            </div>
+            <div className="px-2 py-1.5">
+              {paneLinks.length === 0 && (
+                <div className="px-2 py-4 text-center text-xs text-zinc-600">
+                  No links found in recent output
+                </div>
+              )}
+              {paneLinks.map((url, i) => (
+                <div key={`${url}-${i}`} className="flex items-center gap-1">
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 min-w-0 px-2 py-1.5 text-xs text-sky-400 hover:bg-zinc-800 rounded break-all leading-snug"
+                  >
+                    {url}
+                  </a>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(url);
+                        setCopiedIdx(i);
+                        setTimeout(() => setCopiedIdx(null), 1200);
+                      } catch { /* clipboard denied — the anchor still works */ }
+                    }}
+                    className="shrink-0 p-1.5 text-zinc-600 hover:text-zinc-200 transition-colors"
+                    title="Copy link"
+                  >
+                    {copiedIdx === i ? (
+                      <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {attachedSession && voice.isSupported && (
           <button
             // onMouseDown preventDefault stops the browser from moving focus

@@ -21,6 +21,7 @@ import type { ClientMessage, ServerMessage, SessionInfo } from '@persalink/share
 import { classifyPane, type Attention } from '../attention';
 import { PushManager } from '../pushManager';
 import { PROTOCOL_VERSION, parseClientMessage } from '@persalink/shared/protocol';
+import { extractLinks } from '@persalink/shared/links';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -508,6 +509,16 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
         const lines = Math.max(0, Math.min(message.lines || 2000, 10000));
         const data = await tmuxManager.captureScrollback(client.attachedSession, lines);
         send(client, { type: 'session.scrollback', data });
+      }
+      break;
+    }
+
+    // ---- Link harvest ----
+    case 'session.links': {
+      if (client.attachedSession) {
+        const lines = Math.max(0, Math.min(message.lines || 2000, 10000));
+        const text = await tmuxManager.captureJoined(client.attachedSession, lines);
+        send(client, { type: 'session.links', links: extractLinks(text) });
       }
       break;
     }

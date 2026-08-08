@@ -168,6 +168,8 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('health.status') }),
   // Scrollback
   z.object({ type: z.literal('session.scrollback'), lines: z.number().int().optional() }),
+  // Link harvest — URLs from the attached pane, wrap-joined server-side
+  z.object({ type: z.literal('session.links'), lines: z.number().int().min(0).max(10000).optional() }),
   // Web Push notifications
   z.object({ type: z.literal('push.getKey') }),
   z.object({ type: z.literal('push.subscribe'), subscription: z.object({
@@ -224,6 +226,8 @@ export type ServerMessage =
   | { type: 'health.status'; statuses: HealthStatus[] }
   // Scrollback
   | { type: 'session.scrollback'; data: string }
+  // Link harvest — deduped URLs, newest first
+  | { type: 'session.links'; links: string[] }
   // Web Push — server hands the client its VAPID public key after auth.
   | { type: 'push.key'; publicKey: string }
   // General
