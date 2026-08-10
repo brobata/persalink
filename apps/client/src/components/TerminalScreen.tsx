@@ -250,6 +250,72 @@ function LinkSheet({ links, onClose }: { links: string[]; onClose: () => void })
   );
 }
 
+// One switcher row. The pencil swaps the row into an inline rename input —
+// the only way to rename a session from inside the terminal on mobile
+// (desktop panes have double-click; gestures proved undiscoverable).
+function SwitcherRow({ s, active, onPick, onClose }: {
+  s: SessionInfo;
+  active: boolean;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const renameSession = useAppStore((st) => st.renameSession);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+
+  const commitEdit = () => {
+    const trimmed = editName.trim();
+    if (trimmed && trimmed !== s.name) renameSession(s.id, trimmed);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className={`flex items-center gap-3 px-3 py-2 rounded-lg ${active ? 'bg-zinc-800' : ''}`}>
+        <span className="text-base shrink-0">{s.profileIcon || '🖥️'}</span>
+        <input
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitEdit();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          className="flex-1 min-w-0 px-2 py-1.5 bg-zinc-900 border border-zinc-600 rounded-lg text-sm text-zinc-100 outline-none"
+          autoFocus
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex items-center rounded-lg transition-colors ${active ? 'bg-zinc-800' : 'active:bg-zinc-800/60'}`}>
+      <button
+        onClick={() => { onPick(s.id); onClose(); }}
+        className="flex-1 min-w-0 flex items-center gap-3 px-3 py-3 text-left"
+      >
+        <span className="text-base shrink-0">{s.profileIcon || '🖥️'}</span>
+        <span className="flex-1 min-w-0 truncate text-sm text-zinc-100">{s.name || s.profileName || s.id}</span>
+        {s.attention === 'working' && <span className="shrink-0 text-[10px] text-sky-300">working…</span>}
+        {s.attention === 'waiting' && <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full">needs you</span>}
+        {s.attention === 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />}
+        {s.unseen && s.attention !== 'waiting' && s.attention !== 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
+        {active && <span className="shrink-0 text-[10px] text-zinc-500">current</span>}
+      </button>
+      <button
+        onClick={() => { setEditName(s.name || s.profileName || ''); setEditing(true); }}
+        className="shrink-0 px-2.5 py-3 text-zinc-600 active:text-zinc-200 transition-colors"
+        title="Rename session"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 // Quick session switcher — a bottom sheet of live sessions with their attention
 // badges, so you can hop between running agents without going home.
 function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
@@ -276,24 +342,9 @@ function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
           {sessions.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-zinc-600">No live sessions</div>
           )}
-          {sessions.map((s) => {
-            const active = s.id === currentId;
-            return (
-              <button
-                key={s.id}
-                onClick={() => { onPick(s.id); onClose(); }}
-                className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-colors ${active ? 'bg-zinc-800' : 'active:bg-zinc-800/60'}`}
-              >
-                <span className="text-base shrink-0">{s.profileIcon || '🖥️'}</span>
-                <span className="flex-1 min-w-0 truncate text-sm text-zinc-100">{s.name || s.profileName || s.id}</span>
-                {s.attention === 'working' && <span className="shrink-0 text-[10px] text-sky-300">working…</span>}
-                {s.attention === 'waiting' && <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full">needs you</span>}
-                {s.attention === 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />}
-                {s.unseen && s.attention !== 'waiting' && s.attention !== 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
-                {active && <span className="shrink-0 text-[10px] text-zinc-500">current</span>}
-              </button>
-            );
-          })}
+          {sessions.map((s) => (
+            <SwitcherRow key={s.id} s={s} active={s.id === currentId} onPick={onPick} onClose={onClose} />
+          ))}
         </div>
       </div>
     </div>

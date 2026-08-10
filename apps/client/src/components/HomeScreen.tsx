@@ -22,8 +22,43 @@ function moveProfile(profiles: Profile[], profileId: string, direction: 'up' | '
 // ============================================================================
 
 function SessionPill({ session }: { session: SessionInfo }) {
-  const { attachSession, killSession } = useAppStore();
+  const { attachSession, killSession, renameSession } = useAppStore();
   const [confirmKill, setConfirmKill] = useState(false);
+  // Explicit pencil-button rename — mobile had NO way to rename a session
+  // (desktop panes use double-click; long-press here is unused and gestures
+  // are undiscoverable anyway).
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditName(session.name || session.profileName || '');
+    setEditing(true);
+  };
+  const commitEdit = () => {
+    const trimmed = editName.trim();
+    if (trimmed && trimmed !== session.name) renameSession(session.id, trimmed);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-emerald-950/30 border border-emerald-700/60 border-l-2 border-l-emerald-500 rounded-xl">
+        {session.profileIcon && <span className="text-lg shrink-0">{session.profileIcon}</span>}
+        <input
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitEdit();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          className="flex-1 min-w-0 px-2 py-1.5 bg-zinc-800 border border-zinc-600 rounded-lg text-sm text-zinc-100 outline-none"
+          autoFocus
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-0 bg-emerald-950/30 border border-emerald-700/60 border-l-2 border-l-emerald-500 rounded-xl">
@@ -57,6 +92,16 @@ function SessionPill({ session }: { session: SessionInfo }) {
             style={{ backgroundColor: session.profileColor }}
           />
         )}
+      </button>
+      <button
+        onClick={startEdit}
+        className="shrink-0 px-2.5 py-3.5 text-zinc-500 active:text-zinc-200 transition-colors border-l border-emerald-700/60"
+        title="Rename session"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
       </button>
       {confirmKill ? (
         <button
