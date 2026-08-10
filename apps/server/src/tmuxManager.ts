@@ -8,13 +8,21 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as pty from 'node-pty';
 import type { SessionInfo, TmuxWindowInfo, Profile } from '@persalink/shared/protocol';
+import { atomicWriteFileSync } from './atomicWrite';
+import { CONFIG_DIR } from './config';
 
 const execFileAsync = promisify(execFile);
 
 const TMUX_BIN = 'tmux';
 const SESSION_PREFIX = 'pl-';
+// Custom display names survive server restarts here. tmux holds the real
+// session (and its immutable pl- id); this is presentation state, so it
+// can't live in tmux and dies with the process unless persisted.
+const NAMES_FILE = path.join(CONFIG_DIR, 'session-names.json');
 
 // ============================================================================
 // Control Plane — tmux CLI wrapper (uses execFile, not exec — no shell injection)
@@ -127,6 +135,34 @@ export class TmuxManager {
       console.log(`[PersaLink] Tmux detected: ${version}`);
     } catch {
       throw new Error('tmux is not installed or not in PATH');
+    }
+    this.loadNames();
+  }
+
+  /** Restore persisted custom names. Corrupt/missing file → start empty;
+   *  losing display names is never worth failing startup over. */
+  private loadNames(): void {
+    try {
+      if (!fs.existsSync(NAMES_FILE)) return;
+      const parsed: unknown = JSON.parse(fs.readFileSync(NAMES_FILE, 'utf-8'));
+      if (!parsed || typeof parsed !== 'object') return;
+      for (const [id, name] of Object.entries(parsed)) {
+        if (id.startsWith(SESSION_PREFIX) && typeof name === 'string' && name.trim()) {
+          this.customNames.set(id, name);
+        }
+      }
+    } catch (err) {
+      console.warn('[PersaLink] Could not load session names:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  private saveNames(): void {
+    try {
+      atomicWriteFileSync(NAMES_FILE, JSON.stringify(Object.fromEntries(this.customNames), null, 2));
+    } catch (err) {
+      // Rename still works for this server's lifetime — just won't survive
+      // a restart. Don't fail the rename over it.
+      console.warn('[PersaLink] Could not save session names:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -300,15 +336,21 @@ export class TmuxManager {
     } else {
       this.customNames.set(sessionName, trimmed);
     }
+    this.saveNames();
   }
 
   /** Drop custom display names for sessions no longer alive. Called by the
    *  monitor's dead-session sweep so names set on sessions that vanished
    *  outside PersaLink (external kill, crashed pane) don't accumulate. */
   pruneNames(liveSessionIds: Set<string>): void {
+    let changed = false;
     for (const id of this.customNames.keys()) {
-      if (!liveSessionIds.has(id)) this.customNames.delete(id);
+      if (!liveSessionIds.has(id)) {
+        this.customNames.delete(id);
+        changed = true;
+      }
     }
+    if (changed) this.saveNames(); // sweep runs often — only touch disk on change
   }
 
   /** Kill a tmux session */
@@ -322,7 +364,7 @@ export class TmuxManager {
       await tmux('set-option', '-s', 'exit-empty', 'off');
     } catch { /* ignore — tmux < 2.7 lacks exit-empty */ }
     await tmux('kill-session', '-t', sessionName);
-    this.customNames.delete(sessionName);
+    if (this.customNames.delete(sessionName)) this.saveNames();
   }
 
   /** Capture scrollback from the current pane.
