@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useAppStore } from '../stores/appStore';
 import type { Profile, QuickAction, HealthCheck } from '@persalink/shared/protocol';
 
@@ -43,6 +43,12 @@ function FieldLabel({ children, optional }: { children: React.ReactNode; optiona
       {optional && <span className="text-zinc-600 ml-1">(optional)</span>}
     </label>
   );
+}
+
+/** One-line explanation under a field — every option should say what it
+ *  actually does, so the editor never needs a manual. */
+function Hint({ children }: { children: React.ReactNode }) {
+  return <p className="text-[11px] text-zinc-600 mt-1 leading-snug">{children}</p>;
 }
 
 function TextInput({
@@ -209,7 +215,7 @@ function HealthCheckEditor({
 // ============================================================================
 
 export function ProfileEditor() {
-  const { editingProfile, closeOverlay, saveProfile, deleteProfile } = useAppStore();
+  const { editingProfile, closeOverlay, saveProfile, deleteProfile, profiles } = useAppStore();
 
   const isNew = !editingProfile;
   // The ID is immutable only for an existing profile that already *has* a real
@@ -218,13 +224,23 @@ export function ProfileEditor() {
   // read-only field + "ID is required" check becomes an unrecoverable trap.
   const idLocked = !isNew && !!editingProfile?.id?.trim();
   const [form, setForm] = useState<Partial<Profile>>(
-    editingProfile ? { ...editingProfile } : { id: '', name: '', group: 'Projects' },
+    editingProfile ? { ...editingProfile } : { id: '', name: '' },
   );
-  const [showAdvanced, setShowAdvanced] = useState(
-    !!(form.healthCheck || form.env || form.shell || form.cols || form.rows),
-  );
+  const [showAdvanced, setShowAdvanced] = useState(!!form.healthCheck);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Group picker: chips from groups that already exist, plus a "new" escape
+  // hatch. Typing group names by hand produced near-duplicate groups.
+  const [newGroupMode, setNewGroupMode] = useState(false);
+  const existingGroups = useMemo(() => {
+    const groups = new Set<string>();
+    for (const p of profiles) if (p.group?.trim()) groups.add(p.group.trim());
+    if (form.group?.trim()) groups.add(form.group.trim());
+    return [...groups].sort((a, b) => a.localeCompare(b));
+    // form.group is intentionally sampled once — while newGroupMode is active
+    // we don't want a chip materializing for every keystroke of the new name.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profiles]);
 
   const patch = useCallback((updates: Partial<Profile>) => {
     setForm((prev) => ({ ...prev, ...updates }));
@@ -318,7 +334,12 @@ export function ProfileEditor() {
           <span className="text-2xl">{form.icon || '📂'}</span>
           <div className="flex-1 min-w-0">
             <div className="font-medium truncate">{form.name || 'Untitled'}</div>
-            <div className="text-xs text-zinc-500">{form.group || 'No group'}</div>
+            <div className="text-xs text-zinc-500 truncate">
+              {form.group || 'No group'}
+              {(form.id || form.name) && (
+                <span className="text-zinc-700"> · id: {form.id || slugifyId(form.name || '')}</span>
+              )}
+            </div>
           </div>
           {form.color && (
             <div className="w-2 h-8 rounded-full" style={{ backgroundColor: form.color }} />
@@ -332,36 +353,63 @@ export function ProfileEditor() {
           <div>
             <FieldLabel>Name</FieldLabel>
             <TextInput value={form.name || ''} onChange={autoId} placeholder="My Project" />
-          </div>
-
-          <div>
-            <FieldLabel>ID {idLocked && <span className="text-zinc-600">(read-only)</span>}</FieldLabel>
-            <input
-              type="text"
-              value={form.id || ''}
-              onChange={(e) => !idLocked && patch({ id: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })}
-              readOnly={idLocked}
-              placeholder="my-project"
-              className={`w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm font-mono
-                          text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500
-                          ${idLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
-            />
+            <Hint>Shown on the home screen and in session tabs. The internal id{idLocked ? ' is locked for an existing profile' : ' is derived automatically'}.</Hint>
           </div>
 
           <div>
             <FieldLabel optional>Group</FieldLabel>
-            <TextInput value={form.group || ''} onChange={(v) => patch({ group: v })} placeholder="Projects" />
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => { setNewGroupMode(false); patch({ group: undefined }); }}
+                className={`px-3 py-1.5 rounded-full text-xs transition-colors ${
+                  !form.group && !newGroupMode
+                    ? 'bg-zinc-700 text-zinc-100 ring-1 ring-zinc-500'
+                    : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'}`}
+              >
+                None
+              </button>
+              {existingGroups.map((g) => (
+                <button
+                  key={g}
+                  onClick={() => { setNewGroupMode(false); patch({ group: g }); }}
+                  className={`px-3 py-1.5 rounded-full text-xs transition-colors ${
+                    form.group === g && !newGroupMode
+                      ? 'bg-zinc-700 text-zinc-100 ring-1 ring-zinc-500'
+                      : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'}`}
+                >
+                  {g}
+                </button>
+              ))}
+              <button
+                onClick={() => { setNewGroupMode(true); patch({ group: undefined }); }}
+                className={`px-3 py-1.5 rounded-full text-xs transition-colors ${
+                  newGroupMode
+                    ? 'bg-zinc-700 text-zinc-100 ring-1 ring-zinc-500'
+                    : 'bg-zinc-800 text-zinc-500 active:bg-zinc-700 border border-dashed border-zinc-600'}`}
+              >
+                + New group
+              </button>
+            </div>
+            {newGroupMode && (
+              <div className="mt-2">
+                <TextInput value={form.group || ''} onChange={(v) => patch({ group: v })} placeholder="New group name" />
+              </div>
+            )}
+            <Hint>Groups become the sections on your home screen.</Hint>
           </div>
 
-          <div className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              id="pinned"
-              checked={form.pinned || false}
-              onChange={(e) => patch({ pinned: e.target.checked })}
-              className="w-4 h-4 rounded bg-zinc-800 border-zinc-600"
-            />
-            <label htmlFor="pinned" className="text-sm text-zinc-400">Pinned to top</label>
+          <div>
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="pinned"
+                checked={form.pinned || false}
+                onChange={(e) => patch({ pinned: e.target.checked })}
+                className="w-4 h-4 rounded bg-zinc-800 border-zinc-600"
+              />
+              <label htmlFor="pinned" className="text-sm text-zinc-400">Pin to top of home screen</label>
+            </div>
+            <Hint>Pinned profiles show in their own section above all groups.</Hint>
           </div>
         </section>
 
@@ -432,6 +480,7 @@ export function ProfileEditor() {
               value={form.cwd || ''} onChange={(v) => patch({ cwd: v })}
               placeholder="~/projects/my-app" mono
             />
+            <Hint>Folder the session starts in. Defaults to your home folder.</Hint>
           </div>
 
           <div>
@@ -440,12 +489,14 @@ export function ProfileEditor() {
               value={form.command || ''} onChange={(v) => patch({ command: v })}
               placeholder="claude '/myproject'" mono
             />
+            <Hint>Typed into the terminal automatically when the session is created — start Claude, tail logs, ssh somewhere.</Hint>
           </div>
         </section>
 
         {/* Quick Actions */}
         <section className="space-y-3">
           <SectionHeader>Quick Actions</SectionHeader>
+          <Hint>One-tap commands on the profile card — run without opening the terminal, output shows in a popup. Good for status checks, restarts, deploys.</Hint>
           <ActionEditor
             actions={form.actions || []}
             onChange={(actions) => patch({ actions })}
@@ -465,38 +516,8 @@ export function ProfileEditor() {
           {showAdvanced && (
             <div className="space-y-4 pl-2 border-l border-zinc-800">
               <div>
-                <FieldLabel optional>Shell</FieldLabel>
-                <TextInput
-                  value={form.shell || ''} onChange={(v) => patch({ shell: v })}
-                  placeholder="/bin/bash" mono
-                />
-              </div>
-
-              <div>
-                <FieldLabel optional>Terminal Size</FieldLabel>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    value={form.cols || ''}
-                    onChange={(e) => patch({ cols: parseInt(e.target.value) || undefined })}
-                    placeholder="cols"
-                    className="w-24 px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded-md text-xs
-                               text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
-                  />
-                  <span className="text-zinc-600 self-center">&times;</span>
-                  <input
-                    type="number"
-                    value={form.rows || ''}
-                    onChange={(e) => patch({ rows: parseInt(e.target.value) || undefined })}
-                    placeholder="rows"
-                    className="w-24 px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded-md text-xs
-                               text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
-                  />
-                </div>
-              </div>
-
-              <div>
                 <FieldLabel optional>Health Check</FieldLabel>
+                <Hint>A command run on a timer; its result puts a green/red dot on the profile card. Exit Code = healthy when it exits 0; Contains = healthy when the output includes your string.</Hint>
                 <HealthCheckEditor
                   healthCheck={form.healthCheck}
                   onChange={(hc) => patch({ healthCheck: hc })}
