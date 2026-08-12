@@ -24,6 +24,20 @@ import { useLayoutStore } from './layoutStore';
 
 export type View = 'locked' | 'connect' | 'auth' | 'home' | 'terminal' | 'settings' | 'profile-editor';
 
+/** One saved PersaLink server. `useOrigin` entries resolve their host from
+ *  window.location at connect time — that's the entry representing "the server
+ *  this page was loaded from", which must keep working across all its aliases
+ *  (LAN IP, ts.net, mDNS). Manually added entries connect to the typed host. */
+export interface ServerEntry {
+  id: string;
+  label: string;
+  host: string;
+  useOrigin: boolean;
+  authToken: string | null;
+  serverName: string | null;
+  lastConnectedAt: number | null;
+}
+
 export interface SessionTab {
   sessionId: string;
   name: string;
@@ -33,7 +47,13 @@ export interface SessionTab {
 }
 
 interface AppState {
-  // Connection
+  // Server registry — source of truth. The scalar fields below it are live
+  // MIRRORS of the active entry so every pre-registry consumer (panes,
+  // uploads, settings) keeps reading the same keys it always did.
+  servers: ServerEntry[];
+  activeServerId: string | null;
+
+  // Connection (mirrors of the active ServerEntry + live socket state)
   serverUrl: string;
   connectionState: ConnectionState;
   serverName: string | null;
@@ -98,7 +118,10 @@ interface AppState {
   notificationsEnabled: boolean;
 
   // Actions
-  setServerUrl: (url: string) => void;
+  addServer: (label: string, host: string) => void;
+  removeServer: (id: string) => void;
+  selectServer: (id: string) => void;
+  openServers: () => void;
   connect: () => void;
   disconnect: () => void;
   authenticate: (password: string, tokenName?: string) => void;
@@ -154,6 +177,11 @@ interface AppState {
 
 let wsClient: WSClient | null = null;
 let switchDebounce: ReturnType<typeof setTimeout> | null = null;
+
+// Connection generation — bumped on every connect/switch. Callbacks from a
+// superseded socket check their generation and drop themselves, so a late
+// sessions.list from server A can never land after we've switched to server B.
+let wsGeneration = 0;
 
 // Ask the server which client build it's serving; flag when it's newer than
 // the one running. Fired after every auth.ok — reconnects happen right after a
@@ -213,6 +241,8 @@ export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       // Initial state
+      servers: [],
+      activeServerId: null,
       serverUrl: inferDefaultServerUrl(),
       connectionState: 'disconnected',
       serverName: null,
@@ -253,22 +283,88 @@ export const useAppStore = create<AppState>()(
         notifications: s.notifications.filter((n) => n.id !== id),
       })),
 
-      setServerUrl: (url) => set({
-        serverUrl: url.trim().replace(/^(wss?|https?):\/\//i, ''),
-      }),
+      addServer: (label, host) => {
+        const cleaned = host.trim().replace(/^(wss?|https?):\/\//i, '').replace(/\/+$/, '');
+        if (!cleaned) return;
+        const pageHost = typeof window !== 'undefined' ? window.location.host : '';
+        const entry: ServerEntry = {
+          id: crypto.randomUUID(),
+          label: label.trim() || cleaned,
+          host: cleaned,
+          useOrigin: !!pageHost && cleaned === pageHost,
+          authToken: null,
+          serverName: null,
+          lastConnectedAt: null,
+        };
+        set((s) => ({ servers: [...s.servers, entry] }));
+        get().selectServer(entry.id);
+      },
+
+      removeServer: (id) => {
+        const wasActive = get().activeServerId === id;
+        set((s) => ({ servers: s.servers.filter((e) => e.id !== id) }));
+        if (wasActive) {
+          wsClient?.disconnect();
+          wsClient = null;
+          wsGeneration++;
+          set({
+            activeServerId: null, serverUrl: '', authToken: null, serverName: null,
+            connectionState: 'disconnected', view: 'connect',
+            sessions: [], profiles: [], healthStatuses: [], discoveredProfiles: [],
+            attachedSession: null, windows: [], activeTabId: null, switchingToId: null,
+            lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null,
+          });
+        }
+      },
+
+      selectServer: (id) => {
+        const { servers, activeServerId, connectionState } = get();
+        const entry = servers.find((e) => e.id === id);
+        if (!entry) return;
+        // Already live on this server — just leave the servers screen.
+        if (id === activeServerId && connectionState === 'authenticated') {
+          set({ view: 'home' });
+          return;
+        }
+        wsClient?.disconnect();
+        wsClient = null;
+        wsGeneration++; // invalidate in-flight callbacks from the old socket
+        const pageHost = typeof window !== 'undefined' ? window.location.host : '';
+        set({
+          activeServerId: id,
+          serverUrl: entry.useOrigin && pageHost ? pageHost : entry.host,
+          authToken: entry.authToken,
+          serverName: entry.serverName,
+          // Everything below is per-server state from the previous server.
+          sessions: [], profiles: [], healthStatuses: [], discoveredProfiles: [],
+          attachedSession: null, windows: [], activeTabId: null, switchingToId: null,
+          lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null,
+          authError: null, view: 'connect',
+        });
+        get().connect();
+      },
+
+      openServers: () => {
+        const v = get().view;
+        if (v === 'locked' || v === 'auth') return;
+        set({ view: 'connect' });
+      },
 
       connect: () => {
-        const { serverUrl } = get();
+        const { servers, activeServerId } = get();
+        const entry = servers.find((e) => e.id === activeServerId) ?? servers[0] ?? null;
+        if (!entry) return;
+        if (entry.id !== activeServerId) set({ activeServerId: entry.id, authToken: entry.authToken });
 
-        // Prefer the page's own host so the WS goes back to wherever the
-        // SPA was loaded from. This keeps the WebSocket origin check happy
-        // when the page is reached via mDNS / Tailscale / PWA install while
-        // the stored serverUrl points at an LAN IP. Fall back to the stored
-        // value only when there's no window context (tests, SSR).
+        // useOrigin entries follow the page host so the SPA keeps working via
+        // every alias of its own server (mDNS / Tailscale / LAN IP) and the WS
+        // origin check stays happy. Added entries connect to the typed host.
         const pageHost = typeof window !== 'undefined' && window.location?.host
           ? window.location.host
           : '';
-        const hostOnly = pageHost || serverUrl.trim().replace(/^(wss?|https?):\/\//i, '');
+        const hostOnly = entry.useOrigin && pageHost
+          ? pageHost
+          : entry.host.trim().replace(/^(wss?|https?):\/\//i, '');
         if (!hostOnly) return;
 
         const scheme = typeof window !== 'undefined' && window.location.protocol === 'https:'
@@ -278,11 +374,17 @@ export const useAppStore = create<AppState>()(
         console.log('[PersaLink] connecting to', wsUrl);
 
         if (wsClient) wsClient.disconnect();
+        set({ serverUrl: hostOnly });
 
+        const gen = ++wsGeneration;
         wsClient = new WSClient({
           url: wsUrl,
-          onMessage: (msg) => handleServerMessage(msg, set, get),
+          onMessage: (msg) => {
+            if (gen !== wsGeneration) return; // superseded socket — drop
+            handleServerMessage(msg, set, get);
+          },
           onStateChange: (state) => {
+            if (gen !== wsGeneration) return;
             set({ connectionState: state });
             if (state === 'disconnected') {
               set({ view: 'connect', attachedSession: null });
@@ -296,16 +398,20 @@ export const useAppStore = create<AppState>()(
       },
 
       disconnect: () => {
+        // Sign-out semantics for the ACTIVE server: drop the socket and its
+        // saved token; other servers' tokens are untouched.
         wsClient?.disconnect();
         wsClient = null;
+        wsGeneration++;
         clearCredentials().catch(() => {});
-        set({
+        set((s) => ({
           connectionState: 'disconnected',
           view: 'connect',
           attachedSession: null,
           serverName: null,
           authToken: null,
-        });
+          servers: s.servers.map((e) => e.id === s.activeServerId ? { ...e, authToken: null } : e),
+        }));
       },
 
       authenticate: (password, tokenName) => {
@@ -581,11 +687,14 @@ export const useAppStore = create<AppState>()(
         if (!verified) return false;
         const creds = await getCredentials();
         if (creds) {
-          set({
+          set((s) => ({
             biometricLocked: false,
             authToken: creds.token,
             deviceName: creds.deviceName,
-          });
+            // Keychain holds the active server's token — sync it back onto
+            // the entry so a reconnect after unlock uses it.
+            servers: s.servers.map((e) => e.id === s.activeServerId ? { ...e, authToken: creds.token } : e),
+          }));
           return true;
         }
         return false;
@@ -593,7 +702,34 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'persalink-storage',
+      version: 1,
+      // v0 → v1: lift the scalar serverUrl/authToken into the server registry.
+      // useOrigin is true whenever a page host exists because that IS the old
+      // behavior — connect() always preferred window.location.host, whatever
+      // the stored url said. Nobody re-authenticates, nobody gets pointed at
+      // a host they weren't already using.
+      migrate: (persisted: unknown, version: number) => {
+        const p = persisted as Record<string, unknown> & { servers?: ServerEntry[] };
+        if (version === 0 && p && !p.servers && (p.serverUrl || p.authToken)) {
+          const pageHost = typeof window !== 'undefined' ? window.location.host : '';
+          const host = typeof p.serverUrl === 'string' ? p.serverUrl.trim() : '';
+          const entry: ServerEntry = {
+            id: crypto.randomUUID(),
+            label: host || pageHost || 'My server',
+            host: host || pageHost,
+            useOrigin: !!pageHost,
+            authToken: typeof p.authToken === 'string' ? p.authToken : null,
+            serverName: null,
+            lastConnectedAt: null,
+          };
+          p.servers = [entry];
+          p.activeServerId = entry.id;
+        }
+        return p;
+      },
       partialize: (state) => ({
+        servers: state.servers,
+        activeServerId: state.activeServerId,
         serverUrl: state.serverUrl,
         authToken: state.authToken,
         deviceName: state.deviceName,
@@ -631,15 +767,19 @@ function handleServerMessage(
       // socket blipped. Only land on home from a pre-auth view (first login).
       const preAuthViews = ['connect', 'auth', 'locked'];
       const currentView = get().view;
-      set({
+      set((s) => ({
         connectionState: 'authenticated',
         serverName: msg.serverName,
         view: preAuthViews.includes(currentView) ? 'home' : currentView,
         authError: null,
         // Arm the auto-reattach handshake. If the persisted session still
         // exists in the upcoming sessions.list, we'll attach to it.
-        pendingAutoAttach: get().lastActiveSessionId,
-      });
+        pendingAutoAttach: s.lastActiveSessionId,
+        // Reflect the successful auth onto the active registry entry.
+        servers: s.servers.map((e) => e.id === s.activeServerId
+          ? { ...e, serverName: msg.serverName, lastConnectedAt: Date.now(), ...(msg.token ? { authToken: msg.token } : {}) }
+          : e),
+      }));
       void checkForUpdate();
       if (msg.token) {
         set({ authToken: msg.token });
@@ -653,7 +793,12 @@ function handleServerMessage(
     }
 
     case 'auth.failed':
-      set({ authError: msg.message, authToken: null, view: 'auth' });
+      // This server's token is bad — clear it here AND on its registry entry
+      // (other servers keep theirs).
+      set((s) => ({
+        authError: msg.message, authToken: null, view: 'auth',
+        servers: s.servers.map((e) => e.id === s.activeServerId ? { ...e, authToken: null } : e),
+      }));
       break;
 
     case 'sessions.list': {

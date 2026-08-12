@@ -197,7 +197,7 @@ function ProfileRow({ profile }: { profile: Profile }) {
 // ============================================================================
 
 export function Sidebar() {
-  const { sessions, profiles, serverName, openSettings, discoverProfiles, createSession, editProfile } = useAppStore();
+  const { sessions, profiles, serverName, openSettings, openServers, discoverProfiles, createSession, editProfile } = useAppStore();
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
   const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
 
@@ -225,7 +225,18 @@ export function Sidebar() {
         <div className="flex items-center justify-between mb-2">
           <div>
             <h1 className="text-sm font-bold text-zinc-100">PersaLink</h1>
-            <p className="text-[10px] text-zinc-600">{serverName || 'Connected'}</p>
+            {/* Server chip — opens the Servers screen (multi-server switch) */}
+          <button
+            onClick={openServers}
+            className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+            title="Switch server"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+            {serverName || 'Connected'}
+            <svg className="w-2.5 h-2.5 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+            </svg>
+          </button>
           </div>
           <div className="flex gap-1">
             <button
