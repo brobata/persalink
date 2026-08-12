@@ -82,6 +82,11 @@ interface AppState {
   // session.links response arrives, cleared on close/detach).
   sessionLinks: string[] | null;
 
+  // True when the server is serving a newer client bundle than the one
+  // running — drives the "Update ready" pill. A plain reload picks it up
+  // (the SW is network-first on the shell).
+  updateAvailable: boolean;
+
   // Toast notifications — server-side errors and other transient messages.
   // Without this, a 'window.create' or 'profile.save' failure on the server
   // produces no visible signal on the client.
@@ -150,6 +155,22 @@ interface AppState {
 let wsClient: WSClient | null = null;
 let switchDebounce: ReturnType<typeof setTimeout> | null = null;
 
+// Ask the server which client build it's serving; flag when it's newer than
+// the one running. Fired after every auth.ok — reconnects happen right after a
+// deploy (the server restart drops the socket), so the pill appears within
+// seconds of an update landing without any polling. Any failure (dev server
+// has no version.json, offline, old server) just means no pill.
+async function checkForUpdate(): Promise<void> {
+  try {
+    const res = await fetch('/version.json', { cache: 'no-store' });
+    if (!res.ok) return;
+    const { build } = await res.json() as { build?: string };
+    if (build && typeof __BUILD_ID__ !== 'undefined' && build !== __BUILD_ID__) {
+      useAppStore.setState({ updateAvailable: true });
+    }
+  } catch { /* offline or dev — check again on next auth */ }
+}
+
 // Sessions the user just killed locally. The server snapshots tmux per WS
 // message and its handlers interleave (ws.on('message') is async, not awaited
 // between messages), so an older sessions.list snapshot — taken before a kill
@@ -215,6 +236,7 @@ export const useAppStore = create<AppState>()(
       showTabPicker: false,
       actionResult: null,
       sessionLinks: null,
+      updateAvailable: false,
       notifications: [],
       lastActiveSessionId: null,
       pendingAutoAttach: null,
@@ -618,6 +640,7 @@ function handleServerMessage(
         // exists in the upcoming sessions.list, we'll attach to it.
         pendingAutoAttach: get().lastActiveSessionId,
       });
+      void checkForUpdate();
       if (msg.token) {
         set({ authToken: msg.token });
         // Save token to device keychain for biometric unlock

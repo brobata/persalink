@@ -10,6 +10,7 @@ import { ProfileEditor } from './components/ProfileEditor';
 import { Sidebar } from './components/Sidebar';
 import { GridLayout } from './components/GridLayout';
 import { ToastStack } from './components/Toast';
+import { UpdatePill } from './components/UpdatePill';
 import { useLayoutStore } from './stores/layoutStore';
 
 // ============================================================================
@@ -139,6 +140,7 @@ export function App() {
         </div>
         {isReconnecting && <ReconnectingOverlay />}
         <ToastStack />
+        <UpdatePill />
       </div>
     );
   }
@@ -152,6 +154,7 @@ export function App() {
       {view === 'profile-editor' && <ProfileEditor />}
       {isReconnecting && <ReconnectingOverlay />}
       <ToastStack />
+      <UpdatePill />
     </div>
   );
 }

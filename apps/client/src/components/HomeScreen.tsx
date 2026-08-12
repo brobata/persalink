@@ -74,18 +74,26 @@ function SessionPill({ session }: { session: SessionInfo }) {
             style={{ backgroundColor: session.profileColor || '#22c55e' }}
           />
         )}
-        <span className="flex-1 text-sm font-medium text-zinc-100 truncate">
-          {session.name || session.profileName}
-        </span>
-        {session.attention === 'waiting' && (
-          <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full" title="Waiting for your input">needs you</span>
-        )}
-        {session.attention === 'error' && (
-          <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" title="Recent error" />
-        )}
-        {session.unseen && session.attention !== 'waiting' && session.attention !== 'error' && (
-          <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="New output" />
-        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="flex-1 text-sm font-medium text-zinc-100 truncate">
+              {session.name || session.profileName}
+            </span>
+            {session.attention === 'waiting' && (
+              <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full" title="Waiting for your input">needs you</span>
+            )}
+            {session.attention === 'error' && (
+              <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" title="Recent error" />
+            )}
+            {session.unseen && session.attention !== 'waiting' && session.attention !== 'error' && (
+              <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="New output" />
+            )}
+          </div>
+          {/* Live peek at the pane — triage from the list without attaching */}
+          {session.preview && (
+            <div className="text-[11px] text-zinc-600 font-mono truncate mt-0.5">{session.preview}</div>
+          )}
+        </div>
         {session.profileColor && (
           <div
             className="shrink-0 w-1.5 h-4 rounded-full"

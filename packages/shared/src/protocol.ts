@@ -95,6 +95,9 @@ export const SessionInfoSchema = z.object({
    *  notifications. 'working' = busy; 'idle' = at a ready prompt; 'waiting' =
    *  blocked on a permission/approval prompt; 'error' = recent error output. */
   attention: z.enum(['working', 'idle', 'waiting', 'error']).optional(),
+  /** Last non-empty line of visible pane output — lets session lists show
+   *  what's happening without attaching. */
+  preview: z.string().optional(),
 });
 
 export const HealthStatusSchema = z.object({

@@ -31,12 +31,27 @@ const TERMINAL_KEYS: Array<{ label: string; seq: string }> = [
   { label: 'End', seq: '\x1b[F' },
 ];
 
-function TerminalKeyBar({ sendInput }: { sendInput: (data: string) => void }) {
+function TerminalKeyBar({ sendInput, ctrlArmed, onToggleCtrl }: {
+  sendInput: (data: string) => void;
+  ctrlArmed: boolean;
+  onToggleCtrl: () => void;
+}) {
   return (
     <div
       className="shrink-0 flex gap-1 px-2 py-1.5 bg-zinc-900 border-t border-zinc-800 overflow-x-auto"
       style={{ scrollbarWidth: 'none' }}
     >
+      {/* Sticky Ctrl — arm it, then type any letter on the soft keyboard to
+          send that Ctrl-combo (soft keyboards have no Ctrl key, and a fixed
+          ^X list can never cover them all). Disarms after one use. */}
+      <button
+        onPointerDown={(e) => { e.preventDefault(); onToggleCtrl(); }}
+        className={`shrink-0 min-w-[44px] px-2 py-2 text-xs font-mono rounded-md transition-colors select-none ${
+          ctrlArmed ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-200 active:bg-zinc-600'
+        }`}
+      >
+        Ctrl
+      </button>
       {TERMINAL_KEYS.map((k) => (
         <button
           key={k.label}
@@ -295,12 +310,20 @@ function SwitcherRow({ s, active, onPick, onClose }: {
         className="flex-1 min-w-0 flex items-center gap-3 px-3 py-3 text-left"
       >
         <span className="text-base shrink-0">{s.profileIcon || '🖥️'}</span>
-        <span className="flex-1 min-w-0 truncate text-sm text-zinc-100">{s.name || s.profileName || s.id}</span>
-        {s.attention === 'working' && <span className="shrink-0 text-[10px] text-sky-300">working…</span>}
-        {s.attention === 'waiting' && <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full">needs you</span>}
-        {s.attention === 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />}
-        {s.unseen && s.attention !== 'waiting' && s.attention !== 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
-        {active && <span className="shrink-0 text-[10px] text-zinc-500">current</span>}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="flex-1 min-w-0 truncate text-sm text-zinc-100">{s.name || s.profileName || s.id}</span>
+            {s.attention === 'working' && <span className="shrink-0 text-[10px] text-sky-300">working…</span>}
+            {s.attention === 'waiting' && <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full">needs you</span>}
+            {s.attention === 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />}
+            {s.unseen && s.attention !== 'waiting' && s.attention !== 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
+            {active && <span className="shrink-0 text-[10px] text-zinc-500">current</span>}
+          </div>
+          {/* Live peek at the pane — see what's happening before switching */}
+          {s.preview && (
+            <div className="text-[10px] text-zinc-600 font-mono truncate mt-0.5">{s.preview}</div>
+          )}
+        </div>
       </button>
       <button
         onClick={() => { setEditName(s.name || s.profileName || ''); setEditing(true); }}
@@ -371,6 +394,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
   const [uploading, setUploading] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  // Sticky Ctrl (key bar): state drives the button highlight, the ref is what
+  // the xterm onData closure reads — it mounts once and never re-binds.
+  const [ctrlArmed, setCtrlArmed] = useState(false);
+  const ctrlArmedRef = useRef(false);
+  const toggleCtrl = useCallback(() => {
+    const next = !ctrlArmedRef.current;
+    ctrlArmedRef.current = next;
+    setCtrlArmed(next);
+  }, []);
   // True when the user has scrolled the pane up (possibly into tmux copy-mode);
   // surfaces the "jump to live" button. Typing auto-exits copy-mode server-side.
   const [scrolledUp, setScrolledUp] = useState(false);
@@ -814,7 +846,17 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         }
       }
 
-      const forward = (chunk: string) => sendInput(autoSpacer.process(chunk));
+      const forward = (chunk: string) => {
+        // Sticky Ctrl from the key bar: the next typed letter becomes its
+        // control code (Ctrl+A…Z), then the modifier disarms.
+        if (ctrlArmedRef.current && /^[a-zA-Z]$/.test(chunk)) {
+          ctrlArmedRef.current = false;
+          setCtrlArmed(false);
+          sendInput(String.fromCharCode(chunk.toUpperCase().charCodeAt(0) - 64));
+          return;
+        }
+        sendInput(autoSpacer.process(chunk));
+      };
       if (data.length > sentSoFar.length && sentSoFar && data.startsWith(sentSoFar)) {
         const delta = data.slice(sentSoFar.length);
         if (delta) forward(delta);
@@ -1348,7 +1390,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       </div>
 
       {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
-      {!sidebarVisible && showKeyBar && <TerminalKeyBar sendInput={sendInput} />}
+      {!sidebarVisible && showKeyBar && (
+        <TerminalKeyBar sendInput={sendInput} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl} />
+      )}
 
       {/* Session quick-switcher — mobile only */}
       {!sidebarVisible && showSwitcher && (

@@ -90,6 +90,9 @@ const lastSeen = new Map<string, number>();
 // Latest attention state per session, refreshed by the monitor loop and folded
 // into every sessions.list so badges/notifications stay consistent.
 const attentionCache = new Map<string, Attention>();
+// Last non-empty visible-pane line per session, refreshed by the same monitor
+// captures that feed attention — zero extra tmux calls.
+const previewCache = new Map<string, string>();
 // Tmux activity epoch we last classified a session at — lets the monitor skip
 // re-capturing panes that haven't changed (every state change bumps activity).
 const lastClassifiedActivity = new Map<string, number>();
@@ -104,6 +107,7 @@ function enrichSessions(sessions: SessionInfo[]): SessionInfo[] {
     ...s,
     unseen: !s.attached && (s.activityAt ?? 0) > (lastSeen.get(s.id) ?? 0),
     attention: attentionCache.get(s.id),
+    preview: previewCache.get(s.id),
   }));
 }
 
@@ -1065,12 +1069,22 @@ function startSessionMonitor(): void {
         const prev = attentionCache.get(s.id);
         attentionCache.set(s.id, next);
         if (prev && prev !== next) onAttentionTransition(s, prev, next);
+        // Preview = last visible line with real content, from the capture we
+        // already paid for. Lines without alphanumerics (blank, box-drawing
+        // borders of TUIs) don't count.
+        const contentLine = pane
+          .split('\n')
+          .reverse()
+          .map((l) => l.trim())
+          .find((l) => /[a-zA-Z0-9]/.test(l));
+        previewCache.set(s.id, (contentLine ?? '').slice(0, 120));
       }
       // Drop tracking state for sessions that no longer exist.
       const live = new Set(sessions.map((s) => s.id));
       for (const id of [...attentionCache.keys()]) {
         if (!live.has(id)) {
           attentionCache.delete(id);
+          previewCache.delete(id);
           lastClassifiedActivity.delete(id);
           lastSeen.delete(id);
         }
