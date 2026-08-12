@@ -14,6 +14,9 @@ export type Layout = 'single' | 'split-h' | 'split-v' | '2x2';
 export interface PaneSlot {
   id: string;
   sessionId: string | null;
+  /** Which server the session lives on. null = legacy assignment from before
+   *  multi-server; consumers treat it as "the active server". */
+  serverId: string | null;
 }
 
 interface LayoutState {
@@ -25,15 +28,15 @@ interface LayoutState {
 
   setLayout: (layout: Layout) => void;
   setFocusedPane: (id: string) => void;
-  assignSession: (paneId: string, sessionId: string) => void;
+  assignSession: (paneId: string, sessionId: string, serverId?: string | null) => void;
   clearPane: (paneId: string) => void;
-  /** Vacate every pane currently holding this session (e.g. after a kill). */
-  clearSession: (sessionId: string) => void;
-  /** Drop any pane assignment whose session is no longer live. Called whenever
-   *  a fresh sessions list arrives so killed / externally-gone sessions don't
-   *  linger in a pane (or get silently re-attached to a name-reused successor
-   *  after a reopen). */
-  reconcile: (liveSessionIds: string[]) => void;
+  /** Vacate every pane currently holding this session ON this server (session
+   *  names collide across servers — pl-claude exists on every box). */
+  clearSession: (sessionId: string, serverId?: string | null) => void;
+  /** Drop any pane assignment whose session is no longer live ON the given
+   *  server. Panes bound to other servers are none of this list's business —
+   *  their own sockets receive their own sessions.list. */
+  reconcile: (liveSessionIds: string[], serverId?: string | null) => void;
   /** Put a newly created session into the focused pane (or first empty). */
   autoAssign: (sessionId: string) => void;
   /** Mark a pane to receive the next newly-created session. */
@@ -50,7 +53,7 @@ function paneCountFor(layout: Layout): number {
 function reshapePanes(count: number, existing: PaneSlot[]): PaneSlot[] {
   const result: PaneSlot[] = [];
   for (let i = 0; i < count; i++) {
-    result.push(existing[i] ?? { id: `pane-${i}`, sessionId: null });
+    result.push(existing[i] ?? { id: `pane-${i}`, sessionId: null, serverId: null });
   }
   return result;
 }
@@ -59,7 +62,7 @@ export const useLayoutStore = create<LayoutState>()(
   persist(
     (set, get) => ({
       layout: 'single',
-      panes: [{ id: 'pane-0', sessionId: null }],
+      panes: [{ id: 'pane-0', sessionId: null, serverId: null }],
       focusedPaneId: 'pane-0',
       pendingAssignPaneId: null,
 
@@ -73,13 +76,16 @@ export const useLayoutStore = create<LayoutState>()(
 
       setFocusedPane: (id) => set({ focusedPaneId: id }),
 
-      assignSession: (paneId, sessionId) => set((state) => ({
-        // Move (not copy) — if this session was in another pane, vacate it
-        // first. Two xterm clients on one tmux session fight over resize and
-        // produce corrupted output.
+      assignSession: (paneId, sessionId, serverId = null) => set((state) => ({
+        // Move (not copy) — if this (server, session) pair was in another
+        // pane, vacate it first. Two xterm clients on one tmux session fight
+        // over resize and produce corrupted output. Same name on a DIFFERENT
+        // server is a different session and may stay.
         panes: state.panes.map(p => {
-          if (p.id === paneId) return { ...p, sessionId };
-          if (p.sessionId === sessionId) return { ...p, sessionId: null };
+          if (p.id === paneId) return { ...p, sessionId, serverId };
+          if (p.sessionId === sessionId && (p.serverId ?? serverId) === (serverId ?? p.serverId)) {
+            return { ...p, sessionId: null };
+          }
           return p;
         }),
         focusedPaneId: paneId,
@@ -89,18 +95,25 @@ export const useLayoutStore = create<LayoutState>()(
         panes: state.panes.map(p => (p.id === paneId ? { ...p, sessionId: null } : p)),
       })),
 
-      clearSession: (sessionId) => set((state) => {
-        if (!state.panes.some(p => p.sessionId === sessionId)) return state;
+      clearSession: (sessionId, serverId = null) => set((state) => {
+        // Legacy panes (serverId null) are active-server panes — they match.
+        const matches = (p: PaneSlot) =>
+          p.sessionId === sessionId && (p.serverId ?? serverId) === serverId;
+        if (!state.panes.some(matches)) return state;
         return {
-          panes: state.panes.map(p => (p.sessionId === sessionId ? { ...p, sessionId: null } : p)),
+          panes: state.panes.map(p => (matches(p) ? { ...p, sessionId: null } : p)),
         };
       }),
 
-      reconcile: (liveSessionIds) => set((state) => {
+      reconcile: (liveSessionIds, serverId = null) => set((state) => {
         const live = new Set(liveSessionIds);
-        if (state.panes.every(p => !p.sessionId || live.has(p.sessionId))) return state;
+        // A pane is subject to this list only if it's bound to this server
+        // (or is a legacy null-server pane, which follows the active server).
+        const dead = (p: PaneSlot) =>
+          !!p.sessionId && (p.serverId ?? serverId) === serverId && !live.has(p.sessionId);
+        if (!state.panes.some(dead)) return state;
         return {
-          panes: state.panes.map(p => (p.sessionId && !live.has(p.sessionId) ? { ...p, sessionId: null } : p)),
+          panes: state.panes.map(p => (dead(p) ? { ...p, sessionId: null } : p)),
         };
       }),
 
@@ -129,10 +142,11 @@ export const useLayoutStore = create<LayoutState>()(
         if (!state?.panes) return;
         const seen = new Set<string>();
         state.panes = state.panes.map(p => {
-          if (!p.sessionId) return p;
-          if (seen.has(p.sessionId)) return { ...p, sessionId: null };
-          seen.add(p.sessionId);
-          return p;
+          if (!p.sessionId) return { ...p, serverId: p.serverId ?? null };
+          const key = `${p.serverId ?? ''}:${p.sessionId}`;
+          if (seen.has(key)) return { ...p, sessionId: null, serverId: p.serverId ?? null };
+          seen.add(key);
+          return { ...p, serverId: p.serverId ?? null };
         });
       },
     }

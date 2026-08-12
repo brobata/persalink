@@ -462,7 +462,7 @@ export const useAppStore = create<AppState>()(
         // both leave the killed session visible without this. A racing/stale
         // sessions.list can also try to resurrect it; guardKilled blocks that.
         guardKilled(sessionId);
-        useLayoutStore.getState().clearSession(sessionId);
+        useLayoutStore.getState().clearSession(sessionId, get().activeServerId);
         if (get().attachedSession?.id === sessionId) {
           set({ attachedSession: null, view: 'home', windows: [], activeTabId: null, switchingToId: null });
         }
@@ -604,7 +604,7 @@ export const useAppStore = create<AppState>()(
         const { sessions, activeTabId } = get();
         wsClient?.send({ type: 'session.kill', sessionId });
         guardKilled(sessionId);
-        useLayoutStore.getState().clearSession(sessionId);
+        useLayoutStore.getState().clearSession(sessionId, get().activeServerId);
         set({ sessions: sessions.filter(x => x.id !== sessionId) });
         if (activeTabId === sessionId) {
           const remaining = sessions.filter(s => s.id !== sessionId);
@@ -809,7 +809,7 @@ function handleServerMessage(
       // Authoritative reconcile: drop any persisted desktop pane assignment
       // whose session is no longer live. Without this, killed sessions (or a
       // name-reused successor after reopen) keep showing in a pane.
-      useLayoutStore.getState().reconcile(live.map((s) => s.id));
+      useLayoutStore.getState().reconcile(live.map((s) => s.id), get().activeServerId);
       // Consume the auto-reattach handshake if it's armed and the target
       // session is still alive. One-shot: clear pendingAutoAttach so we
       // never re-attach on subsequent broadcasts.

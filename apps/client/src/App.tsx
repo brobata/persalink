@@ -85,7 +85,7 @@ export function App() {
       known = new Set(ids);
       const { pendingAssignPaneId, assignSession, clearPendingAssign } = useLayoutStore.getState();
       if (pendingAssignPaneId && newIds.length > 0) {
-        assignSession(pendingAssignPaneId, newIds[newIds.length - 1]);
+        assignSession(pendingAssignPaneId, newIds[newIds.length - 1], useAppStore.getState().activeServerId);
         clearPendingAssign();
       }
     });

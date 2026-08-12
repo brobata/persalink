@@ -1,6 +1,6 @@
 # Multi-Server PersaLink
 
-**Status:** Phase 1 built 2026-08-12 · Phase 2 planned
+**Status:** Phase 1 built 2026-08-12 · Phase 2 built 2026-08-12
 **Origin:** archplan session 2026-08-01 ("can PersaLink have local terminals?" → every
 machine you want terminals on runs a server; the client learns about the fleet).
 
@@ -47,12 +47,24 @@ this feature worth having.
   same-origin only); the failure must be explained, never a silent spinner.
   (Android TWA sends the server's own origin — unaffected.)
 
-### Phase 2 — per-pane server selection (desktop) — NOT BUILT
+### Phase 2 — per-pane server selection (desktop) — BUILT
 
-Panes already own independent, self-authenticating WSClients (`TerminalPane`), so:
-give each pane a `serverId`, resolve host+token from the registry, pane header gets a
-server picker + server-colored dot. Dev-box session next to laptop session in one grid.
-Session-id keys in layoutStore become `(serverId, sessionId)` at this point.
+- `PaneSlot.serverId` (null = legacy → follows active server). assignSession/
+  clearSession/reconcile are `(serverId, sessionId)`-scoped; reconcile only touches
+  panes bound to the reporting server; a remote pane vacates its own slot on
+  `session.ended` (its socket is the only thing that knows).
+- GridLayout resolves each pane's host+token from the registry; non-active panes get
+  a sky-blue server badge in the header.
+- The pane SessionPicker grows server chips; a non-active server's sessions/profiles
+  are fetched over a **throwaway socket** (`lib/remoteServer.ts`: open → auth.token →
+  snapshot → close; also `remoteCreateSession` which detaches before closing so the
+  new session survives for the pane). No-token servers get a "sign in once from the
+  Servers screen" message.
+- E2E-verified with two real local servers (ports 9878/9879, separate config dirs,
+  cross-origin allowlist exercised): one tmux session attached through BOTH servers
+  simultaneously — `tmux list-clients` showed 2 bridges. Also fixed en route: the
+  empty-pane "Pick a session" overlay had no z-index and could lose the stacking
+  fight to xterm's canvas layers (button unclickable).
 
 ### Deferred / ruled
 

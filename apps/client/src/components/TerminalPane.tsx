@@ -26,6 +26,9 @@ interface TerminalPaneProps {
   sessionId: string | null;
   serverUrl: string;
   authToken: string;
+  /** Label shown when this pane is bound to a NON-active server (multi-server
+   *  phase 2) — null for active-server panes. */
+  serverBadge?: string | null;
   isFocused: boolean;
   onFocus: () => void;
   onClear: () => void;
@@ -85,7 +88,7 @@ function WindowTab({ w, onSelect, onRename }: {
 }
 
 export function TerminalPane({
-  paneId, paneNumber, sessionId, serverUrl, authToken, isFocused, onFocus, onClear, onPickSession,
+  paneId, paneNumber, sessionId, serverUrl, authToken, serverBadge = null, isFocused, onFocus, onClear, onPickSession,
 }: TerminalPaneProps) {
   const [attachedSession, setAttachedSession] = useState<SessionInfo | null>(null);
   const [windows, setWindows] = useState<TmuxWindowInfo[]>([]);
@@ -113,6 +116,8 @@ export function TerminalPane({
   // re-renders that only change parent callbacks (e.g. focus shifting).
   const onFocusRef = useRef(onFocus);
   useEffect(() => { onFocusRef.current = onFocus; }, [onFocus]);
+  const onClearRef = useRef(onClear);
+  useEffect(() => { onClearRef.current = onClear; }, [onClear]);
 
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
@@ -253,10 +258,13 @@ export function TerminalPane({
             if (msg.sessionId === sessionIdRef.current) {
               setAttachedSession(null);
               setWindows([]);
-              // Clear the dead session's last frame immediately. The pane slot
-              // is reconciled to null on the next sessions.list, but resetting
-              // here avoids showing a stale screen in the gap.
+              // Clear the dead session's last frame immediately, and vacate
+              // the pane slot ourselves. Active-server panes would also be
+              // reconciled by the store's sessions.list, but a pane bound to
+              // a REMOTE server has no reconcile — its own socket is the only
+              // thing that knows the session died.
               termRef.current?.reset();
+              onClearRef.current();
             }
             break;
           case 'session.detached':
@@ -711,6 +719,15 @@ export function TerminalPane({
         >
           {paneNumber}
         </span>
+        {serverBadge && (
+          <span
+            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sky-500/15 text-sky-300"
+            title={`Session on ${serverBadge}`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+            {serverBadge}
+          </span>
+        )}
         {label ? (
           <>
             {renamingSession ? (
@@ -893,7 +910,10 @@ export function TerminalPane({
           </button>
         )}
         {!attachedSession && (
-          <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/95 pointer-events-auto">
+          // z-10: xterm's canvas layers carry explicit z-indexes, so without
+          // one this overlay can lose the stacking fight and the button
+          // becomes unclickable (canvas intercepts the pointer).
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/95 pointer-events-auto">
             <button
               onClick={onPickSession}
               className="px-4 py-2 text-xs text-zinc-400 border border-dashed border-zinc-700 rounded hover:border-zinc-500 hover:text-zinc-200 transition-colors"
