@@ -1,0 +1,80 @@
+# @file release.yml
+# @description Tag-triggered release: `git tag vX.Y.Z && git push --tags` builds
+#   server + client, stages all artifacts (scripts/release/stage.sh), smoke-tests
+#   the staged npm package on a clean runner, publishes to npm (skipped with a
+#   warning until the NPM_TOKEN secret exists), and creates the GitHub release
+#   with tarball/zip/setup.sh/checksums. Replaces the hand-assembled process
+#   used for v1.0.1–v1.0.3.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stage release artifacts
+        run: bash scripts/release/stage.sh "$GITHUB_REF_NAME"
+
+      # Prove the staged npm package actually installs and boots on a machine
+      # that isn't the dev box: compile node-pty from a clean dir, launch the
+      # server, and require a 200 from /health. Catches missing files in the
+      # staged package before anything is published.
+      - name: Smoke-test staged package
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q tmux
+          cd dist-release/npm
+          npm install --omit=dev --no-package-lock --loglevel=error
+          node bin/persalink.js &
+          SERVER_PID=$!
+          for i in $(seq 1 15); do
+            sleep 1
+            if curl -fsS http://127.0.0.1:9877/health > /dev/null 2>&1; then
+              echo "Health check passed."
+              kill "$SERVER_PID"
+              exit 0
+            fi
+          done
+          echo "Server never became healthy" >&2
+          kill "$SERVER_PID" || true
+          exit 1
+
+      - name: Publish to npm
+        if: env.NPM_TOKEN != ''
+        run: npm publish dist-release/npm --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: npm publish skipped
+        if: env.NPM_TOKEN == ''
+        run: echo "::warning::NPM_TOKEN secret is not set — npm publish was skipped. Add a granular token scoped to the persalink package under repo Settings → Secrets, then re-run or re-tag."
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist-release/persalink-$GITHUB_REF_NAME.tar.gz" \
+            "dist-release/persalink-$GITHUB_REF_NAME.zip" \
+            dist-release/setup.sh \
+            dist-release/checksums.txt \
+            --title "PersaLink $GITHUB_REF_NAME" \
+            --notes-file dist-release/notes.md \
+            --generate-notes
