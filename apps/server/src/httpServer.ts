@@ -73,6 +73,7 @@ export function createHttpHandler(
   staticDir: string,
   getServerInfo?: () => ServerInfo,
   validateAuthToken?: (token: string) => boolean,
+  getPinnedProfiles?: () => Array<{ id: string; name: string }>,
 ): http.RequestListener {
   const securityHeaders = getSecurityHeaders();
 
@@ -118,6 +119,30 @@ export function createHttpHandler(
     // File upload endpoint (requires authentication)
     if (urlPath === '/api/upload' && req.method === 'POST') {
       handleUpload(req, res, validateAuthToken);
+      return;
+    }
+
+    // Dynamic manifest: the static manifest plus app shortcuts for pinned
+    // profiles (Android long-press the icon → jump straight into a session
+    // via the /?profile= deep link the client already understands).
+    if (urlPath === '/manifest.webmanifest' && req.method === 'GET') {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(staticDir, 'manifest.webmanifest'), 'utf-8'));
+        const pinned = getPinnedProfiles ? getPinnedProfiles().slice(0, 4) : [];
+        if (pinned.length > 0) {
+          manifest.shortcuts = pinned.map((p) => ({
+            name: p.name,
+            short_name: p.name.slice(0, 12),
+            url: `/?profile=${encodeURIComponent(p.id)}`,
+            icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }],
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'no-cache' });
+        res.end(JSON.stringify(manifest));
+      } catch {
+        res.writeHead(404);
+        res.end('Not Found');
+      }
       return;
     }
 

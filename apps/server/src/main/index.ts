@@ -1245,7 +1245,12 @@ async function main(): Promise<void> {
   };
 
   const server = http.createServer(
-    createHttpHandler(staticDir, getServerInfo, validateAuthToken),
+    createHttpHandler(
+      staticDir,
+      getServerInfo,
+      validateAuthToken,
+      () => profileManager.list().filter((p) => p.pinned).map((p) => ({ id: p.id, name: p.name })),
+    ),
   );
 
   setupWebSocket(server);

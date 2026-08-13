@@ -357,7 +357,9 @@ export function HomeScreen() {
               Live ({sessions.length})
             </h2>
             <div className="space-y-2">
-              {sessions.map((session) => (
+              {/* Most recently active first — the session you were just in is
+                  the one you're most likely reaching for. */}
+              {[...sessions].sort((a, b) => (b.activityAt ?? 0) - (a.activityAt ?? 0)).map((session) => (
                 <SessionPill key={session.id} session={session} />
               ))}
             </div>

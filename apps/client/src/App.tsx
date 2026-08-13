@@ -56,6 +56,12 @@ export function App() {
         useAppStore.setState({ lastActiveSessionId: target });
         window.history.replaceState({}, '', window.location.pathname);
       }
+      // PWA shortcut deep link: long-press app icon → pinned profile.
+      const profile = params.get('profile');
+      if (profile) {
+        useAppStore.setState({ pendingProfileLaunch: profile });
+        window.history.replaceState({}, '', window.location.pathname);
+      }
     } catch { /* no-op */ }
     const { serverUrl, authToken, connectionState: cs } = useAppStore.getState();
     if (serverUrl && authToken && cs === 'disconnected') {

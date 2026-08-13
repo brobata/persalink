@@ -89,6 +89,10 @@ interface AppState {
   // confirms the session still exists.
   lastActiveSessionId: string | null;
   pendingAutoAttach: string | null;
+  /** Profile deep link (/?profile=<id> — PWA shortcuts). Consumed one-shot on
+   *  the first post-auth sessions.list: attach the profile's live session or
+   *  create one. */
+  pendingProfileLaunch: string | null;
 
   // Session tabs (derived from live sessions when in terminal view)
   activeTabId: string | null;
@@ -298,6 +302,7 @@ export const useAppStore = create<AppState>()(
       notifications: [],
       lastActiveSessionId: null,
       pendingAutoAttach: null,
+      pendingProfileLaunch: null,
       vapidPublicKey: null,
       notificationsEnabled: false,
 
@@ -879,6 +884,16 @@ function handleServerMessage(
         const stillAlive = live.some((s) => s.id === pendingAutoAttach);
         set({ pendingAutoAttach: null });
         if (stillAlive) get().attachSession(pendingAutoAttach);
+      }
+      // Profile deep link (PWA shortcut): attach the profile's live session
+      // if one exists, otherwise start one. One-shot, and it outranks the
+      // last-active handshake (an explicit shortcut tap is explicit intent).
+      const { pendingProfileLaunch } = get();
+      if (pendingProfileLaunch) {
+        set({ pendingProfileLaunch: null, pendingAutoAttach: null });
+        const existing = live.find((s) => s.profileId === pendingProfileLaunch);
+        if (existing) get().attachSession(existing.id);
+        else get().createSession(pendingProfileLaunch);
       }
       // Dead-session reconciliation (mobile has no pane-reconcile to lean on
       // like desktop does). If we're still showing a session that has vanished
