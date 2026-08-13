@@ -33,6 +33,32 @@ const TERMINAL_KEYS: Array<{ label: string; seq: string }> = [
   { label: 'End', seq: '\x1b[F' },
 ];
 
+// Android-style selection handle: a draggable teardrop anchored below one end
+// of the in-terminal selection. Pointer-captured so a drag never scrolls the
+// terminal underneath; the drag point is offset above the fingertip so the
+// finger doesn't hide what it's selecting.
+function SelHandle({ x, y, onMove }: {
+  x: number;
+  y: number;
+  onMove: (clientX: number, clientY: number) => void;
+}) {
+  return (
+    <div
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (e.buttons === 0) return;
+        onMove(e.clientX, e.clientY - 28);
+      }}
+      className="absolute z-30 w-5 h-5 -ml-2.5 rounded-full rounded-tl-none bg-sky-400 border-2 border-sky-100 shadow-lg"
+      style={{ left: x, top: y, touchAction: 'none' }}
+    />
+  );
+}
+
 // Space that doubles as a trackpad: tap = space, hold + slide = arrow keys —
 // Termius's "hold Space and slide" alternative cursor control. Trackpad
 // semantics (one arrow per step of travel), distinct from the hold-joystick
@@ -515,6 +541,21 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const openSelectTextRef = useRef(openSelectText);
   openSelectTextRef.current = openSelectText;
 
+  // In-place selection handles (Termius: hold a word, release → handles on
+  // the terminal itself, drag to extend, Copy/Paste menu). Pixel geometry for
+  // the overlay lives in state; the imperative selection logic lives inside
+  // the terminal effect and is exposed through this ref.
+  const [selOverlay, setSelOverlay] = useState<null | {
+    sx: number; sy: number; ex: number; ey: number;
+    menuX: number; menuY: number;
+    text: string;
+  }>(null);
+  const selApiRef = useRef<null | {
+    selectWordAt: (clientX: number, clientY: number) => boolean;
+    moveHandle: (which: 'start' | 'end', clientX: number, clientY: number) => void;
+    clear: () => void;
+  }>(null);
+
   // Toolbar paste — the only paste path a phone user can reach (no Ctrl+V,
   // and xterm's canvas offers no long-press paste menu).
   const pasteFromClipboard = useCallback(async () => {
@@ -995,6 +1036,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         const code = lines < 0 ? 64 : 65;
         const seq = `\x1b[<${code};1;1M`;
         sendInput(seq.repeat(Math.abs(lines)));
+        // Alt-screen scroll makes the app REDRAW — the text under a selection
+        // changes, so handles would point at stale content. Drop them.
+        selApiRef.current?.clear();
         maybeWarnAltScreenScroll();
         // alt-screen owns its buffer, so we can't read the real scroll
         // position — track net up-lines instead. Down-scroll pays the count
@@ -1018,6 +1062,112 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     };
     cancelMomentumRef.current = cancelMomentum;
     altUpLinesRef.current = 0;
+
+    // ------------------------------------------------------------------
+    // In-place selection handles. xterm renders the highlight (term.select);
+    // we compute buffer coords ↔ pixels for the two draggable handles and the
+    // floating Copy/Paste menu. Selection state = two linear cell indices
+    // (row * cols + col) so multi-row drags and crossovers normalize trivially.
+    const WORD_CHAR = /[A-Za-z0-9_\-./~:@#$%+=?&]/;
+    let selAnchor: { a: number; b: number } | null = null;
+    const screenEl = () => container.querySelector('.xterm-screen') as HTMLElement | null;
+
+    const cellFromPoint = (clientX: number, clientY: number) => {
+      const el = screenEl();
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return null;
+      const cellW = r.width / term.cols;
+      const cellH = r.height / term.rows;
+      const col = Math.min(term.cols - 1, Math.max(0, Math.floor((clientX - r.left) / cellW)));
+      const vrow = Math.min(term.rows - 1, Math.max(0, Math.floor((clientY - r.top) / cellH)));
+      return { col, row: vrow + term.buffer.active.viewportY };
+    };
+
+    const publishOverlay = () => {
+      const pos = term.getSelectionPosition();
+      const el = screenEl();
+      if (!pos || !el || !selAnchor) {
+        setSelOverlay(null);
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      const host = container.getBoundingClientRect();
+      const cellW = r.width / term.cols;
+      const cellH = r.height / term.rows;
+      const vp = term.buffer.active.viewportY;
+      const toPx = (col: number, row: number) => ({
+        x: r.left - host.left + col * cellW,
+        y: r.top - host.top + (row - vp) * cellH,
+      });
+      const s = toPx(pos.start.x, pos.start.y);
+      const e = toPx(pos.end.x, pos.end.y);
+      const menuX = Math.min(Math.max((s.x + e.x) / 2, 80), Math.max(80, host.width - 80));
+      const topMost = Math.min(s.y, e.y);
+      const menuY = topMost > 56 ? topMost - 46 : Math.max(s.y, e.y) + cellH + 16;
+      setSelOverlay({
+        sx: s.x, sy: s.y + cellH, ex: e.x, ey: e.y + cellH,
+        menuX, menuY,
+        text: term.getSelection(),
+      });
+    };
+
+    const applyLinear = () => {
+      if (!selAnchor) return;
+      const lo = Math.min(selAnchor.a, selAnchor.b);
+      const hi = Math.max(selAnchor.a, selAnchor.b);
+      term.select(lo % term.cols, Math.floor(lo / term.cols), hi - lo + 1);
+      publishOverlay();
+    };
+
+    const selectWordAt = (clientX: number, clientY: number): boolean => {
+      const cell = cellFromPoint(clientX, clientY);
+      if (!cell) return false;
+      const line = term.buffer.active.getLine(cell.row);
+      if (!line) return false;
+      const text = line.translateToString(false);
+      const ch = text[cell.col];
+      if (!ch || !WORD_CHAR.test(ch)) return false;
+      let s = cell.col;
+      let e = cell.col;
+      while (s > 0 && WORD_CHAR.test(text[s - 1])) s--;
+      while (e < text.length - 1 && WORD_CHAR.test(text[e + 1])) e++;
+      selAnchor = { a: cell.row * term.cols + s, b: cell.row * term.cols + e };
+      applyLinear();
+      try { navigator.vibrate?.(10); } catch { /* unsupported */ }
+      return true;
+    };
+
+    const moveHandle = (which: 'start' | 'end', clientX: number, clientY: number) => {
+      if (!selAnchor) return;
+      const cell = cellFromPoint(clientX, clientY);
+      if (!cell) return;
+      const idx = cell.row * term.cols + cell.col;
+      // 'start' drags the lower linear index, 'end' the higher; a crossover
+      // swaps roles naturally through the min/max in applyLinear.
+      if (which === 'start') {
+        if (selAnchor.a <= selAnchor.b) selAnchor.a = idx;
+        else selAnchor.b = idx;
+      } else {
+        if (selAnchor.b >= selAnchor.a) selAnchor.b = idx;
+        else selAnchor.a = idx;
+      }
+      applyLinear();
+    };
+
+    const clearHandles = () => {
+      if (!selAnchor) return;
+      selAnchor = null;
+      term.clearSelection();
+      setSelOverlay(null);
+    };
+
+    selApiRef.current = { selectWordAt, moveHandle, clear: clearHandles };
+    // Normal-buffer scrolls move the viewport under the selection — the
+    // handles track their text instead of floating loose.
+    const selScrollDisp = term.onScroll(() => {
+      if (selAnchor) publishOverlay();
+    });
 
     // ------------------------------------------------------------------
     // Gesture engine (Termius-style spec). One meaning per gesture, no modes:
@@ -1095,6 +1245,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     const onTouchStart = (e: TouchEvent) => {
       cancelMomentum();
+      clearHandles(); // touching the terminal dismisses selection handles
       if (e.touches.length >= 2) {
         // Second finger down → pinch. Kill every single-finger gesture state.
         cancelLongPress();
@@ -1191,11 +1342,12 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         return;
       }
       if (gestureArmed) {
-        // Hold + release without dragging → selection (Termius: "press and
-        // hold a word, release to show selection").
+        // Hold + release without dragging → select the word under the finger
+        // with in-place handles (Termius: "press and hold a word, release to
+        // show selection"). No word there (blank area) → full-text modal.
         gestureArmed = false;
         velocity = 0;
-        openSelectTextRef.current();
+        if (!selectWordAt(touchStartX, touchStartY)) openSelectTextRef.current();
         return;
       }
       // Double-tap → Tab. Two quick, still taps close together.
@@ -1371,6 +1523,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       cancelLongPress();
       unsubStyle();
       stopJoystick();
+      selScrollDisp.dispose();
+      selApiRef.current = null;
+      setSelOverlay(null);
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
@@ -1568,6 +1723,56 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             </svg>
             Jump to live
           </button>
+        )}
+        {/* In-place selection: two draggable handles + floating Copy/Paste menu.
+            xterm draws the highlight; these anchor to its buffer coordinates. */}
+        {selOverlay && (
+          <>
+            <SelHandle
+              x={selOverlay.sx}
+              y={selOverlay.sy}
+              onMove={(cx, cy) => selApiRef.current?.moveHandle('start', cx, cy)}
+            />
+            <SelHandle
+              x={selOverlay.ex}
+              y={selOverlay.ey}
+              onMove={(cx, cy) => selApiRef.current?.moveHandle('end', cx, cy)}
+            />
+            <div
+              className="absolute z-30 flex items-center overflow-hidden rounded-lg bg-zinc-800 border border-zinc-600 shadow-xl"
+              style={{ left: selOverlay.menuX, top: Math.max(4, selOverlay.menuY), transform: 'translateX(-50%)' }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(selOverlay.text);
+                    useAppStore.getState().pushNotification('info', 'Copied', 'copy');
+                  } catch {
+                    useAppStore.getState().pushNotification('error', 'Copy blocked by browser', 'copy');
+                  }
+                  try { navigator.vibrate?.(10); } catch { /* unsupported */ }
+                  selApiRef.current?.clear();
+                }}
+                className="px-3.5 py-2.5 text-xs font-medium text-zinc-100 active:bg-zinc-700"
+              >
+                Copy
+              </button>
+              <button
+                onClick={() => { selApiRef.current?.clear(); pasteFromClipboard(); }}
+                className="px-3.5 py-2.5 text-xs font-medium text-zinc-100 active:bg-zinc-700 border-l border-zinc-700"
+              >
+                Paste
+              </button>
+              <button
+                onClick={() => { selApiRef.current?.clear(); openSelectText(); }}
+                className="px-3.5 py-2.5 text-xs text-zinc-400 active:bg-zinc-700 border-l border-zinc-700"
+                title="Open all output for native selection"
+              >
+                All
+              </button>
+            </div>
+          </>
         )}
         {voice.isSupported && (
           <button

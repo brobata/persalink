@@ -11,12 +11,17 @@ voice input, biometric lock, link harvester. Gap = polish density, not architect
 
 ## 🏆 THE BEST — sequential tracks (a track is done when its A→B arc closes)
 
-### Track 1 — Gorgeous & Feel (~2 sessions) — SESSION 1 SHIPPED 2026-08-12 (f56d792)
-DONE: theme pack (16 total), Nerd Font symbols fallback in every stack, mobile now
-follows the style store (was hardcoded!) + palette button → bottom-sheet settings,
-swatch grid, arrow joystick w/ gears + haptics, double-tap Tab (+toggle), pinch zoom,
-Space trackpad key. REMAINING (session 2): in-place selection handles w/ Copy/Paste
-context menu (item 5 below) + on-phone gesture tuning pass.
+### Track 1 — Gorgeous & Feel — ✅ COMPLETE 2026-08-12
+Session 1 (f56d792): theme pack (16), Nerd Font symbols fallback in every stack,
+mobile follows the style store (was hardcoded!) + palette button → bottom-sheet
+settings, swatch grid, arrow joystick w/ gears + haptics, double-tap Tab (+toggle),
+pinch zoom, Space trackpad key. Session 2: in-place selection handles — hold a word,
+release → xterm-rendered highlight + two draggable teardrop handles (linear cell-index
+math, crossover-safe) + floating Copy/Paste/All menu; handles track normal-buffer
+scrolls, dismiss on alt-screen scroll (app redraws under them) and on any terminal
+touch; blank-area hold falls back to the full-text modal. E2E-verified with synthetic
+TouchEvents: hold → handles+menu → Copy → exact word on clipboard. Still owed: user's
+on-phone tuning pass (arm delay / gear distances / handle size are one-line tweaks).
 Theme pack: import ~12-15 canonical schemes as data into terminalStyleStore
 (Dracula, Nord, Catppuccin Mocha/Latte, Gruvbox, Tokyo Night, Rosé Pine, Everforest,
 Kanagawa, Ayu Mirage, Night Owl, Solarized Dark, One Dark) → swap one bundled font for
