@@ -36,11 +36,17 @@ Actions) → **multi-target run** across sessions/servers via the registry, per-
 results. (Termius charges for that last one; our fleet model gets it nearly free.)
 Protocol: `snippets.*`, `history.suggest`.
 
-### Track 4 — Files (~2 sessions)
-Read-only **file browser** per server (authed HTTP: list/stat/download, start at profile
-cwd; bearer token, path-normalize vs traversal, audit-log every download) →
-**tap-to-preview** images/text → browser download. Defer rename/move/delete (terminal
-does it better).
+### Track 4 — Files (~1.5 sessions, File-Share ruling 2026-08-12)
+**Ruling: integrate the capability, not the app.** File-Share (brobata/file-share,
+LAN :4040) stays a separate shipped product — grafting fails on auth mismatch, the
+https→http mixed-content wall, and the fleet argument (Files must ride the daemon so
+every registry server has it automatically). Instead: **port File-Share's backend core**
+(path-traversal guards, mime/preview, download streaming — Express code that drops into
+persalink's httpServer) behind token auth → browse/preview/download per server, starting
+at profile cwd, audit-logged → crib File-Share's validated UI patterns for the React
+screens → **courtesy glue**: health-probe :4040 per host and show "Open in File-Share ↗"
+(top-level nav, mixed content doesn't apply). SKIP rename/move/delete/multi-select —
+the terminal does those better; File-Share covers heavy file management on the LAN.
 
 ### Track 5 — Launch fast (~0.5 session)
 **PWA manifest shortcuts** (long-press icon → top pinned profiles; deep-link plumbing
