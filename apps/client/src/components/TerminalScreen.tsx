@@ -7,6 +7,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { TerminalSettings } from './TerminalSettings';
+import { SnippetSheet } from './SnippetSheet';
 import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
@@ -113,10 +114,11 @@ function SpaceTrackpadKey({ sendInput }: { sendInput: (data: string) => void }) 
   );
 }
 
-function TerminalKeyBar({ sendInput, ctrlArmed, onToggleCtrl }: {
+function TerminalKeyBar({ sendInput, ctrlArmed, onToggleCtrl, onOpenSnippets }: {
   sendInput: (data: string) => void;
   ctrlArmed: boolean;
   onToggleCtrl: () => void;
+  onOpenSnippets: () => void;
 }) {
   return (
     <div
@@ -135,6 +137,14 @@ function TerminalKeyBar({ sendInput, ctrlArmed, onToggleCtrl }: {
         Ctrl
       </button>
       <SpaceTrackpadKey sendInput={sendInput} />
+      {/* Snippet library — saved commands with {{variable}} prompts */}
+      <button
+        onPointerDown={(e) => { e.preventDefault(); onOpenSnippets(); }}
+        className="shrink-0 min-w-[44px] px-2 py-2 text-xs font-mono bg-zinc-800 text-zinc-200 rounded-md active:bg-zinc-600 transition-colors select-none"
+        title="Snippets — saved commands"
+      >
+        {'{}'}
+      </button>
       {TERMINAL_KEYS.map((k) => (
         <button
           key={k.label}
@@ -480,6 +490,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // Terminal appearance bottom sheet (themes/font/size) — mobile finally gets
   // the same styling controls the desktop grid's gear popover has.
   const [showStyleSheet, setShowStyleSheet] = useState(false);
+  // Snippet library sheet (opened from the key bar's {} key).
+  const [showSnippets, setShowSnippets] = useState(false);
+  // Suggestion bar: prefix-matched shell history for the current typed
+  // command (normal buffer only — alt-screen apps get no noise).
+  const [sugg, setSugg] = useState<{ prefix: string; items: string[] }>({ prefix: '', items: [] });
   // Find-in-scrollback (xterm search addon). The addon instance lives in the
   // terminal effect; the bar UI drives it through this ref.
   const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -1124,6 +1139,52 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     altUpLinesRef.current = 0;
 
     // ------------------------------------------------------------------
+    // Suggestion bar: when the server echo lands (onWriteParsed), read the
+    // cursor line, strip the prompt, and prefix-match shell history. All
+    // matching is local against the once-per-auth history snapshot — no
+    // per-keystroke round-trips. Requiring a prompt marker keeps streaming
+    // output from being mistaken for typed input.
+    let suggTimer: ReturnType<typeof setTimeout> | null = null;
+    const updateSuggestions = () => {
+      const clear = () => setSugg((s) => (s.items.length || s.prefix ? { prefix: '', items: [] } : s));
+      // NOTE: no alt-screen check — tmux keeps the outer terminal in the
+      // alternate buffer permanently, so that signal is useless here. The
+      // shell-prompt-marker requirement below is the real gate (and the
+      // marker list deliberately excludes '> ' so Claude Code's input line
+      // never triggers shell-history suggestions).
+      const buf = term.buffer.active;
+      // Rebuild the full LOGICAL line: on phone-width terminals the prompt +
+      // command wraps, putting the cursor on a continuation row whose text
+      // alone has no prompt marker. Walk back through isWrapped rows.
+      let row = buf.baseY + buf.cursorY;
+      let line = buf.getLine(row)?.translateToString(false, 0, buf.cursorX) ?? '';
+      while (row > 0 && buf.getLine(row)?.isWrapped) {
+        row--;
+        line = (buf.getLine(row)?.translateToString(false) ?? '') + line;
+      }
+      let start = 0;
+      for (const marker of ['$ ', '# ', '% ', '❯ ']) {
+        const i = line.lastIndexOf(marker);
+        if (i >= 0 && i + marker.length > start) start = i + marker.length;
+      }
+      const typed = line.slice(start).replace(/^\s+/, '');
+      if (start === 0 || typed.length < 2) { clear(); return; }
+      const history = useAppStore.getState().shellHistory;
+      const items: string[] = [];
+      for (const cmd of history) {
+        if (cmd.startsWith(typed) && cmd !== typed) {
+          items.push(cmd);
+          if (items.length >= 5) break;
+        }
+      }
+      setSugg({ prefix: typed, items });
+    };
+    const writeParsedDisp = term.onWriteParsed(() => {
+      if (suggTimer) clearTimeout(suggTimer);
+      suggTimer = setTimeout(updateSuggestions, 120);
+    });
+
+    // ------------------------------------------------------------------
     // In-place selection handles. xterm renders the highlight (term.select);
     // we compute buffer coords ↔ pixels for the two draggable handles and the
     // floating Copy/Paste menu. Selection state = two linear cell indices
@@ -1589,6 +1650,8 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       osc52Disp.dispose();
       searchResultsDisp.dispose();
       searchAddonRef.current = null;
+      writeParsedDisp.dispose();
+      if (suggTimer) clearTimeout(suggTimer);
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
@@ -1917,9 +1980,29 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         )}
       </div>
 
+      {/* Suggestion bar — tap a chip to complete the current command */}
+      {!sidebarVisible && sugg.items.length > 0 && (
+        <div className="shrink-0 flex gap-1.5 px-2 py-1.5 bg-zinc-900/90 border-t border-zinc-800 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+          {sugg.items.map((cmd) => (
+            <button
+              key={cmd}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                sendInput(cmd.slice(sugg.prefix.length));
+                setSugg({ prefix: '', items: [] });
+              }}
+              className="shrink-0 max-w-[75vw] truncate px-3 py-1.5 text-xs font-mono bg-zinc-800 text-zinc-300 rounded-full active:bg-zinc-600 select-none"
+            >
+              <span className="text-zinc-500">{sugg.prefix}</span>
+              {cmd.slice(sugg.prefix.length)}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
       {!sidebarVisible && showKeyBar && (
-        <TerminalKeyBar sendInput={sendInput} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl} />
+        <TerminalKeyBar sendInput={sendInput} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl} onOpenSnippets={() => setShowSnippets(true)} />
       )}
 
       {/* Session quick-switcher — mobile only */}
@@ -1941,6 +2024,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
       {/* Terminal appearance sheet — live theme/font/size changes */}
       {showStyleSheet && <TerminalSettings variant="sheet" onClose={() => setShowStyleSheet(false)} />}
+
+      {/* Snippet library — insert, run detached, or fan out across servers */}
+      {showSnippets && <SnippetSheet onClose={() => setShowSnippets(false)} sendInput={sendInput} />}
 
       {/* Native text-selection modal — mobile-friendly copy. xterm renders to
           canvas so Android's long-press magnifier has nothing to grab.

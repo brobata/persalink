@@ -69,6 +69,20 @@ export type HealthCheck = z.infer<typeof HealthCheckSchema>;
 export type Profile = z.infer<typeof ProfileSchema>;
 
 // ============================================================================
+// Snippets — a global, server-stored command library (profiles keep their own
+// per-profile quick actions). {{variable}} placeholders are parsed and
+// prompted client-side; the server stores the raw template.
+// ============================================================================
+
+export const SnippetSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Snippet ID must be alphanumeric with hyphens/underscores').max(100),
+  name: z.string().min(1).max(100),
+  command: z.string().min(1).max(2048).refine(NoNewlines, 'Command cannot contain newlines'),
+});
+
+export type Snippet = z.infer<typeof SnippetSchema>;
+
+// ============================================================================
 // Tmux Sessions
 // ============================================================================
 
@@ -179,6 +193,14 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   // Session output logs (server-side, per-profile opt-in)
   z.object({ type: z.literal('logs.list') }),
   z.object({ type: z.literal('logs.read'), name: z.string().min(1).max(200) }),
+  // Shell history for the suggestion bar (deduped, newest first)
+  z.object({ type: z.literal('history.list') }),
+  // Snippets — global command library
+  z.object({ type: z.literal('snippets.list') }),
+  z.object({ type: z.literal('snippet.save'), snippet: SnippetSchema }),
+  z.object({ type: z.literal('snippet.delete'), snippetId: z.string().max(100) }),
+  // Detached command execution (snippet "run"); tag correlates the result.
+  z.object({ type: z.literal('exec.run'), command: z.string().min(1).max(2048).refine(NoNewlines, 'Command cannot contain newlines'), tag: z.string().max(64) }),
   // Web Push notifications
   z.object({ type: z.literal('push.getKey') }),
   z.object({ type: z.literal('push.subscribe'), subscription: z.object({
@@ -240,6 +262,11 @@ export type ServerMessage =
   // Session output logs
   | { type: 'logs.list'; logs: Array<{ name: string; size: number; mtime: number }> }
   | { type: 'logs.read'; name: string; data: string; truncated: boolean }
+  // Shell history (suggestion bar)
+  | { type: 'history.list'; commands: string[] }
+  // Snippets
+  | { type: 'snippets.list'; snippets: Snippet[] }
+  | { type: 'exec.result'; tag: string; output: string; exitCode: number; timedOut?: boolean; truncated?: boolean; spawnError?: boolean }
   // Web Push — server hands the client its VAPID public key after auth.
   | { type: 'push.key'; publicKey: string }
   // General

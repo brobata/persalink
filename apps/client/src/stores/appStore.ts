@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
-  SessionInfo, Profile, HealthStatus, ServerMessage, TmuxWindowInfo,
+  SessionInfo, Profile, HealthStatus, ServerMessage, TmuxWindowInfo, Snippet,
 } from '@persalink/shared/protocol';
 import { WSClient, type ConnectionState } from '../lib/ws';
 import { subscribeToPush, unsubscribeFromPush } from '../lib/push';
@@ -112,6 +112,13 @@ interface AppState {
   sessionLogs: Array<{ name: string; size: number; mtime: number }> | null;
   logView: { name: string; data: string; truncated: boolean } | null;
 
+  // Shell history (suggestion bar) + global snippet library — both fetched
+  // after auth and kept fresh via broadcasts.
+  shellHistory: string[];
+  snippets: Snippet[];
+  // Detached exec results keyed by client-chosen tag (snippet runs).
+  execResults: Record<string, { output: string; exitCode: number; timedOut?: boolean; spawnError?: boolean }>;
+
   // Toast notifications — server-side errors and other transient messages.
   // Without this, a 'window.create' or 'profile.save' failure on the server
   // produces no visible signal on the client.
@@ -161,6 +168,10 @@ interface AppState {
   requestLogs: () => void;
   readLog: (name: string) => void;
   closeLogView: () => void;
+  saveSnippet: (snippet: Snippet) => void;
+  deleteSnippet: (id: string) => void;
+  execCommand: (command: string, tag: string) => void;
+  clearExecResult: (tag: string) => void;
   clearActionResult: () => void;
   initBiometric: () => Promise<void>;
   unlockWithBiometric: () => Promise<boolean>;
@@ -206,6 +217,10 @@ async function checkForUpdate(): Promise<void> {
     }
   } catch { /* offline or dev — check again on next auth */ }
 }
+
+// Read-only debug handle for automated tests / console triage. Same-origin
+// scripts only (strict CSP) — the page already runs with full store access.
+declare global { interface Window { __plStore?: typeof useAppStore } }
 
 // Sessions the user just killed locally. The server snapshots tmux per WS
 // message and its handlers interleave (ws.on('message') is async, not awaited
@@ -277,6 +292,9 @@ export const useAppStore = create<AppState>()(
       updateAvailable: false,
       sessionLogs: null,
       logView: null,
+      shellHistory: [],
+      snippets: [],
+      execResults: {},
       notifications: [],
       lastActiveSessionId: null,
       pendingAutoAttach: null,
@@ -673,6 +691,24 @@ export const useAppStore = create<AppState>()(
 
       closeLogView: () => set({ logView: null }),
 
+      saveSnippet: (snippet) => {
+        wsClient?.send({ type: 'snippet.save', snippet });
+      },
+
+      deleteSnippet: (id) => {
+        wsClient?.send({ type: 'snippet.delete', snippetId: id });
+      },
+
+      execCommand: (command, tag) => {
+        wsClient?.send({ type: 'exec.run', command, tag });
+      },
+
+      clearExecResult: (tag) => set((s) => {
+        const next = { ...s.execResults };
+        delete next[tag];
+        return { execResults: next };
+      }),
+
       openSettings: () => {
         // Allowed from any post-auth view (home/terminal/settings — re-entering
         // settings is a no-op). Disallowed during pre-auth (locked/connect/auth).
@@ -760,6 +796,8 @@ export const useAppStore = create<AppState>()(
   )
 );
 
+if (typeof window !== 'undefined') window.__plStore = useAppStore;
+
 // ============================================================================
 // Message Handler
 // ============================================================================
@@ -801,6 +839,9 @@ function handleServerMessage(
           : e),
       }));
       void checkForUpdate();
+      // Suggestion-bar history + snippet library — cheap one-shots per auth.
+      wsClient?.send({ type: 'history.list' });
+      wsClient?.send({ type: 'snippets.list' });
       if (msg.token) {
         set({ authToken: msg.token });
         // Save token to device keychain for biometric unlock
@@ -940,6 +981,23 @@ function handleServerMessage(
 
     case 'logs.read':
       set({ logView: { name: msg.name, data: msg.data, truncated: msg.truncated } });
+      break;
+
+    case 'history.list':
+      set({ shellHistory: msg.commands });
+      break;
+
+    case 'snippets.list':
+      set({ snippets: msg.snippets });
+      break;
+
+    case 'exec.result':
+      set((s) => ({
+        execResults: {
+          ...s.execResults,
+          [msg.tag]: { output: msg.output, exitCode: msg.exitCode, timedOut: msg.timedOut, spawnError: msg.spawnError },
+        },
+      }));
       break;
 
     case 'windows.list':

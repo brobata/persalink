@@ -90,6 +90,24 @@ export function remoteSnapshot(entry: ServerEntry): Promise<{ sessions: SessionI
   });
 }
 
+/** Run a command detached on a remote server (multi-server snippet run). */
+export function remoteExec(entry: ServerEntry, command: string): Promise<{ output: string; exitCode: number }> {
+  const tag = `remote-${Math.abs(Date.now() % 1e9)}`;
+  return remoteCall({
+    entry,
+    timeoutMs: 35000, // server-side exec timeout is 30s
+    onReady: (send) => {
+      send({ type: 'exec.run', command, tag });
+    },
+    onMessage: (msg) => {
+      if (msg.type === 'exec.result' && msg.tag === tag) {
+        return { output: msg.output, exitCode: msg.exitCode };
+      }
+      return undefined;
+    },
+  });
+}
+
 /** Create a session from a profile on a remote server; resolves its id.
  *  The server auto-attaches the creating client; we detach before closing so
  *  the session keeps running for the pane that's about to attach to it. */

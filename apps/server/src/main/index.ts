@@ -23,6 +23,9 @@ import { PushManager } from '../pushManager';
 import { PROTOCOL_VERSION, parseClientMessage } from '@persalink/shared/protocol';
 import { extractLinks } from '@persalink/shared/links';
 import { LogManager } from '../logManager';
+import { SnippetManager } from '../snippetManager';
+import * as fs from 'fs';
+import * as os from 'os';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,6 +84,33 @@ let tmuxManager: TmuxManager;
 let profileManager: ProfileManager;
 let healthChecker: HealthChecker;
 const logManager = new LogManager();
+const snippetManager = new SnippetManager();
+
+/** Shell history for the suggestion bar: bash + zsh, deduped keep-last,
+ *  newest first, capped. Read fresh per request — it's one small file and
+ *  staleness would defeat the purpose. */
+function readShellHistory(): string[] {
+  const home = process.env.HOME || os.homedir();
+  const commands: string[] = [];
+  for (const file of ['.bash_history', '.zsh_history']) {
+    try {
+      const raw = fs.readFileSync(path.join(home, file), 'utf-8');
+      for (let line of raw.split('\n')) {
+        // zsh extended history: ": 1699999999:0;command"
+        const m = line.match(/^: \d+:\d+;(.*)$/);
+        if (m) line = m[1];
+        line = line.trim();
+        if (line && line.length >= 2 && line.length <= 300) commands.push(line);
+      }
+    } catch { /* that shell isn't used here */ }
+  }
+  const lastIndex = new Map<string, number>();
+  commands.forEach((c, i) => lastIndex.set(c, i));
+  return [...lastIndex.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 500)
+    .map(([c]) => c);
+}
 let tokenStore: TokenStore;
 let rateLimiter: RateLimiter;
 let pushManager: PushManager;
@@ -526,6 +556,49 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
         const data = await tmuxManager.captureScrollback(client.attachedSession, lines);
         send(client, { type: 'session.scrollback', data });
       }
+      break;
+    }
+
+    // ---- Shell history (suggestion bar) ----
+    case 'history.list': {
+      send(client, { type: 'history.list', commands: readShellHistory() });
+      break;
+    }
+
+    // ---- Snippets ----
+    case 'snippets.list': {
+      send(client, { type: 'snippets.list', snippets: snippetManager.list() });
+      break;
+    }
+
+    case 'snippet.save': {
+      snippetManager.save(message.snippet);
+      audit('snippet_saved', { ip: client.ip, snippetId: message.snippet.id });
+      broadcastToAuthenticated({ type: 'snippets.list', snippets: snippetManager.list() });
+      break;
+    }
+
+    case 'snippet.delete': {
+      snippetManager.delete(message.snippetId);
+      audit('snippet_deleted', { ip: client.ip, snippetId: message.snippetId });
+      broadcastToAuthenticated({ type: 'snippets.list', snippets: snippetManager.list() });
+      break;
+    }
+
+    // Detached execution for snippet runs — same trust boundary and limits
+    // as profile quick actions (authed users have shell access by design).
+    case 'exec.run': {
+      audit('exec_run', { ip: client.ip, tag: message.tag });
+      const result = await tmuxManager.runAction(message.command, undefined);
+      send(client, {
+        type: 'exec.result',
+        tag: message.tag,
+        output: result.output,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        truncated: result.truncated,
+        spawnError: result.spawnError,
+      });
       break;
     }
 
@@ -1145,6 +1218,7 @@ async function main(): Promise<void> {
   // Session-log retention: prune at boot and every 6 hours.
   logManager.prune();
   setInterval(() => logManager.prune(), 6 * 3600 * 1000).unref();
+  snippetManager.load();
 
   profileManager = new ProfileManager();
 

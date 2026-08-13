@@ -30,6 +30,9 @@ export type AuditEvent =
   | 'setup_rejected_remote'
   | 'ws_rejected_origin'
   | 'log_read'
+  | 'snippet_saved'
+  | 'snippet_deleted'
+  | 'exec_run'
   | 'ws_rejected_per_ip_cap';
 
 interface AuditFields {
@@ -46,6 +49,8 @@ interface AuditFields {
   sessionId?: string;
   profileId?: string;
   actionId?: string;
+  snippetId?: string;
+  tag?: string;
   count?: number;
   heap_mb?: number;
   rss_mb?: number;
