@@ -375,6 +375,28 @@ export class TmuxManager {
     return tmux('capture-pane', '-t', sessionName, '-p', '-S', `-${lines}`);
   }
 
+  /** Start piping a session's output to a log file. `-o` makes it a no-op if
+   *  the pane is already piping, so re-attach flows can call this freely. */
+  async startPipeLog(sessionName: string, file: string): Promise<void> {
+    await tmux('pipe-pane', '-t', sessionName, '-o', `cat >> '${file.replace(/'/g, "'\\''")}'`);
+  }
+
+  /** One-time tmux server setup so OSC 52 clipboard writes from inside
+   *  sessions (tmux copy-mode `y`, vim, etc.) reach the attached client.
+   *  tmux only emits OSC 52 when the outer terminal advertises the Ms
+   *  capability — append the override once, never clobbering user config. */
+  async ensureClipboardPassthrough(): Promise<void> {
+    try {
+      await tmux('set-option', '-s', 'set-clipboard', 'on');
+    } catch { /* ignore */ }
+    try {
+      const current = await tmux('show-options', '-sv', 'terminal-overrides').catch(() => '');
+      if (!/Ms=/.test(current)) {
+        await tmux('set-option', '-as', 'terminal-overrides', ',xterm*:Ms=\\E]52;%p1%s;%p2%s\\007');
+      }
+    } catch { /* ignore */ }
+  }
+
   /** Capture pane text with tmux's wrapped lines rejoined (-J), so a URL that
    *  was hard-wrapped at the pane width comes back whole. Raw material for the
    *  session.links harvester. */

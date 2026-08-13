@@ -29,6 +29,7 @@ export type AuditEvent =
   | 'permanent_lock'
   | 'setup_rejected_remote'
   | 'ws_rejected_origin'
+  | 'log_read'
   | 'ws_rejected_per_ip_cap';
 
 interface AuditFields {

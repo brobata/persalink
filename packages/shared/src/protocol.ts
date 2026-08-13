@@ -59,6 +59,9 @@ export const ProfileSchema = z.object({
   healthCheck: HealthCheckSchema.optional(),
   cols: z.number().int().min(10).max(500).optional(),
   rows: z.number().int().min(2).max(200).optional(),
+  /** Capture this profile's session output to server-side logs (pipe-pane).
+   *  Off by default — logs can contain secrets and live only on the server. */
+  logOutput: z.boolean().optional(),
 });
 
 export type QuickAction = z.infer<typeof QuickActionSchema>;
@@ -173,6 +176,9 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.scrollback'), lines: z.number().int().optional() }),
   // Link harvest — URLs from the attached pane, wrap-joined server-side
   z.object({ type: z.literal('session.links'), lines: z.number().int().min(0).max(10000).optional() }),
+  // Session output logs (server-side, per-profile opt-in)
+  z.object({ type: z.literal('logs.list') }),
+  z.object({ type: z.literal('logs.read'), name: z.string().min(1).max(200) }),
   // Web Push notifications
   z.object({ type: z.literal('push.getKey') }),
   z.object({ type: z.literal('push.subscribe'), subscription: z.object({
@@ -231,6 +237,9 @@ export type ServerMessage =
   | { type: 'session.scrollback'; data: string }
   // Link harvest — deduped URLs, newest first
   | { type: 'session.links'; links: string[] }
+  // Session output logs
+  | { type: 'logs.list'; logs: Array<{ name: string; size: number; mtime: number }> }
+  | { type: 'logs.read'; name: string; data: string; truncated: boolean }
   // Web Push — server hands the client its VAPID public key after auth.
   | { type: 'push.key'; publicKey: string }
   // General

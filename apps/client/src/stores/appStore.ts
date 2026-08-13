@@ -107,6 +107,11 @@ interface AppState {
   // (the SW is network-first on the shell).
   updateAvailable: boolean;
 
+  // Server-side session logs (per-profile opt-in). List for the Settings
+  // section; logView non-null opens the viewer overlay.
+  sessionLogs: Array<{ name: string; size: number; mtime: number }> | null;
+  logView: { name: string; data: string; truncated: boolean } | null;
+
   // Toast notifications — server-side errors and other transient messages.
   // Without this, a 'window.create' or 'profile.save' failure on the server
   // produces no visible signal on the client.
@@ -153,6 +158,9 @@ interface AppState {
   requestScrollback: (lines?: number) => void;
   requestLinks: () => void;
   clearSessionLinks: () => void;
+  requestLogs: () => void;
+  readLog: (name: string) => void;
+  closeLogView: () => void;
   clearActionResult: () => void;
   initBiometric: () => Promise<void>;
   unlockWithBiometric: () => Promise<boolean>;
@@ -267,6 +275,8 @@ export const useAppStore = create<AppState>()(
       actionResult: null,
       sessionLinks: null,
       updateAvailable: false,
+      sessionLogs: null,
+      logView: null,
       notifications: [],
       lastActiveSessionId: null,
       pendingAutoAttach: null,
@@ -653,6 +663,16 @@ export const useAppStore = create<AppState>()(
 
       clearSessionLinks: () => set({ sessionLinks: null }),
 
+      requestLogs: () => {
+        wsClient?.send({ type: 'logs.list' });
+      },
+
+      readLog: (name) => {
+        wsClient?.send({ type: 'logs.read', name });
+      },
+
+      closeLogView: () => set({ logView: null }),
+
       openSettings: () => {
         // Allowed from any post-auth view (home/terminal/settings — re-entering
         // settings is a no-op). Disallowed during pre-auth (locked/connect/auth).
@@ -912,6 +932,14 @@ function handleServerMessage(
 
     case 'session.links':
       set({ sessionLinks: msg.links });
+      break;
+
+    case 'logs.list':
+      set({ sessionLogs: msg.logs });
+      break;
+
+    case 'logs.read':
+      set({ logView: { name: msg.name, data: msg.data, truncated: msg.truncated } });
       break;
 
     case 'windows.list':

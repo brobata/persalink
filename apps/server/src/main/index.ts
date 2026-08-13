@@ -22,6 +22,7 @@ import { classifyPane, type Attention } from '../attention';
 import { PushManager } from '../pushManager';
 import { PROTOCOL_VERSION, parseClientMessage } from '@persalink/shared/protocol';
 import { extractLinks } from '@persalink/shared/links';
+import { LogManager } from '../logManager';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,6 +80,7 @@ let config: ServerConfig;
 let tmuxManager: TmuxManager;
 let profileManager: ProfileManager;
 let healthChecker: HealthChecker;
+const logManager = new LogManager();
 let tokenStore: TokenStore;
 let rateLimiter: RateLimiter;
 let pushManager: PushManager;
@@ -375,6 +377,16 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
         const sessionName = await tmuxManager.createSession(profile || undefined, cols, rows);
         audit('tmux_session_created', { ip: client.ip, sessionId: sessionName, profileId: message.profileId });
 
+        // Per-profile opt-in output logging (server-local, capped retention).
+        if (profile?.logOutput) {
+          try {
+            logManager.ensureDir();
+            await tmuxManager.startPipeLog(sessionName, logManager.fileFor(sessionName));
+          } catch (err) {
+            console.warn('[PersaLink] pipe-pane failed:', err instanceof Error ? err.message : err);
+          }
+        }
+
         // Auto-attach after creation
         detachClient(client);
         await attachToSession(client, sessionName, cols, rows);
@@ -514,6 +526,23 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
         const data = await tmuxManager.captureScrollback(client.attachedSession, lines);
         send(client, { type: 'session.scrollback', data });
       }
+      break;
+    }
+
+    // ---- Session output logs ----
+    case 'logs.list': {
+      send(client, { type: 'logs.list', logs: logManager.list() });
+      break;
+    }
+
+    case 'logs.read': {
+      const log = logManager.read(message.name);
+      if (!log) {
+        send(client, { type: 'error', message: 'Log not found', op: 'logs.read' });
+        break;
+      }
+      audit('log_read', { ip: client.ip, name: message.name });
+      send(client, { type: 'logs.read', name: message.name, data: log.data, truncated: log.truncated });
       break;
     }
 
@@ -1111,6 +1140,11 @@ async function main(): Promise<void> {
   config = loadConfig();
   tmuxManager = new TmuxManager();
   await tmuxManager.init();
+  // OSC 52 clipboard passthrough (best-effort; guarded against user config).
+  await tmuxManager.ensureClipboardPassthrough();
+  // Session-log retention: prune at boot and every 6 hours.
+  logManager.prune();
+  setInterval(() => logManager.prune(), 6 * 3600 * 1000).unref();
 
   profileManager = new ProfileManager();
 

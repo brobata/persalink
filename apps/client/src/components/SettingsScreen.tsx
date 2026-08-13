@@ -1,14 +1,61 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { isPushSupported, notificationPermission } from '../lib/push';
+
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Full-screen log viewer with a grep-style line filter — the point of session
+// logs is answering "what did that overnight run print", so filtering beats
+// scrolling half a megabyte of output.
+function LogViewer() {
+  const { logView, closeLogView } = useAppStore();
+  const [filter, setFilter] = useState('');
+  const lines = useMemo(() => {
+    if (!logView) return [];
+    const all = logView.data.split('\n');
+    if (!filter.trim()) return all;
+    const q = filter.toLowerCase();
+    return all.filter((l) => l.toLowerCase().includes(q));
+  }, [logView, filter]);
+  if (!logView) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
+      <div className="shrink-0 flex items-center gap-2 px-4 py-3 bg-zinc-900 border-b border-zinc-800 pt-[max(12px,env(safe-area-inset-top))]">
+        <span className="flex-1 min-w-0 text-sm font-mono text-zinc-300 truncate">{logView.name}</span>
+        <button onClick={closeLogView} className="px-3 py-1.5 text-sm text-zinc-300 bg-zinc-800 active:bg-zinc-700 rounded-lg">Close</button>
+      </div>
+      <div className="shrink-0 px-4 py-2 bg-zinc-900/60 border-b border-zinc-800 flex items-center gap-2">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter lines…"
+          className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
+        />
+        <span className="shrink-0 text-[10px] text-zinc-600">{lines.length} lines{logView.truncated ? ' · tail' : ''}</span>
+      </div>
+      <pre className="flex-1 overflow-auto p-4 text-[12px] leading-relaxed font-mono text-zinc-200 whitespace-pre-wrap break-words">
+        {lines.join('\n')}
+      </pre>
+    </div>
+  );
+}
 
 export function SettingsScreen() {
   const {
     closeOverlay, disconnect, serverName, serverUrl, sessions, profiles,
     notificationsEnabled, enableNotifications, disableNotifications, testNotification,
+    sessionLogs, requestLogs, readLog, logView,
   } = useAppStore();
 
   const [busy, setBusy] = useState(false);
+
+  // Session logs live server-side; ask once when Settings opens.
+  useEffect(() => { requestLogs(); }, [requestLogs]);
   const pushSupported = isPushSupported();
   const perm = notificationPermission();
 
@@ -107,6 +154,32 @@ export function SettingsScreen() {
           )}
         </section>
 
+        {/* Session logs (server-side, per-profile opt-in) */}
+        <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-400">Session logs</h2>
+          {(!sessionLogs || sessionLogs.length === 0) ? (
+            <p className="text-xs text-zinc-500">
+              No logs yet. Turn on &ldquo;Log session output&rdquo; in a profile&apos;s Advanced
+              settings — output is captured on the server (14 days / 200 MB cap) and
+              searchable here even after the session ends.
+            </p>
+          ) : (
+            <div className="space-y-1">
+              {sessionLogs.map((log) => (
+                <button
+                  key={log.name}
+                  onClick={() => readLog(log.name)}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-zinc-800/60 active:bg-zinc-700 transition-colors text-left"
+                >
+                  <span className="flex-1 min-w-0 text-xs font-mono text-zinc-200 truncate">{log.name}</span>
+                  <span className="shrink-0 text-[10px] text-zinc-500">{fmtSize(log.size)}</span>
+                  <span className="shrink-0 text-[10px] text-zinc-600">{new Date(log.mtime).toLocaleDateString()}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
         {/* Danger Zone */}
         <section className="space-y-3">
           <button
@@ -118,6 +191,8 @@ export function SettingsScreen() {
           </button>
         </section>
       </div>
+
+      {logView && <LogViewer />}
     </div>
   );
 }

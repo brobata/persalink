@@ -364,6 +364,25 @@ export function TerminalPane({
     term.loadAddon(new WebLinksAddon());
     term.open(containerRef.current);
 
+    // OSC 52 passthrough — same handler as TerminalScreen: in-session copies
+    // (tmux copy-mode, vim) land on this device's clipboard. Write-only.
+    const osc52Disp = term.parser.registerOscHandler(52, (data) => {
+      const semi = data.indexOf(';');
+      const payload = semi >= 0 ? data.slice(semi + 1) : data;
+      if (!payload || payload === '?') return true;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        const text = new TextDecoder().decode(bytes);
+        if (text && navigator.clipboard?.writeText && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(
+            () => useAppStore.getState().pushNotification('info', 'Copied from session', 'osc52'),
+            () => { /* unfocused or denied — quiet */ },
+          );
+        }
+      } catch { /* malformed base64 */ }
+      return true;
+    });
+
     // WebGL with context-loss recovery. Desktop panes stay open for days; the
     // browser evicts GPU contexts under memory pressure / GPU reset / long
     // backgrounding, and without a loss handler the pane's canvas stays
@@ -670,6 +689,7 @@ export function TerminalPane({
       if (compositionWatchdog) clearTimeout(compositionWatchdog);
       compositionResetRef.current = null;
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      osc52Disp.dispose();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;

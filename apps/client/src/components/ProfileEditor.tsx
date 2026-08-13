@@ -226,7 +226,7 @@ export function ProfileEditor() {
   const [form, setForm] = useState<Partial<Profile>>(
     editingProfile ? { ...editingProfile } : { id: '', name: '' },
   );
-  const [showAdvanced, setShowAdvanced] = useState(!!form.healthCheck);
+  const [showAdvanced, setShowAdvanced] = useState(!!(form.healthCheck || form.logOutput));
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Group picker: chips from groups that already exist, plus a "new" escape
@@ -280,6 +280,7 @@ export function ProfileEditor() {
         actions: form.actions.filter(a => a.name && a.command),
       }),
       ...(form.healthCheck?.command && { healthCheck: form.healthCheck }),
+      ...(form.logOutput && { logOutput: true }),
       ...(form.env && Object.keys(form.env).length > 0 && { env: form.env }),
       ...(form.cols && { cols: form.cols }),
       ...(form.rows && { rows: form.rows }),
@@ -522,6 +523,20 @@ export function ProfileEditor() {
                   healthCheck={form.healthCheck}
                   onChange={(hc) => patch({ healthCheck: hc })}
                 />
+              </div>
+
+              <div>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    id="log-output"
+                    checked={form.logOutput || false}
+                    onChange={(e) => patch({ logOutput: e.target.checked })}
+                    className="w-4 h-4 rounded bg-zinc-800 border-zinc-600"
+                  />
+                  <label htmlFor="log-output" className="text-sm text-zinc-400">Log session output</label>
+                </div>
+                <Hint>Captures this profile&apos;s output to server-side logs (Settings → Session logs) — searchable even after the session dies. Stays on the server, 14-day/200MB cap. Off = nothing recorded.</Hint>
               </div>
             </div>
           )}

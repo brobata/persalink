@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { SearchAddon } from '@xterm/addon-search';
 import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { TerminalSettings } from './TerminalSettings';
@@ -479,6 +480,39 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // Terminal appearance bottom sheet (themes/font/size) — mobile finally gets
   // the same styling controls the desktop grid's gear popover has.
   const [showStyleSheet, setShowStyleSheet] = useState(false);
+  // Find-in-scrollback (xterm search addon). The addon instance lives in the
+  // terminal effect; the bar UI drives it through this ref.
+  const searchAddonRef = useRef<SearchAddon | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchCount, setSearchCount] = useState<{ current: number; total: number } | null>(null);
+  const SEARCH_DECOR = {
+    decorations: {
+      matchBackground: '#713f12',
+      matchBorder: '#713f12',
+      matchOverviewRuler: '#eab308',
+      activeMatchBackground: '#f59e0b',
+      activeMatchBorder: '#f59e0b',
+      activeMatchColorOverviewRuler: '#f59e0b',
+    },
+  };
+  const runSearch = useCallback((q: string, incremental: boolean) => {
+    setSearchQuery(q);
+    if (!q) {
+      searchAddonRef.current?.clearDecorations();
+      setSearchCount(null);
+      return;
+    }
+    searchAddonRef.current?.findNext(q, { ...SEARCH_DECOR, incremental });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const closeSearch = useCallback(() => {
+    searchAddonRef.current?.clearDecorations();
+    setShowSearch(false);
+    setSearchQuery('');
+    setSearchCount(null);
+    terminalRef.current?.focus();
+  }, []);
   // Sticky Ctrl (key bar): state drives the button highlight, the ref is what
   // the xterm onData closure reads — it mounts once and never re-binds.
   const [ctrlArmed, setCtrlArmed] = useState(false);
@@ -709,8 +743,34 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
+    const searchAddon = new SearchAddon();
+    term.loadAddon(searchAddon);
+    searchAddonRef.current = searchAddon;
+    const searchResultsDisp = searchAddon.onDidChangeResults((e) => {
+      setSearchCount(e.resultCount >= 0 ? { current: e.resultIndex + 1, total: e.resultCount } : null);
+    });
 
     term.open(termRef.current);
+
+    // OSC 52 passthrough: programs inside the session (tmux copy-mode `y`,
+    // vim yank plugins, CLIs) push text straight onto this device's clipboard.
+    // Write-only — clipboard READ queries ("?") are never answered.
+    const osc52Disp = term.parser.registerOscHandler(52, (data) => {
+      const semi = data.indexOf(';');
+      const payload = semi >= 0 ? data.slice(semi + 1) : data;
+      if (!payload || payload === '?') return true;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        const text = new TextDecoder().decode(bytes);
+        if (text && navigator.clipboard?.writeText && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(
+            () => useAppStore.getState().pushNotification('info', 'Copied from session', 'osc52'),
+            () => { /* page unfocused or permission denied — stay quiet */ },
+          );
+        }
+      } catch { /* malformed base64 — ignore */ }
+      return true;
+    });
 
     // Try WebGL, fall back gracefully. Mobile browsers (Android especially)
     // evict GPU contexts from backgrounded tabs/PWAs; without a context-loss
@@ -1526,6 +1586,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       selScrollDisp.dispose();
       selApiRef.current = null;
       setSelOverlay(null);
+      osc52Disp.dispose();
+      searchResultsDisp.dispose();
+      searchAddonRef.current = null;
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
@@ -1621,6 +1684,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           className="hidden"
         />
         <button
+          onPointerDown={(e) => { e.preventDefault(); setShowSearch(true); }}
+          className={`shrink-0 px-2 py-2 transition-colors ${showSearch ? 'text-zinc-200' : 'text-zinc-500 active:text-zinc-300'}`}
+          title="Find in output"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <circle cx="11" cy="11" r="7" />
+            <path strokeLinecap="round" d="M21 21l-4.3-4.3" />
+          </svg>
+        </button>
+        <button
           onPointerDown={(e) => { e.preventDefault(); setShowStyleSheet(true); }}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
           title="Terminal appearance — theme, font, size"
@@ -1687,6 +1760,49 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           )}
         </button>
       </div>
+
+      {/* Find-in-scrollback bar */}
+      {showSearch && (
+        <div className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 bg-zinc-900 border-b border-zinc-800">
+          <input
+            value={searchQuery}
+            onChange={(e) => runSearch(e.target.value, true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') runSearch(searchQuery, false);
+              if (e.key === 'Escape') closeSearch();
+            }}
+            placeholder="Find in output…"
+            autoFocus
+            autoCapitalize="none"
+            autoCorrect="off"
+            className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
+          />
+          <span className="shrink-0 text-[10px] text-zinc-500 w-12 text-center">
+            {searchCount ? `${searchCount.current}/${searchCount.total}` : searchQuery ? '0' : ''}
+          </span>
+          <button
+            onPointerDown={(e) => { e.preventDefault(); searchAddonRef.current?.findPrevious(searchQuery, SEARCH_DECOR); }}
+            className="shrink-0 px-2 py-1.5 text-zinc-400 active:text-zinc-100"
+            title="Previous match"
+          >
+            ↑
+          </button>
+          <button
+            onPointerDown={(e) => { e.preventDefault(); searchAddonRef.current?.findNext(searchQuery, SEARCH_DECOR); }}
+            className="shrink-0 px-2 py-1.5 text-zinc-400 active:text-zinc-100"
+            title="Next match"
+          >
+            ↓
+          </button>
+          <button
+            onPointerDown={(e) => { e.preventDefault(); closeSearch(); }}
+            className="shrink-0 px-2 py-1.5 text-zinc-500 active:text-zinc-300"
+            title="Close search"
+          >
+            &times;
+          </button>
+        </div>
+      )}
 
       {/* Window tabs — only show when session has multiple windows */}
       {windows.length > 1 && (
