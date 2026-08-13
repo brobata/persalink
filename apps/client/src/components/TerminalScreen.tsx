@@ -1255,6 +1255,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       while (e < text.length - 1 && WORD_CHAR.test(text[e + 1])) e++;
       selAnchor = { a: cell.row * term.cols + s, b: cell.row * term.cols + e };
       applyLinear();
+      // Selection mode is a READING mode — drop the soft keyboard so the
+      // handles and menu aren't buried under Gboard (and its clipboard
+      // suggestion panels, which appear whenever a field is focused with
+      // fresh clipboard content). Tapping the terminal afterwards refocuses.
+      term.blur();
       try { navigator.vibrate?.(10); } catch { /* unsupported */ }
       return true;
     };
@@ -1883,7 +1888,10 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       )}
 
       {/* Terminal — absolute positioning gives xterm.js real pixel dimensions */}
-      <div className="flex-1 min-h-0 relative" onClick={() => terminalRef.current?.focus()}>
+      {/* No focus while selection handles are up: the synthesized click after
+          a hold-release would focus xterm's hidden textarea → soft keyboard +
+          Gboard's clipboard panels stack on top of the selection menu. */}
+      <div className="flex-1 min-h-0 relative" onClick={() => { if (!selOverlay) terminalRef.current?.focus(); }}>
         <div ref={termRef} className="absolute inset-0 overflow-hidden" />
         {/* Jump to live — escapes tmux copy-mode/scrollback back to the prompt.
             Discoverable counterpart to typing (which auto-exits server-side). */}
@@ -1921,6 +1929,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
               className="absolute z-30 flex items-center overflow-hidden rounded-lg bg-zinc-800 border border-zinc-600 shadow-xl"
               style={{ left: selOverlay.menuX, top: Math.max(4, selOverlay.menuY), transform: 'translateX(-50%)' }}
               onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             >
               <button
                 onClick={async () => {

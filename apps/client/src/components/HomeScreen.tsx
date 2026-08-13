@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
@@ -24,6 +24,14 @@ function moveProfile(profiles: Profile[], profileId: string, direction: 'up' | '
 function SessionPill({ session }: { session: SessionInfo }) {
   const { attachSession, killSession, renameSession } = useAppStore();
   const [confirmKill, setConfirmKill] = useState(false);
+
+  // An armed "Kill?" must not linger — a stale confirm sitting under a later
+  // absent-minded tap is how sessions die by accident. Auto-disarm.
+  useEffect(() => {
+    if (!confirmKill) return;
+    const t = setTimeout(() => setConfirmKill(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirmKill]);
   // Explicit pencil-button rename — mobile had NO way to rename a session
   // (desktop panes use double-click; long-press here is unused and gestures
   // are undiscoverable anyway).
@@ -238,6 +246,24 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
 
 export function HomeScreen() {
   const { sessions, profiles, serverName, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
+
+  // Recency decides the Live order when Home OPENS, then the order FREEZES
+  // for the visit. A live re-sort (activity broadcasts land every ~4s) made
+  // rows dance under the user's finger mid-tap — a kill confirm once moved
+  // and a different session ate the tap. New sessions surface on top.
+  const [frozenOrder] = useState(() => new Map(
+    [...useAppStore.getState().sessions]
+      .sort((a, b) => (b.activityAt ?? 0) - (a.activityAt ?? 0))
+      .map((s, i) => [s.id, i] as const)
+  ));
+  const orderedSessions = useMemo(() => [...sessions].sort((a, b) => {
+    const ia = frozenOrder.get(a.id);
+    const ib = frozenOrder.get(b.id);
+    if (ia === undefined && ib === undefined) return (b.activityAt ?? 0) - (a.activityAt ?? 0);
+    if (ia === undefined) return -1;
+    if (ib === undefined) return 1;
+    return ia - ib;
+  }), [sessions, frozenOrder]);
   const [reordering, setReordering] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -367,9 +393,7 @@ export function HomeScreen() {
               Live ({sessions.length})
             </h2>
             <div className="space-y-2">
-              {/* Most recently active first — the session you were just in is
-                  the one you're most likely reaching for. */}
-              {[...sessions].sort((a, b) => (b.activityAt ?? 0) - (a.activityAt ?? 0)).map((session) => (
+              {orderedSessions.map((session) => (
                 <SessionPill key={session.id} session={session} />
               ))}
             </div>
