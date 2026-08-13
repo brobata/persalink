@@ -44,14 +44,14 @@ Key-bar arrows stay as precision fallback. SKIP tap-to-reposition-cursor (readli
 seek; only ever half-works — Termius skips it too). Expect a slop/threshold tuning pass
 on the real phone; selection handles are the priciest item.
 
-### Track 2 — Text out (~2 sessions)
+### Track 2 — Text out — ✅ SHIPPED 2026-08-13 (faa5a8b)
 **OSC 52 clipboard bridge** (tmux `set -s set-clipboard on`, pass sequence through PTY,
 client writes navigator.clipboard; xterm clipboard addon) → **find-in-scrollback**
 (xterm search addon, 🔍 top bar, next/prev + highlight) → **server-side session logs**
 (`tmux pipe-pane` → rotated files in ~/.persalink/logs/, Logs screen to browse/search
 dead sessions). Logs: per-profile opt-in, size+age caps, never leave the owning server.
 
-### Track 3 — Type less (~3 sessions)
+### Track 3 — Type less — ✅ SHIPPED 2026-08-13 (29999b0)
 **Suggestion bar**: server harvests shell history (bash/zsh, deduped, frecency) + profile
 quick-action commands; ship top ~500 to client ONCE per attach; local fuzzy match,
 tap-to-insert chips above the key bar (sub-50ms, never per-keystroke round-trips) →
@@ -61,7 +61,7 @@ Actions) → **multi-target run** across sessions/servers via the registry, per-
 results. (Termius charges for that last one; our fleet model gets it nearly free.)
 Protocol: `snippets.*`, `history.suggest`.
 
-### Track 4 — Files (~1.5 sessions, File-Share ruling 2026-08-12)
+### Track 4 — Files — ✅ SHIPPED 2026-08-13 (431afe1; File-Share ruling 2026-08-12)
 **Ruling: integrate the capability, not the app.** File-Share (brobata/file-share,
 LAN :4040) stays a separate shipped product — grafting fails on auth mismatch, the
 https→http mixed-content wall, and the fleet argument (Files must ride the daemon so
@@ -73,11 +73,16 @@ screens → **courtesy glue**: health-probe :4040 per host and show "Open in Fil
 (top-level nav, mixed content doesn't apply). SKIP rename/move/delete/multi-select —
 the terminal does those better; File-Share covers heavy file management on the LAN.
 
-### Track 5 — Launch fast (~0.5 session)
+### Track 5 — Launch fast — ✅ SHIPPED 2026-08-13 (c848ad9)
 **PWA manifest shortcuts** (long-press icon → top pinned profiles; deep-link plumbing
 exists via `/?session=`) → **Recent strip** on home (sessions attached <24h ago first).
 
-**Build order: 1 → 2 → 3 → 5 → 4** (≈8-9 sessions total).
+**ALL FIVE TRACKS SHIPPED 2026-08-12/13.** Build-session gotchas worth keeping:
+tmux keeps the outer xterm permanently in the alternate buffer (alt-screen checks are
+useless — prompt-marker heuristics instead, '> ' excluded so Claude Code never
+triggers); phone-width prompts WRAP so logical-line rebuilds must walk isWrapped rows;
+`window.__plStore` debug handle exists for browser automation; CSP font-src needs
+data:. Remaining from the tracks: on-phone gesture tuning pass (user).
 
 ## 👍 THE GOOD (after the Best)
 - Settings sync across devices (prefs server-side per token) — after Track 1.
