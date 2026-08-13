@@ -11,13 +11,20 @@ voice input, biometric lock, link harvester. Gap = polish density, not architect
 
 ## 🏆 THE BEST — sequential tracks (a track is done when its A→B arc closes)
 
-### Track 1 — Gorgeous (~1 session)
+### Track 1 — Gorgeous & Feel (~1.5 sessions)
 Theme pack: import ~12-15 canonical schemes as data into terminalStyleStore
 (Dracula, Nord, Catppuccin Mocha/Latte, Gruvbox, Tokyo Night, Rosé Pine, Everforest,
 Kanagawa, Ayu Mirage, Night Owl, Solarized Dark, One Dark) → swap one bundled font for
-its **Nerd Font** build (powerline/devicon glyphs stop rendering as boxes) →
-**pinch-to-zoom** font size on mobile (live fit + persisted) → theme preview swatches
-in TerminalSettings instead of a dropdown.
+its **Nerd Font** build (powerline/devicon glyphs stop rendering as boxes) → theme
+preview swatches in TerminalSettings instead of a dropdown → **touch-feel pass**
+(gestures, Termius v7.7.0 pattern, all in TerminalScreen's existing touch pipeline):
+**pinch-to-zoom** font (live fit + persisted; two-finger, no collision with scroll) +
+**arrow gestures** — 500ms hold arms gesture mode w/ haptic tick; hold-still-release →
+Select & copy modal (unchanged); hold-then-DRAG → arrow keys, ~24px per press, repeats
+while dragging (Claude Code menus + shell history + cursor movement) + light **haptics**
+on gesture-arm and arrow repeat. Key-bar arrows stay as precision fallback. SKIP
+tap-to-reposition-cursor (readline can't seek; only ever half-works — Termius skips it
+too). Expect a slop/threshold tuning pass on the real phone.
 
 ### Track 2 — Text out (~2 sessions)
 **OSC 52 clipboard bridge** (tmux `set -s set-clipboard on`, pass sequence through PTY,
