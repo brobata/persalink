@@ -11,20 +11,28 @@ voice input, biometric lock, link harvester. Gap = polish density, not architect
 
 ## 🏆 THE BEST — sequential tracks (a track is done when its A→B arc closes)
 
-### Track 1 — Gorgeous & Feel (~1.5 sessions)
+### Track 1 — Gorgeous & Feel (~2 sessions)
 Theme pack: import ~12-15 canonical schemes as data into terminalStyleStore
 (Dracula, Nord, Catppuccin Mocha/Latte, Gruvbox, Tokyo Night, Rosé Pine, Everforest,
 Kanagawa, Ayu Mirage, Night Owl, Solarized Dark, One Dark) → swap one bundled font for
 its **Nerd Font** build (powerline/devicon glyphs stop rendering as boxes) → theme
-preview swatches in TerminalSettings instead of a dropdown → **touch-feel pass**
-(gestures, Termius v7.7.0 pattern, all in TerminalScreen's existing touch pipeline):
-**pinch-to-zoom** font (live fit + persisted; two-finger, no collision with scroll) +
-**arrow gestures** — 500ms hold arms gesture mode w/ haptic tick; hold-still-release →
-Select & copy modal (unchanged); hold-then-DRAG → arrow keys, ~24px per press, repeats
-while dragging (Claude Code menus + shell history + cursor movement) + light **haptics**
-on gesture-arm and arrow repeat. Key-bar arrows stay as precision fallback. SKIP
-tap-to-reposition-cursor (readline can't seek; only ever half-works — Termius skips it
-too). Expect a slop/threshold tuning pass on the real phone.
+preview swatches in TerminalSettings instead of a dropdown → **gesture pack** (full
+Termius spec, user-supplied 2026-08-12; all in TerminalScreen's existing touch pipeline;
+arbitration: hold+drag=arrows · hold+release=selection · double-tap=Tab · two-finger=
+zoom · plain drag=scroll — NO mode toggles):
+1. **Arrow joystick**: 500ms hold arms w/ haptic tick; drag direction = dominant axis
+   from origin; continuous repeat whose RATE scales with drag distance (speed gears,
+   ~150/80/40ms tiers). Haptic tick per gear shift.
+2. **Space-key trackpad**: add Space to the key bar — tap = space, hold+slide = arrows.
+3. **Double-tap = Tab** (completion) — on by default, settings toggle (Tab isn't always
+   harmless in TUIs).
+4. **Pinch-to-zoom** font (live fit + persisted).
+5. **In-place selection handles**: hold a word + release → selection handles drawn as an
+   overlay above the canvas (xterm buffer-coord APIs), drag to extend, context menu with
+   **Copy + Paste**. Select & copy modal remains as "full text view" fallback.
+Key-bar arrows stay as precision fallback. SKIP tap-to-reposition-cursor (readline can't
+seek; only ever half-works — Termius skips it too). Expect a slop/threshold tuning pass
+on the real phone; selection handles are the priciest item.
 
 ### Track 2 — Text out (~2 sessions)
 **OSC 52 clipboard bridge** (tmux `set -s set-clipboard on`, pass sequence through PTY,
