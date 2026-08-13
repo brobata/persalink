@@ -22,7 +22,7 @@ import { useLayoutStore } from './layoutStore';
 // Types
 // ============================================================================
 
-export type View = 'locked' | 'connect' | 'auth' | 'home' | 'terminal' | 'settings' | 'profile-editor';
+export type View = 'locked' | 'connect' | 'auth' | 'home' | 'terminal' | 'settings' | 'profile-editor' | 'files';
 
 /** One saved PersaLink server. `useOrigin` entries resolve their host from
  *  window.location at connect time — that's the entry representing "the server
@@ -191,6 +191,7 @@ interface AppState {
   // validates that the transition is sensible from the current view.
   // (editProfile() and goBack() are pre-existing intent transitions.)
   openSettings: () => void;
+  openFiles: () => void;
   closeOverlay: () => void;
 }
 
@@ -668,7 +669,7 @@ export const useAppStore = create<AppState>()(
 
       goBack: () => {
         const { view } = get();
-        if (view === 'profile-editor' || view === 'settings') {
+        if (view === 'profile-editor' || view === 'settings' || view === 'files') {
           set({ view: 'home' });
         } else if (view === 'terminal') {
           // detach instead of going back
@@ -722,9 +723,15 @@ export const useAppStore = create<AppState>()(
         set({ view: 'settings' });
       },
 
+      openFiles: () => {
+        const v = get().view;
+        if (v === 'locked' || v === 'connect' || v === 'auth') return;
+        set({ view: 'files' });
+      },
+
       closeOverlay: () => {
         const v = get().view;
-        if (v === 'settings' || v === 'profile-editor') {
+        if (v === 'settings' || v === 'profile-editor' || v === 'files') {
           set({ view: 'home', editingProfile: null });
         }
       },

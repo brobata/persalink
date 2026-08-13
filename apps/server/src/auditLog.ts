@@ -33,6 +33,7 @@ export type AuditEvent =
   | 'snippet_saved'
   | 'snippet_deleted'
   | 'exec_run'
+  | 'file_download'
   | 'ws_rejected_per_ip_cap';
 
 interface AuditFields {

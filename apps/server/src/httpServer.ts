@@ -11,6 +11,7 @@ import * as zlib from 'zlib';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import Busboy from 'busboy';
+import { audit } from './auditLog';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -57,7 +58,9 @@ function getSecurityHeaders(): Record<string, string> {
       "style-src 'self' 'unsafe-inline'",
       "connect-src 'self' ws: wss: http: https:",
       "img-src 'self' data:",
-      "font-src 'self'",
+      // data: — the variable-font pipeline inlines some subset fonts as data
+      // URIs; without it the console fills with CSP violations on every load.
+      "font-src 'self' data:",
       "worker-src 'self' blob:",
     ].join('; '),
     'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -119,6 +122,19 @@ export function createHttpHandler(
     // File upload endpoint (requires authentication)
     if (urlPath === '/api/upload' && req.method === 'POST') {
       handleUpload(req, res, validateAuthToken);
+      return;
+    }
+
+    // File browser endpoints (multi-track roadmap Track 4 — File-Share's
+    // core ported behind PersaLink token auth). Read-only: list + download/
+    // preview. Scope is the server user's own permissions — the terminal
+    // already grants full shell access, so this adds convenience, not power.
+    if (urlPath === '/api/files/list' && req.method === 'GET') {
+      handleFilesList(req, res, validateAuthToken);
+      return;
+    }
+    if (urlPath === '/api/files/download' && req.method === 'GET') {
+      handleFileDownload(req, res, validateAuthToken);
       return;
     }
 
@@ -198,6 +214,113 @@ interface UploadedFile {
  * streaming (never buffering whole files in memory), and returns the saved
  * paths in upload order. Replaces the old hand-rolled boundary parser.
  */
+// ---------------------------------------------------------------------------
+// File browser (read-only) — guards ported from the File-Share app
+// ---------------------------------------------------------------------------
+
+const MIME_BY_EXT: Record<string, string> = {
+  '.txt': 'text/plain', '.log': 'text/plain', '.md': 'text/plain', '.json': 'application/json',
+  '.js': 'text/plain', '.ts': 'text/plain', '.sh': 'text/plain', '.yml': 'text/plain',
+  '.yaml': 'text/plain', '.toml': 'text/plain', '.conf': 'text/plain', '.env': 'text/plain',
+  '.csv': 'text/plain', '.html': 'text/plain', '.css': 'text/plain', '.py': 'text/plain',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
+  '.pdf': 'application/pdf', '.zip': 'application/zip', '.gz': 'application/gzip',
+};
+
+/** Expand ~, resolve, and require an absolute path. Authenticated users
+ *  already have full shell access as this user; normalization here is about
+ *  predictability, not privilege. */
+function resolveBrowsePath(raw: string | null): string | null {
+  let p = (raw || '~').trim();
+  if (p === '~' || p.startsWith('~/')) p = path.join(os.homedir(), p.slice(1));
+  if (!path.isAbsolute(p)) return null;
+  return path.resolve(p);
+}
+
+function checkBearer(req: http.IncomingMessage, res: http.ServerResponse, validateAuthToken?: (token: string) => boolean): boolean {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || !validateAuthToken?.(token)) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Authentication required' }));
+    return false;
+  }
+  return true;
+}
+
+function handleFilesList(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  validateAuthToken?: (token: string) => boolean,
+): void {
+  if (!checkBearer(req, res, validateAuthToken)) return;
+  const query = new URL(req.url || '/', 'http://x').searchParams;
+  const dir = resolveBrowsePath(query.get('path'));
+  if (!dir) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Path must be absolute (or ~)' }));
+    return;
+  }
+  try {
+    const names = fs.readdirSync(dir).slice(0, 2000);
+    const entries = names.map((name) => {
+      try {
+        const st = fs.statSync(path.join(dir, name));
+        return { name, type: st.isDirectory() ? 'dir' : 'file', size: st.size, mtime: st.mtimeMs };
+      } catch {
+        return { name, type: 'file', size: 0, mtime: 0 }; // broken symlink etc.
+      }
+    }).sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ path: dir, entries }));
+  } catch (err) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Cannot read directory' }));
+  }
+}
+
+function handleFileDownload(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  validateAuthToken?: (token: string) => boolean,
+): void {
+  if (!checkBearer(req, res, validateAuthToken)) return;
+  const query = new URL(req.url || '/', 'http://x').searchParams;
+  const file = resolveBrowsePath(query.get('path'));
+  if (!file) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Path must be absolute (or ~)' }));
+    return;
+  }
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found' }));
+    return;
+  }
+  if (!st.isFile()) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not a file' }));
+    return;
+  }
+  const inline = query.get('inline') === '1';
+  audit('file_download', { name: file, method: inline ? 'inline' : 'attachment' });
+  const mime = MIME_BY_EXT[path.extname(file).toLowerCase()] || 'application/octet-stream';
+  res.writeHead(200, {
+    'Content-Type': mime,
+    'Content-Length': st.size,
+    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(path.basename(file))}"`,
+    'Cache-Control': 'no-store',
+  });
+  const stream = fs.createReadStream(file);
+  stream.on('error', () => { try { res.destroy(); } catch { /* already gone */ } });
+  stream.pipe(res);
+}
+
 function handleUpload(
   req: http.IncomingMessage,
   res: http.ServerResponse,

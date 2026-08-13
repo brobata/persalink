@@ -237,7 +237,7 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
 // ============================================================================
 
 export function HomeScreen() {
-  const { sessions, profiles, serverName, openSettings, openServers, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
+  const { sessions, profiles, serverName, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
   const [reordering, setReordering] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -303,6 +303,16 @@ export function HomeScreen() {
               title="Discover projects"
             >
               Scan
+            </button>
+            <button
+              onClick={openFiles}
+              className="px-3 py-2 text-sm bg-zinc-800 text-zinc-400 rounded-lg
+                         active:bg-zinc-700 transition-colors"
+              title="Browse this server's files"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+              </svg>
             </button>
             <button
               onClick={openSettings}

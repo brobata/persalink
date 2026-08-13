@@ -7,6 +7,7 @@ import { HomeScreen } from './components/HomeScreen';
 import { TerminalScreen } from './components/TerminalScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { ProfileEditor } from './components/ProfileEditor';
+import { FilesScreen } from './components/FilesScreen';
 import { Sidebar } from './components/Sidebar';
 import { GridLayout } from './components/GridLayout';
 import { ToastStack } from './components/Toast';
@@ -130,7 +131,7 @@ export function App() {
   // Desktop: sidebar always visible + main panel (GridLayout replaces the
   // single-session TerminalScreen here — a 1-pane grid is single-session mode).
   if (isDesktop) {
-    const overlaying = view === 'settings' || view === 'profile-editor';
+    const overlaying = view === 'settings' || view === 'profile-editor' || view === 'files';
     return (
       <div className="flex h-screen bg-zinc-950 relative">
         <Sidebar />
@@ -139,6 +140,7 @@ export function App() {
             <>
               {view === 'settings' && <SettingsScreen />}
               {view === 'profile-editor' && <ProfileEditor />}
+              {view === 'files' && <FilesScreen />}
             </>
           ) : (
             <GridLayout />
@@ -158,6 +160,7 @@ export function App() {
       {view === 'terminal' && <TerminalScreen />}
       {view === 'settings' && <SettingsScreen />}
       {view === 'profile-editor' && <ProfileEditor />}
+      {view === 'files' && <FilesScreen />}
       {isReconnecting && <ReconnectingOverlay />}
       <ToastStack />
       <UpdatePill />
