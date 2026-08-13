@@ -4,6 +4,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useAppStore } from '../stores/appStore';
+import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
+import { TerminalSettings } from './TerminalSettings';
 import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
@@ -31,6 +33,59 @@ const TERMINAL_KEYS: Array<{ label: string; seq: string }> = [
   { label: 'End', seq: '\x1b[F' },
 ];
 
+// Space that doubles as a trackpad: tap = space, hold + slide = arrow keys —
+// Termius's "hold Space and slide" alternative cursor control. Trackpad
+// semantics (one arrow per step of travel), distinct from the hold-joystick
+// on the terminal surface. touch-action none + pointer capture keep the
+// slide from scrolling the key bar underneath.
+function SpaceTrackpadKey({ sendInput }: { sendInput: (data: string) => void }) {
+  const STEP_PX = 14;
+  const stateRef = useRef({ active: false, moved: false, lastX: 0, lastY: 0 });
+  return (
+    <button
+      onPointerDown={(e) => {
+        e.preventDefault();
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        stateRef.current = { active: true, moved: false, lastX: e.clientX, lastY: e.clientY };
+      }}
+      onPointerMove={(e) => {
+        const s = stateRef.current;
+        if (!s.active) return;
+        const dx = e.clientX - s.lastX;
+        const dy = e.clientY - s.lastY;
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          const steps = Math.trunc(dx / STEP_PX);
+          if (steps !== 0) {
+            s.lastX += steps * STEP_PX;
+            s.lastY = e.clientY;
+            s.moved = true;
+            sendInput((steps > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(steps)));
+          }
+        } else {
+          const steps = Math.trunc(dy / STEP_PX);
+          if (steps !== 0) {
+            s.lastY += steps * STEP_PX;
+            s.lastX = e.clientX;
+            s.moved = true;
+            sendInput((steps > 0 ? '\x1b[B' : '\x1b[A').repeat(Math.abs(steps)));
+          }
+        }
+      }}
+      onPointerUp={() => {
+        const s = stateRef.current;
+        if (s.active && !s.moved) sendInput(' ');
+        s.active = false;
+      }}
+      onPointerCancel={() => { stateRef.current.active = false; }}
+      className="shrink-0 min-w-[72px] px-4 py-2 text-xs font-mono bg-zinc-800 text-zinc-400 rounded-md active:bg-zinc-600 transition-colors select-none"
+      style={{ touchAction: 'none' }}
+      title="Space — hold and slide for arrow keys"
+    >
+      ␣
+    </button>
+  );
+}
+
 function TerminalKeyBar({ sendInput, ctrlArmed, onToggleCtrl }: {
   sendInput: (data: string) => void;
   ctrlArmed: boolean;
@@ -52,6 +107,7 @@ function TerminalKeyBar({ sendInput, ctrlArmed, onToggleCtrl }: {
       >
         Ctrl
       </button>
+      <SpaceTrackpadKey sendInput={sendInput} />
       {TERMINAL_KEYS.map((k) => (
         <button
           key={k.label}
@@ -394,6 +450,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
   const [uploading, setUploading] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  // Terminal appearance bottom sheet (themes/font/size) — mobile finally gets
+  // the same styling controls the desktop grid's gear popover has.
+  const [showStyleSheet, setShowStyleSheet] = useState(false);
   // Sticky Ctrl (key bar): state drives the button highlight, the ref is what
   // the xterm onData closure reads — it mounts once and never re-binds.
   const [ctrlArmed, setCtrlArmed] = useState(false);
@@ -592,32 +651,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     terminalRef.current = null;
     sessionIdRef.current = attachedSession?.id ?? null;
 
+    // Style comes from the shared store — mobile was hardcoded to one look
+    // while desktop panes were themeable; now both follow the same settings.
+    const initialStyle = useTerminalStyleStore.getState();
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
-      fontFamily: '"Cascadia Code", "Fira Code", "JetBrains Mono", monospace',
-      theme: {
-        background: '#09090b',
-        foreground: '#fafafa',
-        cursor: '#fafafa',
-        selectionBackground: 'rgba(255, 255, 255, 0.2)',
-        black: '#18181b',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#eab308',
-        blue: '#3b82f6',
-        magenta: '#a855f7',
-        cyan: '#06b6d4',
-        white: '#fafafa',
-        brightBlack: '#71717a',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#facc15',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#c084fc',
-        brightCyan: '#22d3ee',
-        brightWhite: '#ffffff',
-      },
+      fontSize: initialStyle.fontSize,
+      fontFamily: getFontStack(initialStyle.fontFamily),
+      fontWeight: initialStyle.fontWeight,
+      fontWeightBold: '700',
+      theme: getTheme(initialStyle.theme),
       allowProposedApi: true,
       scrollback: 10000,
     });
@@ -662,6 +705,27 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     // Send initial size to server
     resize(term.cols, term.rows);
+
+    // Live-apply style changes (theme swatch taps, pinch-zoom font size…)
+    // without re-attaching. Mirrors TerminalPane's subscription.
+    const unsubStyle = useTerminalStyleStore.subscribe((next, prev) => {
+      const metricsChanged =
+        next.fontFamily !== prev.fontFamily ||
+        next.fontSize !== prev.fontSize ||
+        next.fontWeight !== prev.fontWeight;
+      term.options.fontFamily = getFontStack(next.fontFamily);
+      term.options.fontSize = next.fontSize;
+      term.options.fontWeight = next.fontWeight;
+      term.options.theme = getTheme(next.theme);
+      if (metricsChanged) {
+        requestAnimationFrame(() => {
+          try {
+            fitAddon.fit();
+            resize(term.cols, term.rows);
+          } catch { /* detached mid-change */ }
+        });
+      }
+    });
     saveDims(term.cols, term.rows);
 
     // NOTE: Don't write initialScrollback here. The PTY bridge (tmux attach)
@@ -955,51 +1019,150 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     cancelMomentumRef.current = cancelMomentum;
     altUpLinesRef.current = 0;
 
-    // Long-press (hold without moving) → native select modal. xterm draws to
-    // canvas, so the OS long-press text selection has nothing to grab; this
-    // restores the expected "hold to highlight" gesture on mobile.
+    // ------------------------------------------------------------------
+    // Gesture engine (Termius-style spec). One meaning per gesture, no modes:
+    //   plain drag                 → scroll (with momentum fling)
+    //   two-finger pinch           → font size (live, persisted)
+    //   double-tap                 → Tab (completion; toggleable in settings)
+    //   500ms hold, release still  → Select & copy modal
+    //   500ms hold, then drag      → arrow-key joystick with speed gears
+    // xterm draws to canvas so the OS provides none of this natively.
     const LONG_PRESS_MS = 500;
     const LONG_PRESS_SLOP_PX = 12;
+    const JOYSTICK_ACTIVATE_PX = 14; // drag past this while armed = arrows
+    // Speed gears: repeat interval by drag distance from the arm point —
+    // hold still to keep the current rate, drag further to shift up.
+    const GEARS = [
+      { maxDist: 56, intervalMs: 180 },
+      { maxDist: 128, intervalMs: 90 },
+      { maxDist: Infinity, intervalMs: 45 },
+    ];
+    const ARROW_SEQ = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' } as const;
+    const TAP_MAX_MS = 250;
+    const DOUBLE_TAP_GAP_MS = 300;
+    const DOUBLE_TAP_RADIUS_PX = 40;
+
     let touchStartX = 0;
+    let touchStartTime = 0;
     let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-    let longPressFired = false;
+    let gestureArmed = false;    // hold elapsed, finger still down, not yet dragged
+    let joystickActive = false;
+    let joystickTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastGearIdx = -1;
+    let lastTouchX = 0;
+    let lastTouchY = 0;
+    let tapCandidate = false;
+    let lastTapEnd = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+    let pinching = false;
+    let pinchStartDist = 0;
+    let pinchStartSize = 0;
+
     const cancelLongPress = () => {
       if (longPressTimer !== null) {
         clearTimeout(longPressTimer);
         longPressTimer = null;
       }
     };
+    const stopJoystick = () => {
+      if (joystickTimer !== null) {
+        clearTimeout(joystickTimer);
+        joystickTimer = null;
+      }
+      joystickActive = false;
+      lastGearIdx = -1;
+    };
+    const touchDist = (e: TouchEvent) => Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY,
+    );
+    const joystickTick = () => {
+      const dx = lastTouchX - touchStartX;
+      const dy = lastTouchY - touchStartY;
+      const dist = Math.hypot(dx, dy);
+      const dir = Math.abs(dx) >= Math.abs(dy)
+        ? (dx >= 0 ? 'right' : 'left')
+        : (dy >= 0 ? 'down' : 'up');
+      sendInput(ARROW_SEQ[dir]);
+      const gearIdx = GEARS.findIndex((g) => dist <= g.maxDist);
+      if (gearIdx !== lastGearIdx) {
+        lastGearIdx = gearIdx;
+        try { navigator.vibrate?.(8); } catch { /* unsupported */ }
+      }
+      joystickTimer = setTimeout(joystickTick, GEARS[gearIdx].intervalMs);
+    };
 
     const onTouchStart = (e: TouchEvent) => {
       cancelMomentum();
+      if (e.touches.length >= 2) {
+        // Second finger down → pinch. Kill every single-finger gesture state.
+        cancelLongPress();
+        stopJoystick();
+        gestureArmed = false;
+        tapCandidate = false;
+        pinching = true;
+        pinchStartDist = touchDist(e);
+        pinchStartSize = useTerminalStyleStore.getState().fontSize;
+        return;
+      }
       touchStartY = e.touches[0].clientY;
       touchStartX = e.touches[0].clientX;
+      lastTouchX = touchStartX;
+      lastTouchY = touchStartY;
       lastMoveY = touchStartY;
       lastMoveTime = performance.now();
+      touchStartTime = lastMoveTime;
       scrollAccum = 0;
       velocity = 0;
-      longPressFired = false;
+      gestureArmed = false;
+      stopJoystick();
+      tapCandidate = true;
       cancelLongPress();
-      if (e.touches.length === 1) {
-        longPressTimer = setTimeout(() => {
-          longPressTimer = null;
-          longPressFired = true;
-          try { navigator.vibrate?.(15); } catch { /* unsupported */ }
-          openSelectTextRef.current();
-        }, LONG_PRESS_MS);
-      }
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        gestureArmed = true; // release-still → select modal; drag → joystick
+        tapCandidate = false;
+        try { navigator.vibrate?.(15); } catch { /* unsupported */ }
+      }, LONG_PRESS_MS);
     };
     const onTouchMove = (e: TouchEvent) => {
-      const now = performance.now();
-      const y = e.touches[0].clientY;
-      if (longPressTimer !== null) {
-        const totalDx = e.touches[0].clientX - touchStartX;
-        const totalDy = y - touchStartY;
-        if (Math.hypot(totalDx, totalDy) > LONG_PRESS_SLOP_PX) cancelLongPress();
+      if (pinching) {
+        // Swallow all moves while the pinch flag is up — including the tail
+        // where one finger lifted — so the leftover finger can't scroll-jump.
+        if (e.touches.length >= 2 && pinchStartDist > 0) {
+          const scale = touchDist(e) / pinchStartDist;
+          useTerminalStyleStore.getState().setFontSize(pinchStartSize * scale);
+        }
+        return;
       }
-      // The hold already opened the modal — the rest of this gesture must not
-      // also scroll the terminal underneath it.
-      if (longPressFired) return;
+      const now = performance.now();
+      const t = e.touches[0];
+      lastTouchX = t.clientX;
+      lastTouchY = t.clientY;
+      const y = t.clientY;
+
+      if (gestureArmed) {
+        // Armed gestures never scroll: a drag past the threshold engages the
+        // arrow joystick; anything less keeps waiting for release.
+        if (!joystickActive) {
+          const dist = Math.hypot(t.clientX - touchStartX, y - touchStartY);
+          if (dist > JOYSTICK_ACTIVATE_PX) {
+            joystickActive = true;
+            joystickTick();
+          }
+        }
+        return;
+      }
+
+      if (longPressTimer !== null) {
+        const totalDx = t.clientX - touchStartX;
+        const totalDy = y - touchStartY;
+        if (Math.hypot(totalDx, totalDy) > LONG_PRESS_SLOP_PX) {
+          cancelLongPress();
+          tapCandidate = false;
+        }
+      }
       const dy = lastMoveY - y; // positive when finger moves up = scroll content up
       const dt = Math.max(1, now - lastMoveTime);
       // Smooth velocity with EMA so a single jittery sample doesn't dominate.
@@ -1014,12 +1177,42 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         applyScroll(lines);
       }
     };
-    const onTouchEnd = () => {
-      cancelLongPress();
-      if (longPressFired) {
-        longPressFired = false;
+    const onTouchEnd = (e: TouchEvent) => {
+      if (pinching) {
+        if (e.touches.length === 0) pinching = false;
         velocity = 0;
         return;
+      }
+      cancelLongPress();
+      if (joystickActive) {
+        stopJoystick();
+        gestureArmed = false;
+        velocity = 0;
+        return;
+      }
+      if (gestureArmed) {
+        // Hold + release without dragging → selection (Termius: "press and
+        // hold a word, release to show selection").
+        gestureArmed = false;
+        velocity = 0;
+        openSelectTextRef.current();
+        return;
+      }
+      // Double-tap → Tab. Two quick, still taps close together.
+      const now = performance.now();
+      if (tapCandidate && now - touchStartTime < TAP_MAX_MS) {
+        const withinGap = now - lastTapEnd < DOUBLE_TAP_GAP_MS + TAP_MAX_MS;
+        const withinRadius = Math.hypot(touchStartX - lastTapX, touchStartY - lastTapY) < DOUBLE_TAP_RADIUS_PX;
+        if (withinGap && withinRadius && useTerminalStyleStore.getState().doubleTapTab) {
+          lastTapEnd = 0; // consume — a third tap starts fresh
+          try { navigator.vibrate?.(10); } catch { /* unsupported */ }
+          sendInput('\t');
+          velocity = 0;
+          return;
+        }
+        lastTapEnd = now;
+        lastTapX = touchStartX;
+        lastTapY = touchStartY;
       }
       // If the finger was essentially stopped before lift, no fling.
       // Stale velocity from earlier in the gesture also gets dropped if
@@ -1176,6 +1369,8 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       cancelMomentum();
       cancelMomentumRef.current = null;
       cancelLongPress();
+      unsubStyle();
+      stopJoystick();
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
@@ -1270,6 +1465,18 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           onChange={handleFileUpload}
           className="hidden"
         />
+        <button
+          onPointerDown={(e) => { e.preventDefault(); setShowStyleSheet(true); }}
+          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
+          title="Terminal appearance — theme, font, size"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 110-18 9 8 0 019 8 4.5 4.5 0 01-4.5 4.5h-1.6a1.9 1.9 0 00-1.4 3.2c.3.3.5.7.5 1.1a1.2 1.2 0 01-1 1.2z" />
+            <circle cx="7.5" cy="11.5" r=".8" fill="currentColor" />
+            <circle cx="11" cy="7.5" r=".8" fill="currentColor" />
+            <circle cx="15.5" cy="9" r=".8" fill="currentColor" />
+          </svg>
+        </button>
         <button
           onPointerDown={(e) => { e.preventDefault(); requestLinks(); }}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
@@ -1410,6 +1617,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
       {/* Harvested links — opens when the server's session.links reply lands */}
       {sessionLinks !== null && <LinkSheet links={sessionLinks} onClose={clearSessionLinks} />}
+
+      {/* Terminal appearance sheet — live theme/font/size changes */}
+      {showStyleSheet && <TerminalSettings variant="sheet" onClose={() => setShowStyleSheet(false)} />}
 
       {/* Native text-selection modal — mobile-friendly copy. xterm renders to
           canvas so Android's long-press magnifier has nothing to grab.

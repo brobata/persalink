@@ -35,11 +35,18 @@ export type ThemeName =
   | 'persalink'
   | 'tokyo-night'
   | 'dracula'
+  | 'catppuccin-mocha'
+  | 'rose-pine'
+  | 'kanagawa'
+  | 'everforest'
+  | 'ayu-mirage'
+  | 'night-owl'
   | 'one-dark'
   | 'solarized-dark'
   | 'nord'
   | 'gruvbox-dark'
   | 'monokai'
+  | 'catppuccin-latte'
   | 'light';
 
 export const THEMES: Record<ThemeName, { label: string; theme: XtermTheme }> = {
@@ -77,6 +84,78 @@ export const THEMES: Record<ThemeName, { label: string; theme: XtermTheme }> = {
       brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94',
       brightYellow: '#ffffa5', brightBlue: '#d6acff', brightMagenta: '#ff92df',
       brightCyan: '#a4ffff', brightWhite: '#ffffff',
+    },
+  },
+  'catppuccin-mocha': {
+    label: 'Catppuccin Mocha',
+    theme: {
+      background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc',
+      selectionBackground: '#45475a',
+      black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af',
+      blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
+      brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1',
+      brightYellow: '#f9e2af', brightBlue: '#89b4fa', brightMagenta: '#f5c2e7',
+      brightCyan: '#94e2d5', brightWhite: '#a6adc8',
+    },
+  },
+  'rose-pine': {
+    label: 'Rosé Pine',
+    theme: {
+      background: '#191724', foreground: '#e0def4', cursor: '#e0def4',
+      selectionBackground: '#403d52',
+      black: '#26233a', red: '#eb6f92', green: '#31748f', yellow: '#f6c177',
+      blue: '#9ccfd8', magenta: '#c4a7e7', cyan: '#ebbcba', white: '#e0def4',
+      brightBlack: '#6e6a86', brightRed: '#eb6f92', brightGreen: '#31748f',
+      brightYellow: '#f6c177', brightBlue: '#9ccfd8', brightMagenta: '#c4a7e7',
+      brightCyan: '#ebbcba', brightWhite: '#e0def4',
+    },
+  },
+  'kanagawa': {
+    label: 'Kanagawa',
+    theme: {
+      background: '#1f1f28', foreground: '#dcd7ba', cursor: '#c8c093',
+      selectionBackground: '#2d4f67',
+      black: '#090618', red: '#c34043', green: '#76946a', yellow: '#c0a36e',
+      blue: '#7e9cd8', magenta: '#957fb8', cyan: '#6a9589', white: '#c8c093',
+      brightBlack: '#727169', brightRed: '#e82424', brightGreen: '#98bb6c',
+      brightYellow: '#e6c384', brightBlue: '#7fb4ca', brightMagenta: '#938aa9',
+      brightCyan: '#7aa89f', brightWhite: '#dcd7ba',
+    },
+  },
+  'everforest': {
+    label: 'Everforest',
+    theme: {
+      background: '#2d353b', foreground: '#d3c6aa', cursor: '#d3c6aa',
+      selectionBackground: '#475258',
+      black: '#475258', red: '#e67e80', green: '#a7c080', yellow: '#dbbc7f',
+      blue: '#7fbbb3', magenta: '#d699b6', cyan: '#83c092', white: '#d3c6aa',
+      brightBlack: '#859289', brightRed: '#e67e80', brightGreen: '#a7c080',
+      brightYellow: '#dbbc7f', brightBlue: '#7fbbb3', brightMagenta: '#d699b6',
+      brightCyan: '#83c092', brightWhite: '#d3c6aa',
+    },
+  },
+  'ayu-mirage': {
+    label: 'Ayu Mirage',
+    theme: {
+      background: '#1f2430', foreground: '#cbccc6', cursor: '#ffcc66',
+      selectionBackground: '#33415e',
+      black: '#191e2a', red: '#f28779', green: '#bae67e', yellow: '#ffd580',
+      blue: '#73d0ff', magenta: '#d4bfff', cyan: '#95e6cb', white: '#cbccc6',
+      brightBlack: '#707a8c', brightRed: '#f28779', brightGreen: '#bae67e',
+      brightYellow: '#ffd580', brightBlue: '#73d0ff', brightMagenta: '#d4bfff',
+      brightCyan: '#95e6cb', brightWhite: '#ffffff',
+    },
+  },
+  'night-owl': {
+    label: 'Night Owl',
+    theme: {
+      background: '#011627', foreground: '#d6deeb', cursor: '#80a4c2',
+      selectionBackground: '#1d3b53',
+      black: '#011627', red: '#ef5350', green: '#22da6e', yellow: '#addb67',
+      blue: '#82aaff', magenta: '#c792ea', cyan: '#21c7a8', white: '#ffffff',
+      brightBlack: '#575656', brightRed: '#ef5350', brightGreen: '#22da6e',
+      brightYellow: '#ffeb95', brightBlue: '#82aaff', brightMagenta: '#c792ea',
+      brightCyan: '#7fdbca', brightWhite: '#ffffff',
     },
   },
   'one-dark': {
@@ -139,6 +218,18 @@ export const THEMES: Record<ThemeName, { label: string; theme: XtermTheme }> = {
       brightCyan: '#a1efe4', brightWhite: '#f9f8f5',
     },
   },
+  'catppuccin-latte': {
+    label: 'Catppuccin Latte',
+    theme: {
+      background: '#eff1f5', foreground: '#4c4f69', cursor: '#dc8a78',
+      selectionBackground: '#acb0be',
+      black: '#5c5f77', red: '#d20f39', green: '#40a02b', yellow: '#df8e1d',
+      blue: '#1e66f5', magenta: '#ea76cb', cyan: '#179299', white: '#acb0be',
+      brightBlack: '#6c6f85', brightRed: '#d20f39', brightGreen: '#40a02b',
+      brightYellow: '#df8e1d', brightBlue: '#1e66f5', brightMagenta: '#ea76cb',
+      brightCyan: '#179299', brightWhite: '#bcc0cc',
+    },
+  },
   'light': {
     label: 'Light',
     theme: {
@@ -160,16 +251,20 @@ export type FontFamilyChoice =
 // Variable fonts use the "<Name> Variable" family name that @fontsource-variable
 // registers; fall back to the non-variable family name (for users who have it
 // installed locally) and then to generic monospace.
+// "Symbols Nerd Font Mono" (bundled, @font-face in styles/index.css) sits in
+// every stack as the glyph fallback — powerline separators, devicons, and other
+// Nerd Font symbols render from it no matter which text font is selected.
+const NERD = '"Symbols Nerd Font Mono", monospace';
 export const FONT_FAMILIES: Record<FontFamilyChoice, { label: string; stack: string }> = {
-  'cascadia':        { label: 'Cascadia Code',    stack: '"Cascadia Code Variable", "Cascadia Code", monospace' },
-  'jetbrains':       { label: 'JetBrains Mono',   stack: '"JetBrains Mono Variable", "JetBrains Mono", monospace' },
-  'fira':            { label: 'Fira Code',        stack: '"Fira Code Variable", "Fira Code", monospace' },
-  'source-code-pro': { label: 'Source Code Pro',  stack: '"Source Code Pro Variable", "Source Code Pro", monospace' },
-  'ibm-plex':        { label: 'IBM Plex Mono',    stack: '"IBM Plex Mono", monospace' },
-  'menlo':           { label: 'Menlo',            stack: 'Menlo, Monaco, monospace' },
-  'consolas':        { label: 'Consolas',         stack: 'Consolas, "Lucida Console", monospace' },
-  'courier':         { label: 'Courier New',      stack: '"Courier New", Courier, monospace' },
-  'system':          { label: 'System default',   stack: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' },
+  'cascadia':        { label: 'Cascadia Code',    stack: `"Cascadia Code Variable", "Cascadia Code", ${NERD}` },
+  'jetbrains':       { label: 'JetBrains Mono',   stack: `"JetBrains Mono Variable", "JetBrains Mono", ${NERD}` },
+  'fira':            { label: 'Fira Code',        stack: `"Fira Code Variable", "Fira Code", ${NERD}` },
+  'source-code-pro': { label: 'Source Code Pro',  stack: `"Source Code Pro Variable", "Source Code Pro", ${NERD}` },
+  'ibm-plex':        { label: 'IBM Plex Mono',    stack: `"IBM Plex Mono", ${NERD}` },
+  'menlo':           { label: 'Menlo',            stack: `Menlo, Monaco, ${NERD}` },
+  'consolas':        { label: 'Consolas',         stack: `Consolas, "Lucida Console", ${NERD}` },
+  'courier':         { label: 'Courier New',      stack: `"Courier New", Courier, ${NERD}` },
+  'system':          { label: 'System default',   stack: `ui-monospace, SFMono-Regular, Menlo, Consolas, ${NERD}` },
 };
 
 export type FontWeightChoice = '300' | '400' | '500' | '600';
@@ -185,12 +280,16 @@ interface TerminalStyleState {
   fontWeight: FontWeightChoice;
   theme: ThemeName;
   historyOnAttach: HistoryOnAttach;
+  /** Double-tap the terminal sends Tab (completion). Toggleable because Tab
+   *  isn't always harmless in TUIs. */
+  doubleTapTab: boolean;
 
   setFontFamily: (f: FontFamilyChoice) => void;
   setFontSize: (s: number) => void;
   setFontWeight: (w: FontWeightChoice) => void;
   setTheme: (t: ThemeName) => void;
   setHistoryOnAttach: (h: HistoryOnAttach) => void;
+  setDoubleTapTab: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -212,15 +311,17 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       fontWeight: '400',
       theme: 'persalink',
       historyOnAttach: 0,
+      doubleTapTab: true,
 
       setFontFamily: (fontFamily) => set({ fontFamily }),
-      setFontSize: (fontSize) => set({ fontSize }),
+      setFontSize: (fontSize) => set({ fontSize: Math.min(24, Math.max(8, Math.round(fontSize))) }),
       setFontWeight: (fontWeight) => set({ fontWeight }),
       setTheme: (theme) => set({ theme }),
       setHistoryOnAttach: (historyOnAttach) => set({ historyOnAttach }),
+      setDoubleTapTab: (doubleTapTab) => set({ doubleTapTab }),
       reset: () => set({
         fontFamily: 'cascadia', fontSize: 13, fontWeight: '400',
-        theme: 'persalink', historyOnAttach: 0,
+        theme: 'persalink', historyOnAttach: 0, doubleTapTab: true,
       }),
     }),
     {
