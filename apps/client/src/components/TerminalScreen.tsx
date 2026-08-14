@@ -936,8 +936,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const sel = term.getSelection();
       if (sel) clipboardWrite(sel);
     };
+    // Mouse only: desktop drag-select auto-copies (terminal convention).
+    // Touch selections do NOT — Android blocks clipboard writes outside a
+    // fresh user gesture so it silently failed half the time; on mobile the
+    // explicit Copy buttons (selection menu / quick-actions dial) are the way.
     document.addEventListener('mouseup', onSelectionEnd);
-    document.addEventListener('touchend', onSelectionEnd);
 
     // Paste via browser paste event (works on HTTP)
     const onPaste = (e: ClipboardEvent) => {
@@ -1602,7 +1605,10 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     })();
     let dragCandidate = false;
     const onMouseDownHint = (e: MouseEvent) => {
-      dragCandidate = !e.shiftKey && term.buffer.active.type === 'alternate';
+      // Real-mouse devices only. Android synthesizes mouse events after taps,
+      // which fired this hint on phones — where "Shift+drag" is impossible.
+      dragCandidate = !e.shiftKey && term.buffer.active.type === 'alternate'
+        && window.matchMedia('(pointer: fine)').matches;
     };
     const onMouseMoveHint = () => {
       if (!dragCandidate || selectHintShown) return;
@@ -1712,7 +1718,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       container.removeEventListener('mouseup', onMouseUpHint);
       container.removeEventListener('paste', onPaste as EventListener);
       document.removeEventListener('mouseup', onSelectionEnd);
-      document.removeEventListener('touchend', onSelectionEnd);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       selectionChangeDisposable.dispose();
       resizeObserver.disconnect();

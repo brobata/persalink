@@ -455,8 +455,9 @@ export function TerminalPane({
       const sel = term.getSelection();
       if (sel) clipboardWrite(sel);
     };
+    // Mouse only — touch selections copy via explicit buttons (see
+    // TerminalScreen); Android blocks background clipboard writes anyway.
     document.addEventListener('mouseup', onSelectionEnd);
-    document.addEventListener('touchend', onSelectionEnd);
 
     const onPaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData('text');
@@ -663,7 +664,6 @@ export function TerminalPane({
       if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current);
       containerRef.current?.removeEventListener('paste', onPaste as EventListener);
       document.removeEventListener('mouseup', onSelectionEnd);
-      document.removeEventListener('touchend', onSelectionEnd);
       selectionChangeDisposable.dispose();
       term.textarea?.removeEventListener('focus', focusHandler);
       term.textarea?.removeEventListener('blur', blurHandler);
