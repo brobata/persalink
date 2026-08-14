@@ -1348,6 +1348,25 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         longPressTimer = null;
       }
     };
+    // Pending tap-away keyboard dismiss (see the tap handler below).
+    let kbDismissTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelKbDismiss = () => {
+      if (kbDismissTimer !== null) {
+        clearTimeout(kbDismissTimer);
+        kbDismissTimer = null;
+      }
+    };
+    // Was the tap on (±1 row of) the cursor's line — the de-facto input field?
+    const tapOnCursorRow = () => {
+      const screen = term.element?.querySelector('.xterm-screen');
+      if (!screen) return false;
+      const rect = screen.getBoundingClientRect();
+      const cellH = rect.height / term.rows;
+      if (cellH <= 0) return false;
+      const tappedRow = Math.floor((touchStartY - rect.top) / cellH);
+      const buf = term.buffer.active;
+      return Math.abs(tappedRow - (buf.baseY + buf.cursorY - buf.viewportY)) <= 1;
+    };
     const stopJoystick = () => {
       if (joystickTimer !== null) {
         clearTimeout(joystickTimer);
@@ -1378,6 +1397,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     const onTouchStart = (e: TouchEvent) => {
       cancelMomentum();
+      cancelKbDismiss(); // a second tap (double-tap Tab) keeps the keyboard up
       clearHandles(); // touching the terminal dismisses selection handles
       if (e.touches.length >= 2) {
         // Second finger down → pinch. Kill every single-finger gesture state.
@@ -1499,21 +1519,20 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         lastTapX = touchStartX;
         lastTapY = touchStartY;
         // Tap on the cursor's line = tapping the "input field" → raise the
-        // keyboard. The terminal is a character grid with no real input box,
-        // but the cursor row is where typing lands (a shell prompt, Claude
-        // Code's input box). ±1 row of slop covers box borders + fat fingers.
-        if (!softKbOnRef.current) {
-          const screen = term.element?.querySelector('.xterm-screen');
-          if (screen) {
-            const rect = screen.getBoundingClientRect();
-            const cellH = rect.height / term.rows;
-            if (cellH > 0) {
-              const tappedRow = Math.floor((touchStartY - rect.top) / cellH);
-              const buf = term.buffer.active;
-              const cursorViewportRow = buf.baseY + buf.cursorY - buf.viewportY;
-              if (Math.abs(tappedRow - cursorViewportRow) <= 1) applySoftKb(true);
-            }
-          }
+        // keyboard; tap anywhere else → hide it. The terminal is a character
+        // grid with no real input box, but the cursor row is where typing
+        // lands (a shell prompt, Claude Code's input box). ±1 row of slop
+        // covers box borders + fat fingers. The hide is DELAYED past the
+        // double-tap window and canceled by the next touchstart — otherwise
+        // the first tap of a double-tap-Tab (used mid-typing) would yank the
+        // keyboard down before the Tab even fired.
+        if (tapOnCursorRow()) {
+          if (!softKbOnRef.current) applySoftKb(true);
+        } else if (softKbOnRef.current) {
+          kbDismissTimer = setTimeout(() => {
+            kbDismissTimer = null;
+            applySoftKb(false);
+          }, DOUBLE_TAP_GAP_MS);
         }
       }
       // If the finger was essentially stopped before lift, no fling.
@@ -1699,6 +1718,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       term.textarea?.removeEventListener('focus', onTermFocus);
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
       if (compositionWatchdog) clearTimeout(compositionWatchdog);
+      cancelKbDismiss();
       terminalRef.current = null;
       term.dispose();
     };
