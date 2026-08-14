@@ -474,6 +474,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     initialScrollback, windows, selectWindow, createWindow, serverUrl, authToken,
     sessions, activeTabId, switchTab, closeTab, showTabPicker, setShowTabPicker, getTabs,
     attachSession, connectionState, requestLinks, sessionLinks, clearSessionLinks,
+    snippets,
   } = useAppStore();
 
   // 'authenticated' is the only fully-usable state; anything else means input
@@ -493,6 +494,14 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const [showStyleSheet, setShowStyleSheet] = useState(false);
   // Snippet library sheet (opened from the key bar's {} key).
   const [showSnippets, setShowSnippets] = useState(false);
+  // Quick-actions dial: one FAB that fans out keyboard / mic / paste /
+  // snippets + the first few var-free snippets as one-tap pills. Replaces the
+  // separate keyboard + mic buttons that were eating terminal real estate.
+  const [fabOpen, setFabOpen] = useState(false);
+  const quickSnips = useMemo(
+    () => snippets.filter((s) => !/\{\{[a-zA-Z0-9_ -]+\}\}/.test(s.command)).slice(0, 3),
+    [snippets],
+  );
   // Suggestion bar: prefix-matched shell history for the current typed
   // command (normal buffer only — alt-screen apps get no noise).
   const [sugg, setSugg] = useState<{ prefix: string; items: string[] }>({ prefix: '', items: [] });
@@ -1489,6 +1498,23 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         lastTapEnd = now;
         lastTapX = touchStartX;
         lastTapY = touchStartY;
+        // Tap on the cursor's line = tapping the "input field" → raise the
+        // keyboard. The terminal is a character grid with no real input box,
+        // but the cursor row is where typing lands (a shell prompt, Claude
+        // Code's input box). ±1 row of slop covers box borders + fat fingers.
+        if (!softKbOnRef.current) {
+          const screen = term.element?.querySelector('.xterm-screen');
+          if (screen) {
+            const rect = screen.getBoundingClientRect();
+            const cellH = rect.height / term.rows;
+            if (cellH > 0) {
+              const tappedRow = Math.floor((touchStartY - rect.top) / cellH);
+              const buf = term.buffer.active;
+              const cursorViewportRow = buf.baseY + buf.cursorY - buf.viewportY;
+              if (Math.abs(tappedRow - cursorViewportRow) <= 1) applySoftKb(true);
+            }
+          }
+        }
       }
       // If the finger was essentially stopped before lift, no fling.
       // Stale velocity from earlier in the gesture also gets dropped if
@@ -1960,51 +1986,130 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             </div>
           </>
         )}
-        {/* Soft-keyboard toggle — the ONLY thing that raises the keyboard.
-            Sits left of the mic; green when the keyboard is requested. */}
-        {!sidebarVisible && (
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={() => applySoftKb(!softKbOn)}
-            className={`absolute z-10 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
-              softKbOn ? 'bg-emerald-600 text-white' : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
-            }`}
-            style={{ right: voice.isSupported ? '4.25rem' : '0.75rem', bottom: 'max(12px, env(safe-area-inset-bottom))' }}
-            title={softKbOn ? 'Hide keyboard' : 'Show keyboard'}
-            aria-label={softKbOn ? 'Hide keyboard' : 'Show keyboard'}
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <rect x="2" y="6" width="20" height="12" rx="2" />
-              <path strokeLinecap="round" d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
-            </svg>
-          </button>
+        {/* Quick-actions dial — ONE floating button instead of keyboard + mic
+            side by side. Tap fans out keyboard / mic / paste / snippets plus
+            one-tap pills for the first few var-free snippets. While dictation
+            is live the collapsed FAB becomes the pulsing red mic (tap = stop),
+            same single-tap stop as the old dedicated button. Every control
+            preventDefaults pointer/mouse down so the terminal keeps focus
+            (the focus-steal that once killed desktop Ctrl+C). */}
+        {fabOpen && (
+          <div className="fixed inset-0 z-10" onClick={() => setFabOpen(false)} />
         )}
-        {voice.isSupported && (
-          <button
-            // Belt-and-suspenders against the focus-steal that killed Ctrl+C
-            // on desktop: mousedown.preventDefault blocks the focus shift
-            // when the browser fires it; pointerdown.preventDefault covers
-            // touch. We don't toggle from pointerdown anymore — that fired
-            // twice on hybrid touch+mouse devices.
-            onMouseDown={(e) => e.preventDefault()}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={voice.toggle}
-            className={`absolute right-3 bottom-3 z-10 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
-              voice.isListening
-                ? 'bg-red-500 text-white animate-pulse'
-                : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
-            }`}
-            style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
-            title={voice.isListening ? 'Stop dictation' : 'Start dictation'}
-            aria-label={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+        {fabOpen && (
+          <div
+            className="absolute right-3 z-20 flex flex-col items-end gap-2"
+            style={{ bottom: 'calc(max(12px, env(safe-area-inset-bottom)) + 3.5rem)' }}
           >
+            {quickSnips.map((s, i) => (
+              <button
+                key={s.id}
+                onMouseDown={(e) => e.preventDefault()}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => { sendInput(s.command); setFabOpen(false); }}
+                className="pl-fab-item max-w-[70vw] truncate px-3 py-2 rounded-full bg-zinc-800/95 border border-zinc-700 text-zinc-200 text-xs font-mono shadow-lg active:bg-zinc-700"
+                style={{ animationDelay: `${100 + (quickSnips.length - 1 - i) * 30}ms` }}
+                title={s.command}
+              >
+                {s.name || s.command}
+              </button>
+            ))}
+            <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '75ms' }}>
+              <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Snippets</span>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => { setShowSnippets(true); setFabOpen(false); }}
+                className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700 font-mono text-sm"
+                aria-label="Snippet library"
+              >
+                {'{}'}
+              </button>
+            </div>
+            <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '50ms' }}>
+              <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Paste</span>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => { void pasteFromClipboard(); setFabOpen(false); }}
+                className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700"
+                aria-label="Paste from clipboard"
+              >
+                <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+              </button>
+            </div>
+            {voice.isSupported && (
+              <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '25ms' }}>
+                <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Dictate</span>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={() => { voice.toggle(); setFabOpen(false); }}
+                  className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700"
+                  aria-label="Start dictation"
+                >
+                  <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
+                  </svg>
+                </button>
+              </div>
+            )}
+            {!sidebarVisible && (
+              <div className="pl-fab-item flex items-center gap-2">
+                <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Keyboard</span>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={() => { applySoftKb(!softKbOn); setFabOpen(false); }}
+                  className={`w-10 h-10 rounded-full shadow-lg flex items-center justify-center ${
+                    softKbOn ? 'bg-emerald-600 text-white' : 'bg-zinc-800/95 text-zinc-300 active:bg-zinc-700'
+                  }`}
+                  aria-label={softKbOn ? 'Hide keyboard' : 'Show keyboard'}
+                >
+                  <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <rect x="2" y="6" width="20" height="12" rx="2" />
+                    <path strokeLinecap="round" d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        <button
+          onMouseDown={(e) => e.preventDefault()}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => {
+            if (!fabOpen && voice.isListening) voice.toggle(); // red mic = tap to stop
+            else setFabOpen((v) => !v);
+          }}
+          className={`absolute right-3 z-20 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
+            voice.isListening && !fabOpen
+              ? 'bg-red-500 text-white animate-pulse'
+              : softKbOn && !fabOpen
+                ? 'bg-emerald-600 text-white'
+                : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
+          }`}
+          style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
+          title={voice.isListening && !fabOpen ? 'Stop dictation' : fabOpen ? 'Close' : 'Quick actions'}
+          aria-label={voice.isListening && !fabOpen ? 'Stop dictation' : fabOpen ? 'Close quick actions' : 'Quick actions'}
+        >
+          {voice.isListening && !fabOpen ? (
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
             </svg>
-          </button>
-        )}
+          ) : (
+            <svg
+              className={`w-5 h-5 transition-transform duration-150 ${fabOpen ? 'rotate-45' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+            >
+              <path strokeLinecap="round" d="M12 5v14M5 12h14" />
+            </svg>
+          )}
+        </button>
       </div>
 
       {/* Suggestion bar — tap a chip to complete the current command */}

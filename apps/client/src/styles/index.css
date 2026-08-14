@@ -47,3 +47,14 @@ body {
   font-style: normal;
   font-display: swap;
 }
+
+/* Quick-actions dial: items pop up from the FAB with a slight stagger
+   (per-item animation-delay set inline). `both` keeps delayed items hidden
+   until their turn. */
+@keyframes pl-fab-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.pl-fab-item {
+  animation: pl-fab-in 120ms ease-out both;
+}
