@@ -5,6 +5,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { useAppStore } from '../stores/appStore';
+import { handleOsc52 } from '../lib/clipboardBridge';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { TerminalSettings } from './TerminalSettings';
 import { SnippetSheet } from './SnippetSheet';
@@ -796,22 +797,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // OSC 52 passthrough: programs inside the session (tmux copy-mode `y`,
     // vim yank plugins, CLIs) push text straight onto this device's clipboard.
     // Write-only — clipboard READ queries ("?") are never answered.
-    const osc52Disp = term.parser.registerOscHandler(52, (data) => {
-      const semi = data.indexOf(';');
-      const payload = semi >= 0 ? data.slice(semi + 1) : data;
-      if (!payload || payload === '?') return true;
-      try {
-        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
-        const text = new TextDecoder().decode(bytes);
-        if (text && navigator.clipboard?.writeText && window.isSecureContext) {
-          navigator.clipboard.writeText(text).then(
-            () => useAppStore.getState().pushNotification('info', 'Copied from session', 'osc52'),
-            () => { /* page unfocused or permission denied — stay quiet */ },
-          );
-        }
-      } catch { /* malformed base64 — ignore */ }
-      return true;
-    });
+    const osc52Disp = term.parser.registerOscHandler(52, handleOsc52);
 
     // Try WebGL, fall back gracefully. Mobile browsers (Android especially)
     // evict GPU contexts from backgrounded tabs/PWAs; without a context-loss

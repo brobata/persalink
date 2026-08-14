@@ -14,6 +14,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { ServerMessage, SessionInfo, TmuxWindowInfo } from '@persalink/shared/protocol';
 import { WSClient } from '../lib/ws';
 import { useAppStore } from '../stores/appStore';
+import { handleOsc52 } from '../lib/clipboardBridge';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { useVoiceInput } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
@@ -366,22 +367,7 @@ export function TerminalPane({
 
     // OSC 52 passthrough — same handler as TerminalScreen: in-session copies
     // (tmux copy-mode, vim) land on this device's clipboard. Write-only.
-    const osc52Disp = term.parser.registerOscHandler(52, (data) => {
-      const semi = data.indexOf(';');
-      const payload = semi >= 0 ? data.slice(semi + 1) : data;
-      if (!payload || payload === '?') return true;
-      try {
-        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
-        const text = new TextDecoder().decode(bytes);
-        if (text && navigator.clipboard?.writeText && window.isSecureContext) {
-          navigator.clipboard.writeText(text).then(
-            () => useAppStore.getState().pushNotification('info', 'Copied from session', 'osc52'),
-            () => { /* unfocused or denied — quiet */ },
-          );
-        }
-      } catch { /* malformed base64 */ }
-      return true;
-    });
+    const osc52Disp = term.parser.registerOscHandler(52, handleOsc52);
 
     // WebGL with context-loss recovery. Desktop panes stay open for days; the
     // browser evicts GPU contexts under memory pressure / GPU reset / long
