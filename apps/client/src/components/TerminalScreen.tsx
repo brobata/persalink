@@ -1087,19 +1087,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // tmux forwards wheel events to the inner app which usually doesn't
     // map them to history navigation, so nothing visible happens. Without
     // this hint the user just thinks scrolling is broken.
-    let altScreenWarned = false;
-    const maybeWarnAltScreenScroll = () => {
-      if (altScreenWarned) return;
-      altScreenWarned = true;
-      try {
-        useAppStore.getState().pushNotification(
-          'info',
-          'Scrollback is owned by this app — exit it to scroll the shell history.',
-          'scrollback',
-        );
-      } catch { /* store unavailable */ }
-    };
-
     // Touch scroll for mobile — slow drags scroll 1:1, fast flicks add
     // momentum that decays over time (native iOS/Android feel).
     //
@@ -1140,7 +1127,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         // Alt-screen scroll makes the app REDRAW — the text under a selection
         // changes, so handles would point at stale content. Drop them.
         selApiRef.current?.clear();
-        maybeWarnAltScreenScroll();
         // alt-screen owns its buffer, so we can't read the real scroll
         // position — track net up-lines instead. Down-scroll pays the count
         // back off; at zero the user is back at (or past) live, so the jump
