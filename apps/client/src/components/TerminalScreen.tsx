@@ -528,6 +528,26 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     setSearchCount(null);
     terminalRef.current?.focus();
   }, []);
+  // Soft-keyboard policy: the terminal surface is NOT a keyboard trigger.
+  // xterm's hidden textarea runs with inputmode="none" (focus works — key
+  // bar, hardware keys, selection — but no soft keyboard), and the floating
+  // keyboard button below flips it to text + refocuses. Tapping anywhere in
+  // the session no longer summons Gboard.
+  const [softKbOn, setSoftKbOn] = useState(false);
+  const softKbOnRef = useRef(false);
+  const applySoftKb = useCallback((on: boolean) => {
+    softKbOnRef.current = on;
+    setSoftKbOn(on);
+    const term = terminalRef.current;
+    const ta = term?.textarea;
+    if (!ta) return;
+    ta.inputMode = on ? 'text' : 'none';
+    // Android only re-reads inputmode on a fresh focus — cycle it.
+    ta.blur();
+    if (on) term?.focus();
+    else term?.focus(); // refocus keeps hardware keys + cursor; no soft kb with inputmode none
+  }, []);
+
   // Sticky Ctrl (key bar): state drives the button highlight, the ref is what
   // the xterm onData closure reads — it mounts once and never re-binds.
   const [ctrlArmed, setCtrlArmed] = useState(false);
@@ -766,6 +786,12 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     });
 
     term.open(termRef.current);
+
+    // Apply the soft-keyboard policy to this terminal's textarea (a new
+    // textarea is born with every terminal instance).
+    if (term.textarea) {
+      term.textarea.inputMode = softKbOnRef.current ? 'text' : 'none';
+    }
 
     // OSC 52 passthrough: programs inside the session (tmux copy-mode `y`,
     // vim yank plugins, CLIs) push text straight onto this device's clipboard.
@@ -1961,6 +1987,26 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
               </button>
             </div>
           </>
+        )}
+        {/* Soft-keyboard toggle — the ONLY thing that raises the keyboard.
+            Sits left of the mic; green when the keyboard is requested. */}
+        {!sidebarVisible && (
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => applySoftKb(!softKbOn)}
+            className={`absolute z-10 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
+              softKbOn ? 'bg-emerald-600 text-white' : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
+            }`}
+            style={{ right: voice.isSupported ? '4.25rem' : '0.75rem', bottom: 'max(12px, env(safe-area-inset-bottom))' }}
+            title={softKbOn ? 'Hide keyboard' : 'Show keyboard'}
+            aria-label={softKbOn ? 'Hide keyboard' : 'Show keyboard'}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <rect x="2" y="6" width="20" height="12" rx="2" />
+              <path strokeLinecap="round" d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
+            </svg>
+          </button>
         )}
         {voice.isSupported && (
           <button
