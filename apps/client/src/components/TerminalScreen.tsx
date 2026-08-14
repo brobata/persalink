@@ -652,11 +652,13 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     terminalRef.current?.focus();
   }, [sendInput]);
 
+  // Success feedback is inline on the button (no toast — user call 2026-08-14).
+  const [copiedAll, setCopiedAll] = useState(false);
   const copyAllSelectText = useCallback(() => {
     if (!selectText) return;
     if (navigator.clipboard?.writeText && window.isSecureContext) {
       navigator.clipboard.writeText(selectText).then(
-        () => useAppStore.getState().pushNotification('info', 'Copied', 'copy'),
+        () => { setCopiedAll(true); setTimeout(() => setCopiedAll(false), 1200); },
         () => useAppStore.getState().pushNotification('error', 'Copy blocked by browser', 'copy'),
       );
     } else {
@@ -905,20 +907,20 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         useAppStore.getState().pushNotification(kind, message, 'copy');
       } catch { /* store unavailable */ }
     };
+    // Success is silent — copy toasts were noise (user call, 2026-08-14).
+    // Only a BLOCKED copy speaks up, because that one needs the user to act.
     const clipboardWrite = (text: string) => {
       if (!text) return;
       if (navigator.clipboard?.writeText && window.isSecureContext) {
         navigator.clipboard.writeText(text).then(
-          () => notify('info', 'Copied'),
+          () => undefined,
           () => {
-            if (legacyCopy(text)) notify('info', 'Copied');
-            else notify('error', 'Copy blocked by browser');
+            if (!legacyCopy(text)) notify('error', 'Copy blocked by browser');
           },
         );
         return;
       }
-      if (legacyCopy(text)) notify('info', 'Copied');
-      else notify('error', 'Copy blocked by browser');
+      if (!legacyCopy(text)) notify('error', 'Copy blocked by browser');
     };
     // Track "has a new selection been made since the last copy?" so a stale
     // xterm selection doesn't re-fire copy on every subsequent click. xterm
@@ -1979,7 +1981,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(selOverlay.text);
-                    useAppStore.getState().pushNotification('info', 'Copied', 'copy');
                   } catch {
                     useAppStore.getState().pushNotification('error', 'Copy blocked by browser', 'copy');
                   }
@@ -2096,6 +2097,34 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
                 </button>
               </div>
             )}
+            {/* Contextual: only while text is highlighted. Closest to the FAB
+                (and emerald) because it's the reason the dial was opened. */}
+            {selOverlay && (
+              <div className="pl-fab-item flex items-center gap-2">
+                <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-emerald-400 shadow">Copy</span>
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(selOverlay.text);
+                    } catch {
+                      useAppStore.getState().pushNotification('error', 'Copy blocked by browser', 'copy');
+                    }
+                    try { navigator.vibrate?.(10); } catch { /* unsupported */ }
+                    selApiRef.current?.clear();
+                    setFabOpen(false);
+                  }}
+                  className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-emerald-600 text-white active:bg-emerald-500"
+                  aria-label="Copy selection"
+                >
+                  <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <rect x="9" y="9" width="11" height="11" rx="2" />
+                    <path strokeLinecap="round" d="M5 15V5a2 2 0 012-2h10" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         )}
         <button
@@ -2191,9 +2220,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             <div className="flex items-center gap-2">
               <button
                 onClick={copyAllSelectText}
-                className="px-3 py-1.5 text-sm text-zinc-300 bg-zinc-800 active:bg-zinc-700 rounded-lg"
+                className={`px-3 py-1.5 text-sm rounded-lg ${
+                  copiedAll ? 'text-emerald-400 bg-zinc-800' : 'text-zinc-300 bg-zinc-800 active:bg-zinc-700'
+                }`}
               >
-                Copy all
+                {copiedAll ? 'Copied ✓' : 'Copy all'}
               </button>
               <button
                 onClick={() => setSelectText(null)}

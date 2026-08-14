@@ -426,20 +426,20 @@ export function TerminalPane({
         useAppStore.getState().pushNotification(kind, message, 'copy');
       } catch { /* store unavailable */ }
     };
+    // Success is silent — copy toasts were noise (user call, 2026-08-14).
+    // Only a BLOCKED copy speaks up, because that one needs the user to act.
     const clipboardWrite = (text: string) => {
       if (!text) return;
       if (navigator.clipboard?.writeText && window.isSecureContext) {
         navigator.clipboard.writeText(text).then(
-          () => notify('info', 'Copied'),
+          () => undefined,
           () => {
-            if (legacyCopy(text)) notify('info', 'Copied');
-            else notify('error', 'Copy blocked by browser');
+            if (!legacyCopy(text)) notify('error', 'Copy blocked by browser');
           },
         );
         return;
       }
-      if (legacyCopy(text)) notify('info', 'Copied');
-      else notify('error', 'Copy blocked by browser');
+      if (!legacyCopy(text)) notify('error', 'Copy blocked by browser');
     };
     // Track "has a new selection been made since the last copy?" so a stale
     // xterm selection doesn't re-fire copy on every subsequent click. xterm

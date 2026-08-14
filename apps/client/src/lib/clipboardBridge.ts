@@ -16,13 +16,14 @@ let pendingCopy: string | null = null;
 /** Distinct op so ToastStack knows this toast is a tap-to-finish action. */
 export const COPY_PENDING_OP = 'copy-pending';
 
+// Success is SILENT — copy-confirmation toasts were noise (user call,
+// 2026-08-14). Only a blocked write speaks, because that one needs a tap.
 async function writeSessionClipboard(text: string): Promise<void> {
   const push = useAppStore.getState().pushNotification;
   try {
     if (!navigator.clipboard?.writeText || !window.isSecureContext) throw new Error('unavailable');
     await navigator.clipboard.writeText(text);
     pendingCopy = null;
-    push('info', 'Copied from session', 'osc52');
   } catch {
     pendingCopy = text;
     push('info', 'Copy ready — tap here to put it on the clipboard', COPY_PENDING_OP);
@@ -36,7 +37,6 @@ export async function completePendingCopy(): Promise<void> {
   try {
     await navigator.clipboard.writeText(pendingCopy);
     pendingCopy = null;
-    push('info', 'Copied from session', 'osc52');
   } catch {
     push('error', 'Clipboard still blocked — use the selection menu to copy instead.', 'copy');
   }
