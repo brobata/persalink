@@ -170,6 +170,20 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
           className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0 ml-3"
         />
       </div>
+
+      <div className="flex items-center justify-between pt-1">
+        <div>
+          <label htmlFor="input-debug" className="text-xs text-zinc-300">Input debug overlay</label>
+          <p className="text-[10px] text-zinc-600 leading-snug">Show raw key/wheel/touch events in the terminal — for diagnosing exotic keyboards.</p>
+        </div>
+        <input
+          id="input-debug"
+          type="checkbox"
+          checked={style.inputDebug}
+          onChange={(e) => style.setInputDebug(e.target.checked)}
+          className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0 ml-3"
+        />
+      </div>
     </div>
   );
 }

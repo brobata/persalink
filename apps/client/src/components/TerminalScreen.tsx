@@ -502,6 +502,49 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     () => snippets.filter((s) => !/\{\{[a-zA-Z0-9_ -]+\}\}/.test(s.command)).slice(0, 3),
     [snippets],
   );
+  // Input-debug overlay (Settings → "Input debug overlay"): shows the raw
+  // events reaching the app so exotic hardware (Titan keyboard-swipe scroll,
+  // odd Sym layers) can be diagnosed from the device itself. Consecutive
+  // identical events coalesce ("touch move ×14") so bursts stay readable.
+  const inputDebug = useTerminalStyleStore((s) => s.inputDebug);
+  const [debugLog, setDebugLog] = useState<Array<{ msg: string; n: number }>>([]);
+  useEffect(() => {
+    if (!inputDebug) { setDebugLog([]); return; }
+    const push = (msg: string) => setDebugLog((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.msg === msg) return [...prev.slice(0, -1), { msg, n: last.n + 1 }];
+      return [...prev.slice(-9), { msg, n: 1 }];
+    });
+    const onKey = (e: KeyboardEvent) =>
+      push(`key ${e.key === ' ' ? 'Space' : e.key}${e.ctrlKey ? ' +ctrl' : ''}${e.altKey ? ' +alt' : ''} (${e.code})`);
+    const onWheel = (e: WheelEvent) =>
+      push(`wheel ${e.deltaY >= 0 ? 'down' : 'up'} ${Math.abs(Math.round(e.deltaY))}`);
+    const onTs = (e: TouchEvent) => push(`touch start ×${e.touches.length}`);
+    const onTm = () => push('touch move');
+    const onTe = () => push('touch end');
+    const onPd = (e: PointerEvent) => push(`pointer ${e.pointerType || '?'}`);
+    const onScroll = (e: Event) => {
+      const t = e.target as Element | Document;
+      const name = t instanceof Element ? (t.className?.toString().split(' ')[0] || t.tagName) : 'doc';
+      push(`scroll ${name}`);
+    };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('wheel', onWheel, true);
+    window.addEventListener('touchstart', onTs, true);
+    window.addEventListener('touchmove', onTm, true);
+    window.addEventListener('touchend', onTe, true);
+    window.addEventListener('pointerdown', onPd, true);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('wheel', onWheel, true);
+      window.removeEventListener('touchstart', onTs, true);
+      window.removeEventListener('touchmove', onTm, true);
+      window.removeEventListener('touchend', onTe, true);
+      window.removeEventListener('pointerdown', onPd, true);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [inputDebug]);
   // Suggestion bar: prefix-matched shell history for the current typed
   // command (normal buffer only — alt-screen apps get no noise).
   const [sugg, setSugg] = useState<{ prefix: string; items: string[] }>({ prefix: '', items: [] });
@@ -1944,6 +1987,14 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           Gboard's clipboard panels stack on top of the selection menu. */}
       <div className="flex-1 min-h-0 relative" onClick={() => { if (!selOverlay) terminalRef.current?.focus(); }}>
         <div ref={termRef} className="absolute inset-0 overflow-hidden" />
+        {/* Input-debug overlay — raw events, newest at the bottom */}
+        {inputDebug && (
+          <div className="absolute left-2 top-2 z-40 pointer-events-none rounded-lg bg-black/80 px-2.5 py-2 font-mono text-[10px] leading-4 text-emerald-300 max-w-[75vw] break-words">
+            {debugLog.length === 0
+              ? <div className="text-zinc-500">input debug — waiting for events…</div>
+              : debugLog.map((l, i) => <div key={i}>{l.msg}{l.n > 1 ? ` ×${l.n}` : ''}</div>)}
+          </div>
+        )}
         {/* Jump to live — escapes tmux copy-mode/scrollback back to the prompt.
             Discoverable counterpart to typing (which auto-exits server-side). */}
         {scrolledUp && (

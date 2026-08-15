@@ -283,6 +283,9 @@ interface TerminalStyleState {
   /** Double-tap the terminal sends Tab (completion). Toggleable because Tab
    *  isn't always harmless in TUIs. */
   doubleTapTab: boolean;
+  /** Debug overlay showing raw input events (key/wheel/touch) hitting the
+   *  terminal — for diagnosing exotic hardware (Titan keyboard-swipe etc.). */
+  inputDebug: boolean;
 
   setFontFamily: (f: FontFamilyChoice) => void;
   setFontSize: (s: number) => void;
@@ -290,6 +293,7 @@ interface TerminalStyleState {
   setTheme: (t: ThemeName) => void;
   setHistoryOnAttach: (h: HistoryOnAttach) => void;
   setDoubleTapTab: (v: boolean) => void;
+  setInputDebug: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -312,6 +316,7 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       theme: 'persalink',
       historyOnAttach: 0,
       doubleTapTab: true,
+      inputDebug: false,
 
       setFontFamily: (fontFamily) => set({ fontFamily }),
       setFontSize: (fontSize) => set({ fontSize: Math.min(24, Math.max(8, Math.round(fontSize))) }),
@@ -319,9 +324,10 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       setTheme: (theme) => set({ theme }),
       setHistoryOnAttach: (historyOnAttach) => set({ historyOnAttach }),
       setDoubleTapTab: (doubleTapTab) => set({ doubleTapTab }),
+      setInputDebug: (inputDebug) => set({ inputDebug }),
       reset: () => set({
         fontFamily: 'cascadia', fontSize: 13, fontWeight: '400',
-        theme: 'persalink', historyOnAttach: 0, doubleTapTab: true,
+        theme: 'persalink', historyOnAttach: 0, doubleTapTab: true, inputDebug: false,
       }),
     }),
     {
