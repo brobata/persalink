@@ -104,16 +104,21 @@ self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
   const title = data.title || 'PersaLink';
-  event.waitUntil(
-    self.registration.showNotification(title, {
+  event.waitUntil((async () => {
+    // Suppress while the user is LOOKING at the app — a push about the screen
+    // they're watching is pure noise. (Chrome waives the must-show-notification
+    // rule when the origin has a visible, focused window client.)
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (wins.some((w) => w.visibilityState === 'visible' && w.focused)) return;
+    await self.registration.showNotification(title, {
       body: data.body || '',
       tag: data.tag || undefined,
       renotify: !!data.tag,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       data: { sessionId: data.sessionId || null },
-    })
-  );
+    });
+  })());
 });
 
 // Tapping a notification focuses an existing window (and asks it to open the

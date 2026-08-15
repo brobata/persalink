@@ -1121,7 +1121,19 @@ function startWatchdog(): void {
 
 // Noteworthy attention transitions → an agent notification. Delivery (web push)
 // is attached in the notifications slice; for now it's audited.
+//
+// "finished" is DEBOUNCED: Claude flickers working→idle→working between the
+// sub-steps of one turn, and each flicker used to push "✅ Finished" — constant
+// low-value noise. Only a session that stays settled for the window is done.
+// waiting/error send immediately — those block on the user.
+const FINISHED_SETTLE_MS = 12_000;
+const pendingFinished = new Map<string, ReturnType<typeof setTimeout>>();
+
 function onAttentionTransition(session: SessionInfo, prev: Attention, next: Attention): void {
+  // Any state change invalidates a not-yet-sent "finished" for this session.
+  const pending = pendingFinished.get(session.id);
+  if (pending) { clearTimeout(pending); pendingFinished.delete(session.id); }
+
   let event: string | null = null;
   if (prev === 'working' && next === 'idle') event = 'finished';
   else if (next === 'waiting' && prev !== 'waiting') event = 'waiting';
@@ -1136,11 +1148,23 @@ function onAttentionTransition(session: SessionInfo, prev: Attention, next: Atte
     error: { title: `❌ ${name}`, body: 'Hit an error.' },
   };
   const c = copy[event];
-  // Tag includes the event so a "finished" doesn't silently replace a pending
-  // "waiting" for the same session.
-  pushManager
+  const deliver = () => pushManager
+    // Tag includes the event so a "finished" doesn't silently replace a pending
+    // "waiting" for the same session.
     .send({ ...c, tag: `pl-${session.id}-${event}`, sessionId: session.id })
     .catch((err) => console.error('[push] send failed:', err));
+
+  if (event === 'finished') {
+    const t = setTimeout(() => {
+      pendingFinished.delete(session.id);
+      // Still idle after the settle window (and still alive) → genuinely done.
+      if (attentionCache.get(session.id) === 'idle') deliver();
+    }, FINISHED_SETTLE_MS);
+    t.unref?.();
+    pendingFinished.set(session.id, t);
+    return;
+  }
+  deliver();
 }
 
 // Fast monitor loop — drives live unseen badges + attention detection (and the

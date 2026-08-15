@@ -508,25 +508,44 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // identical events coalesce ("touch move ×14") so bursts stay readable.
   const inputDebug = useTerminalStyleStore((s) => s.inputDebug);
   const [debugLog, setDebugLog] = useState<Array<{ msg: string; n: number }>>([]);
-  useEffect(() => {
-    if (!inputDebug) { setDebugLog([]); return; }
-    const push = (msg: string) => setDebugLog((prev) => {
+  // Component-scope so the gesture engine can also report what it DID with
+  // the events ("scroll -3", "joystick on") — the window listeners only prove
+  // events reached the page, not that the terminal's engine consumed them.
+  const pushDebug = useCallback((msg: string) => {
+    if (!useTerminalStyleStore.getState().inputDebug) return;
+    setDebugLog((prev) => {
       const last = prev[prev.length - 1];
       if (last && last.msg === msg) return [...prev.slice(0, -1), { msg, n: last.n + 1 }];
       return [...prev.slice(-9), { msg, n: 1 }];
     });
+  }, []);
+  useEffect(() => {
+    if (!inputDebug) { setDebugLog([]); return; }
+    const push = pushDebug;
+    // Short "where did this land" tag: tag name + first class token.
+    const elTag = (t: EventTarget | null) => {
+      if (!(t instanceof Element)) return 'doc';
+      const cls = t.className?.toString().split(' ')[0];
+      return `${t.tagName.toLowerCase()}${cls ? '.' + cls.slice(0, 18) : ''}`;
+    };
     const onKey = (e: KeyboardEvent) =>
       push(`key ${e.key === ' ' ? 'Space' : e.key}${e.ctrlKey ? ' +ctrl' : ''}${e.altKey ? ' +alt' : ''} (${e.code})`);
     const onWheel = (e: WheelEvent) =>
       push(`wheel ${e.deltaY >= 0 ? 'down' : 'up'} ${Math.abs(Math.round(e.deltaY))}`);
-    const onTs = (e: TouchEvent) => push(`touch start ×${e.touches.length}`);
+    const onTs = (e: TouchEvent) => {
+      const t = e.touches[0];
+      push(`touch start (${Math.round(t?.clientX ?? -1)},${Math.round(t?.clientY ?? -1)}) @${elTag(e.target)}`);
+    };
     const onTm = () => push('touch move');
-    const onTe = () => push('touch end');
-    const onPd = (e: PointerEvent) => push(`pointer ${e.pointerType || '?'}`);
+    const onTe = (e: TouchEvent) => {
+      const t = e.changedTouches[0];
+      push(`touch end (${Math.round(t?.clientX ?? -1)},${Math.round(t?.clientY ?? -1)})`);
+    };
+    const onPd = (e: PointerEvent) => push(`pointer ${e.pointerType || '?'} @${elTag(e.target)}`);
     const onScroll = (e: Event) => {
       const t = e.target as Element | Document;
       const name = t instanceof Element ? (t.className?.toString().split(' ')[0] || t.tagName) : 'doc';
-      push(`scroll ${name}`);
+      push(`scroll-evt ${name}`);
     };
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('wheel', onWheel, true);
@@ -544,7 +563,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       window.removeEventListener('pointerdown', onPd, true);
       window.removeEventListener('scroll', onScroll, true);
     };
-  }, [inputDebug]);
+  }, [inputDebug, pushDebug]);
   // Suggestion bar: prefix-matched shell history for the current typed
   // command (normal buffer only — alt-screen apps get no noise).
   const [sugg, setSugg] = useState<{ prefix: string; items: string[] }>({ prefix: '', items: [] });
@@ -1154,6 +1173,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     const applyScroll = (lines: number) => {
       if (lines === 0) return;
+      pushDebug(`→ scroll ${lines > 0 ? 'down' : 'up'} ${Math.abs(lines)}l ${term.buffer.active.type === 'alternate' ? '(alt)' : ''}`);
       if (term.buffer.active.type === 'alternate') {
         // SGR mouse encoding: ESC [ < Cb ; Cx ; Cy M  (press)
         // Cb 64 = wheel up, Cb 65 = wheel down. Cx/Cy are 1-indexed cell
@@ -1475,6 +1495,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         longPressTimer = null;
         gestureArmed = true; // release-still → select modal; drag → joystick
         tapCandidate = false;
+        pushDebug('→ hold armed (select/joystick)');
         try { navigator.vibrate?.(15); } catch { /* unsupported */ }
       }, LONG_PRESS_MS);
     };
@@ -1501,6 +1522,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           const dist = Math.hypot(t.clientX - touchStartX, y - touchStartY);
           if (dist > JOYSTICK_ACTIVATE_PX) {
             joystickActive = true;
+            pushDebug('→ joystick on (arrows)');
             joystickTick();
           }
         }
