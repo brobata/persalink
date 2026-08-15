@@ -502,6 +502,24 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     () => snippets.filter((s) => !/\{\{[a-zA-Z0-9_ -]+\}\}/.test(s.command)).slice(0, 3),
     [snippets],
   );
+  // Hardware-keyboard detection (Titan etc.): soft IMEs composite text and
+  // don't emit per-letter keydowns with real codes, so the first trusted
+  // KeyA-style keydown means a physical keyboard exists. Sticky per device —
+  // once seen, the soft-keyboard dial item is dead weight and hides.
+  const [hwKeyboard, setHwKeyboard] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try { return localStorage.getItem('persalink-hw-keyboard') === 'true'; } catch { return false; }
+  });
+  useEffect(() => {
+    if (hwKeyboard) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.isTrusted || !/^(Key[A-Z]|Digit[0-9])$/.test(e.code)) return;
+      setHwKeyboard(true);
+      try { localStorage.setItem('persalink-hw-keyboard', 'true'); } catch { /* private mode */ }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [hwKeyboard]);
   // Input-debug overlay (Settings → "Input debug overlay"): shows the raw
   // events reaching the app so exotic hardware (Titan keyboard-swipe scroll,
   // odd Sym layers) can be diagnosed from the device itself. Consecutive
@@ -1959,7 +1977,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           className={`shrink-0 px-2 py-2 transition-colors ${
             showKeyBar ? 'text-zinc-200' : 'text-zinc-500 active:text-zinc-300'
           }`}
-          title="Toggle terminal keys (Esc, arrows, Tab, Ctrl)"
+          title="Terminal keys bar (arrows, Esc, Tab, Ctrl)"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <rect x="2" y="6" width="20" height="12" rx="2" />
@@ -2193,9 +2211,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
                 </button>
               </div>
             )}
-            {!sidebarVisible && (
+            {/* Hidden on hardware-keyboard devices (Titan): Android suppresses
+                the soft keyboard there, so the toggle visibly does nothing. */}
+            {!sidebarVisible && !hwKeyboard && (
               <div className="pl-fab-item flex items-center gap-2">
-                <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Keyboard</span>
+                <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Soft keyboard</span>
                 <button
                   onMouseDown={(e) => e.preventDefault()}
                   onPointerDown={(e) => e.preventDefault()}
@@ -2203,7 +2223,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
                   className={`w-10 h-10 rounded-full shadow-lg flex items-center justify-center ${
                     softKbOn ? 'bg-emerald-600 text-white' : 'bg-zinc-800/95 text-zinc-300 active:bg-zinc-700'
                   }`}
-                  aria-label={softKbOn ? 'Hide keyboard' : 'Show keyboard'}
+                  aria-label={softKbOn ? 'Hide soft keyboard' : 'Show soft keyboard'}
                 >
                   <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <rect x="2" y="6" width="20" height="12" rx="2" />
@@ -2252,7 +2272,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           className={`absolute right-3 z-20 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
             voice.isListening && !fabOpen
               ? 'bg-red-500 text-white animate-pulse'
-              : softKbOn && !fabOpen
+              : softKbOn && !fabOpen && !hwKeyboard
                 ? 'bg-emerald-600 text-white'
                 : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
           }`}
