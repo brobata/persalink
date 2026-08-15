@@ -173,6 +173,8 @@ export function TerminalPane({
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      // The file picker stole focus — hand it back so typing resumes.
+      termRef.current?.focus();
     }
   }, [serverUrl, authToken, sendInput]);
 

@@ -776,7 +776,12 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const paths = await uploadFiles(files, { serverUrl, authToken });
       // Paste all uploaded paths space-separated, with a trailing space so the
       // user can keep typing (e.g. a command in front of the file list).
-      if (paths.length > 0) sendInput(paths.join(' ') + ' ');
+      if (paths.length > 0) {
+        sendInput(paths.join(' ') + ' ');
+        // The file picker stole focus — hand it straight back with the
+        // keyboard up, since the next act is always typing around the path.
+        applySoftKb(true);
+      }
     } catch (err) {
       // Without this, a rejected upload (auth failure, size cap, network drop)
       // was an unhandled rejection: the spinner cleared and the user got no
@@ -790,6 +795,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       setUploading(false);
       // Reset input so the same file(s) can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = '';
+      terminalRef.current?.focus();
     }
   };
 
@@ -1165,17 +1171,30 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     let scrollAccum = 0;
     let velocity = 0; // px/ms, positive = swipe up = scroll forward
     let momentumRaf: number | null = null;
+    // Titan keyboard-swipe support: Scroll Assistant injects short synthetic
+    // drags, each its own touch gesture. One that stays under LINE_PX would
+    // truncate to zero lines and the whole swipe scrolls nothing — so a
+    // drag that ends having emitted nothing flushes its remainder as one
+    // line (FLUSH_MIN_PX floor keeps jitter from scrolling), and anything
+    // smaller carries into the next gesture if it starts within CARRY_MS.
+    let emittedInGesture = false;
+    let microCarry = false;
+    let lastGestureEndAt = 0;
+    const FLUSH_MIN_PX = 6;
+    const CARRY_MS = 300;
     const LINE_PX = 18;
     const FRICTION_PER_16MS = 0.94; // slightly less than 1 → exponential decay
     const STOP_THRESHOLD_PX_PER_MS = 0.04; // stop momentum below this
     const FLING_THRESHOLD_PX_PER_MS = 0.25; // ignore stationary lifts
     const container = termRef.current;
 
-    const applyScroll = (rawLines: number) => {
+    const applyScroll = (rawLines: number, useGain = true) => {
       if (rawLines === 0) return;
       // Gain for devices that inject tiny synthetic drags (Titan keyboard
-      // swipe ≈ 35px ≈ 1 line at 1×). Applies to drags AND momentum.
-      const lines = rawLines * (useTerminalStyleStore.getState().scrollGain || 1);
+      // swipe ≈ 35px ≈ 1 line at 1×). Applies to drags AND momentum — but
+      // NOT to end-of-gesture flushes, where gain would turn a 6px finger
+      // twitch into a multi-line jump.
+      const lines = rawLines * (useGain ? useTerminalStyleStore.getState().scrollGain || 1 : 1);
       pushDebug(`→ scroll ${lines > 0 ? 'down' : 'up'} ${Math.abs(lines)}l ${term.buffer.active.type === 'alternate' ? '(alt)' : ''}`);
       if (term.buffer.active.type === 'alternate') {
         // SGR mouse encoding: ESC [ < Cb ; Cx ; Cy M  (press)
@@ -1488,7 +1507,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       lastMoveY = touchStartY;
       lastMoveTime = performance.now();
       touchStartTime = lastMoveTime;
-      scrollAccum = 0;
+      // Keep the remainder only when chaining off a sub-line micro-swipe;
+      // after a normal scroll or a long gap, start clean as before.
+      if (!(microCarry && lastMoveTime - lastGestureEndAt < CARRY_MS)) scrollAccum = 0;
+      microCarry = false;
+      emittedInGesture = false;
       velocity = 0;
       gestureArmed = false;
       stopJoystick();
@@ -1551,6 +1574,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const lines = Math.trunc(scrollAccum / LINE_PX);
       if (lines !== 0) {
         scrollAccum -= lines * LINE_PX;
+        emittedInGesture = true;
         applyScroll(lines);
       }
     };
@@ -1614,6 +1638,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const idleSinceLastMove = performance.now() - lastMoveTime;
       if (idleSinceLastMove > 80 || Math.abs(velocity) < FLING_THRESHOLD_PX_PER_MS) {
         velocity = 0;
+        lastGestureEndAt = performance.now();
+        if (!tapCandidate && !emittedInGesture && scrollAccum !== 0) {
+          if (Math.abs(scrollAccum) >= FLUSH_MIN_PX) {
+            pushDebug('→ flush sub-line swipe');
+            applyScroll(Math.sign(scrollAccum), false);
+            scrollAccum = 0;
+          } else {
+            microCarry = true;
+          }
+        }
         return;
       }
 
