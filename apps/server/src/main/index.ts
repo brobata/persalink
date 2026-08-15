@@ -820,12 +820,17 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     }
 
     case 'push.subscribe': {
-      pushManager.subscribe(message.subscription);
+      pushManager.subscribe({ ...message.subscription, events: message.events });
       break;
     }
 
     case 'push.unsubscribe': {
       pushManager.unsubscribe(message.endpoint);
+      break;
+    }
+
+    case 'push.prefs': {
+      pushManager.setPrefs(message.endpoint, message.events);
       break;
     }
 
@@ -1150,8 +1155,8 @@ function onAttentionTransition(session: SessionInfo, prev: Attention, next: Atte
   const c = copy[event];
   const deliver = () => pushManager
     // Tag includes the event so a "finished" doesn't silently replace a pending
-    // "waiting" for the same session.
-    .send({ ...c, tag: `pl-${session.id}-${event}`, sessionId: session.id })
+    // "waiting" for the same session. Kind lets per-subscription prefs filter.
+    .send({ ...c, tag: `pl-${session.id}-${event}`, sessionId: session.id }, event as 'finished' | 'waiting' | 'error')
     .catch((err) => console.error('[push] send failed:', err));
 
   if (event === 'finished') {

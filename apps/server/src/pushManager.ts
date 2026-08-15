@@ -25,9 +25,19 @@ export interface PushNotification {
   sessionId?: string;
 }
 
+/** Which attention events this subscription wants. Absent = all (legacy subs). */
+export interface PushEventPrefs {
+  finished: boolean;
+  waiting: boolean;
+  error: boolean;
+}
+
+export type PushEventKind = keyof PushEventPrefs;
+
 interface StoredSub {
   endpoint: string;
   keys: { p256dh: string; auth: string };
+  events?: PushEventPrefs;
 }
 
 export class PushManager {
@@ -66,8 +76,21 @@ export class PushManager {
 
   subscribe(sub: StoredSub): void {
     if (!sub?.endpoint) return;
-    if (this.subs.some((s) => s.endpoint === sub.endpoint)) return;
-    this.subs.push({ endpoint: sub.endpoint, keys: sub.keys });
+    const existing = this.subs.find((s) => s.endpoint === sub.endpoint);
+    if (existing) {
+      // Re-subscribe refreshes prefs (the client sends its current toggles).
+      if (sub.events) { existing.events = sub.events; this.persist(); }
+      return;
+    }
+    this.subs.push({ endpoint: sub.endpoint, keys: sub.keys, events: sub.events });
+    this.persist();
+  }
+
+  /** Update per-event delivery prefs for an existing subscription. */
+  setPrefs(endpoint: string, events: PushEventPrefs): void {
+    const sub = this.subs.find((s) => s.endpoint === endpoint);
+    if (!sub) return;
+    sub.events = events;
     this.persist();
   }
 
@@ -77,13 +100,18 @@ export class PushManager {
     if (this.subs.length !== before) this.persist();
   }
 
-  /** Deliver to every subscription; prune any the push service has expired. */
-  async send(n: PushNotification): Promise<void> {
+  /** Deliver to every subscription that wants this event kind; prune any the
+   *  push service has expired. `kind` undefined (e.g. test) = send to all. */
+  async send(n: PushNotification, kind?: PushEventKind): Promise<void> {
     if (this.subs.length === 0) return;
+    const targets = kind
+      ? this.subs.filter((s) => !s.events || s.events[kind] !== false)
+      : this.subs;
+    if (targets.length === 0) return;
     const payload = JSON.stringify(n);
     const dead: string[] = [];
     await Promise.all(
-      this.subs.map(async (sub) => {
+      targets.map(async (sub) => {
         try {
           await webpush.sendNotification(sub, payload, { TTL: 600 });
         } catch (err) {

@@ -83,6 +83,18 @@ export const SnippetSchema = z.object({
 export type Snippet = z.infer<typeof SnippetSchema>;
 
 // ============================================================================
+// Web Push event preferences — which attention events a subscription wants.
+// ============================================================================
+
+export const PushEventPrefsSchema = z.object({
+  finished: z.boolean(),
+  waiting: z.boolean(),
+  error: z.boolean(),
+});
+
+export type PushEventPrefs = z.infer<typeof PushEventPrefsSchema>;
+
+// ============================================================================
 // Tmux Sessions
 // ============================================================================
 
@@ -206,8 +218,11 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('push.subscribe'), subscription: z.object({
     endpoint: z.string().max(2000),
     keys: z.object({ p256dh: z.string().max(500), auth: z.string().max(500) }),
-  }) }),
+  }), events: PushEventPrefsSchema.optional() }),
   z.object({ type: z.literal('push.unsubscribe'), endpoint: z.string().max(2000) }),
+  // Per-event delivery prefs for an existing subscription (kill "finished"
+  // noise while keeping waiting/error, etc.).
+  z.object({ type: z.literal('push.prefs'), endpoint: z.string().max(2000), events: PushEventPrefsSchema }),
   z.object({ type: z.literal('push.test') }),
   // Keepalive
   z.object({ type: z.literal('ping') }),

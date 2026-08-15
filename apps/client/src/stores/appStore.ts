@@ -132,6 +132,10 @@ interface AppState {
   // UI reflects the saved preference.
   vapidPublicKey: string | null;
   notificationsEnabled: boolean;
+  /** This device's subscription endpoint (needed to update prefs later). */
+  pushEndpoint: string | null;
+  /** Per-event delivery toggles, persisted per device. */
+  pushEvents: { finished: boolean; waiting: boolean; error: boolean };
 
   // Actions
   addServer: (label: string, host: string) => void;
@@ -151,6 +155,7 @@ interface AppState {
   exitScroll: () => void;
   enableNotifications: () => Promise<boolean>;
   disableNotifications: () => Promise<void>;
+  setPushEvents: (events: { finished: boolean; waiting: boolean; error: boolean }) => void;
   testNotification: () => void;
   resize: (cols: number, rows: number) => void;
   selectWindow: (index: number) => void;
@@ -306,6 +311,8 @@ export const useAppStore = create<AppState>()(
       pendingProfileLaunch: null,
       vapidPublicKey: null,
       notificationsEnabled: false,
+      pushEndpoint: null,
+      pushEvents: { finished: true, waiting: true, error: true },
 
       pushNotification: (kind, message, op) => set((s) => ({
         notifications: [
@@ -538,8 +545,8 @@ export const useAppStore = create<AppState>()(
             set({ notificationsEnabled: false });
             return false;
           }
-          wsClient?.send({ type: 'push.subscribe', subscription });
-          set({ notificationsEnabled: true });
+          wsClient?.send({ type: 'push.subscribe', subscription, events: get().pushEvents });
+          set({ notificationsEnabled: true, pushEndpoint: subscription.endpoint });
           return true;
         } catch (err) {
           get().pushNotification('error', `Could not enable notifications: ${err instanceof Error ? err.message : err}`, 'push');
@@ -552,7 +559,15 @@ export const useAppStore = create<AppState>()(
           const endpoint = await unsubscribeFromPush();
           if (endpoint) wsClient?.send({ type: 'push.unsubscribe', endpoint });
         } catch { /* best effort — still flip the flag off */ }
-        set({ notificationsEnabled: false });
+        set({ notificationsEnabled: false, pushEndpoint: null });
+      },
+
+      // Per-event toggles: store locally (persisted) and tell the server which
+      // events this device's subscription still wants.
+      setPushEvents: (events) => {
+        set({ pushEvents: events });
+        const endpoint = get().pushEndpoint;
+        if (endpoint) wsClient?.send({ type: 'push.prefs', endpoint, events });
       },
 
       testNotification: () => {
@@ -803,6 +818,8 @@ export const useAppStore = create<AppState>()(
         deviceName: state.deviceName,
         lastActiveSessionId: state.lastActiveSessionId,
         notificationsEnabled: state.notificationsEnabled,
+        pushEndpoint: state.pushEndpoint,
+        pushEvents: state.pushEvents,
       }),
     }
   )

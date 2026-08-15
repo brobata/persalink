@@ -50,6 +50,7 @@ export function SettingsScreen() {
   const {
     closeOverlay, disconnect, serverName, serverUrl, sessions, profiles,
     notificationsEnabled, enableNotifications, disableNotifications, testNotification,
+    pushEvents, setPushEvents,
     sessionLogs, requestLogs, readLog, logView,
   } = useAppStore();
 
@@ -148,12 +149,37 @@ export function SettingsScreen() {
                 </p>
               )}
               {notificationsEnabled && (
-                <button
-                  onClick={testNotification}
-                  className="text-xs text-zinc-400 underline underline-offset-2 active:text-zinc-200"
-                >
-                  Send a test notification
-                </button>
+                <>
+                  {/* Per-event toggles — "finished" fires on every Claude turn
+                      end, which is constant noise for interactive use. */}
+                  <div className="space-y-2 pt-1">
+                    {([
+                      { key: 'finished', label: '✅ Session finished', hint: 'Every time a session settles back at the prompt — noisy if you run interactive sessions.' },
+                      { key: 'waiting', label: '⏳ Needs your input', hint: 'A session is blocked on a prompt or permission dialog.' },
+                      { key: 'error', label: '❌ Error', hint: 'A session hit a clear failure.' },
+                    ] as const).map(({ key, label, hint }) => (
+                      <div key={key} className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <label htmlFor={`push-ev-${key}`} className="text-xs text-zinc-300">{label}</label>
+                          <p className="text-[10px] text-zinc-600 leading-snug">{hint}</p>
+                        </div>
+                        <input
+                          id={`push-ev-${key}`}
+                          type="checkbox"
+                          checked={pushEvents[key]}
+                          onChange={(e) => setPushEvents({ ...pushEvents, [key]: e.target.checked })}
+                          className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={testNotification}
+                    className="text-xs text-zinc-400 underline underline-offset-2 active:text-zinc-200"
+                  >
+                    Send a test notification
+                  </button>
+                </>
               )}
             </>
           )}
