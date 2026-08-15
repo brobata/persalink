@@ -1171,8 +1171,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     const FLING_THRESHOLD_PX_PER_MS = 0.25; // ignore stationary lifts
     const container = termRef.current;
 
-    const applyScroll = (lines: number) => {
-      if (lines === 0) return;
+    const applyScroll = (rawLines: number) => {
+      if (rawLines === 0) return;
+      // Gain for devices that inject tiny synthetic drags (Titan keyboard
+      // swipe ≈ 35px ≈ 1 line at 1×). Applies to drags AND momentum.
+      const lines = rawLines * (useTerminalStyleStore.getState().scrollGain || 1);
       pushDebug(`→ scroll ${lines > 0 ? 'down' : 'up'} ${Math.abs(lines)}l ${term.buffer.active.type === 'alternate' ? '(alt)' : ''}`);
       if (term.buffer.active.type === 'alternate') {
         // SGR mouse encoding: ESC [ < Cb ; Cx ; Cy M  (press)

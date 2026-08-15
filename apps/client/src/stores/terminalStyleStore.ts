@@ -286,6 +286,9 @@ interface TerminalStyleState {
   /** Debug overlay showing raw input events (key/wheel/touch) hitting the
    *  terminal — for diagnosing exotic hardware (Titan keyboard-swipe etc.). */
   inputDebug: boolean;
+  /** Touch-scroll multiplier (1–5). Devices that inject tiny synthetic drags
+   *  (Titan keyboard-swipe ≈ 35px ≈ 1 line) need gain to feel alive. */
+  scrollGain: number;
 
   setFontFamily: (f: FontFamilyChoice) => void;
   setFontSize: (s: number) => void;
@@ -294,6 +297,7 @@ interface TerminalStyleState {
   setHistoryOnAttach: (h: HistoryOnAttach) => void;
   setDoubleTapTab: (v: boolean) => void;
   setInputDebug: (v: boolean) => void;
+  setScrollGain: (v: number) => void;
   reset: () => void;
 }
 
@@ -317,6 +321,7 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       historyOnAttach: 0,
       doubleTapTab: true,
       inputDebug: false,
+      scrollGain: 1,
 
       setFontFamily: (fontFamily) => set({ fontFamily }),
       setFontSize: (fontSize) => set({ fontSize: Math.min(24, Math.max(8, Math.round(fontSize))) }),
@@ -325,9 +330,11 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       setHistoryOnAttach: (historyOnAttach) => set({ historyOnAttach }),
       setDoubleTapTab: (doubleTapTab) => set({ doubleTapTab }),
       setInputDebug: (inputDebug) => set({ inputDebug }),
+      setScrollGain: (scrollGain) => set({ scrollGain: Math.min(5, Math.max(1, Math.round(scrollGain))) }),
       reset: () => set({
         fontFamily: 'cascadia', fontSize: 13, fontWeight: '400',
         theme: 'persalink', historyOnAttach: 0, doubleTapTab: true, inputDebug: false,
+        scrollGain: 1,
       }),
     }),
     {

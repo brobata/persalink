@@ -56,6 +56,8 @@ export function SettingsScreen() {
   const [busy, setBusy] = useState(false);
   const inputDebug = useTerminalStyleStore((s) => s.inputDebug);
   const setInputDebug = useTerminalStyleStore((s) => s.setInputDebug);
+  const scrollGain = useTerminalStyleStore((s) => s.scrollGain);
+  const setScrollGain = useTerminalStyleStore((s) => s.setScrollGain);
 
   // Session logs live server-side; ask once when Settings opens.
   useEffect(() => { requestLogs(); }, [requestLogs]);
@@ -202,6 +204,30 @@ export function SettingsScreen() {
               onChange={(e) => setInputDebug(e.target.checked)}
               className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0 ml-3"
             />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs text-zinc-300">Scroll speed</span>
+              <p className="text-[10px] text-zinc-600 leading-snug">
+                Multiplies touch scrolling. Raise it if keyboard-swipe scroll
+                (Titan Scroll assistant) barely moves — its swipes are tiny.
+              </p>
+            </div>
+            <div className="flex gap-1 shrink-0 ml-3">
+              {[1, 2, 3, 4, 5].map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setScrollGain(g)}
+                  className={`w-8 h-8 rounded-md text-xs font-mono transition-colors ${
+                    scrollGain === g
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
+                  }`}
+                >
+                  {g}×
+                </button>
+              ))}
+            </div>
           </div>
           <p className="text-[10px] text-zinc-600 leading-snug">
             Fonts, themes and gestures are in the session view — tap the palette icon
