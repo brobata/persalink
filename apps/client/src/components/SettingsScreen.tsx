@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
+import { useTerminalStyleStore } from '../stores/terminalStyleStore';
 import { isPushSupported, notificationPermission } from '../lib/push';
 
 function fmtSize(bytes: number): string {
@@ -53,6 +54,8 @@ export function SettingsScreen() {
   } = useAppStore();
 
   const [busy, setBusy] = useState(false);
+  const inputDebug = useTerminalStyleStore((s) => s.inputDebug);
+  const setInputDebug = useTerminalStyleStore((s) => s.setInputDebug);
 
   // Session logs live server-side; ask once when Settings opens.
   useEffect(() => { requestLogs(); }, [requestLogs]);
@@ -178,6 +181,32 @@ export function SettingsScreen() {
               ))}
             </div>
           )}
+        </section>
+
+        {/* Terminal — the full appearance sheet lives inside a session (top
+            bar), but diagnostics belong here where people look for settings. */}
+        <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-400">Terminal</h2>
+          <div className="flex items-center justify-between">
+            <div>
+              <label htmlFor="settings-input-debug" className="text-xs text-zinc-300">Input debug overlay</label>
+              <p className="text-[10px] text-zinc-600 leading-snug">
+                Show raw key/wheel/touch events in the corner of the terminal — for
+                diagnosing exotic keyboards (e.g. Titan keyboard-swipe scrolling).
+              </p>
+            </div>
+            <input
+              id="settings-input-debug"
+              type="checkbox"
+              checked={inputDebug}
+              onChange={(e) => setInputDebug(e.target.checked)}
+              className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0 ml-3"
+            />
+          </div>
+          <p className="text-[10px] text-zinc-600 leading-snug">
+            Fonts, themes and gestures are in the session view — tap the palette icon
+            in a session&apos;s top bar.
+          </p>
         </section>
 
         {/* Danger Zone */}
