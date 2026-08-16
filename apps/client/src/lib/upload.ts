@@ -6,6 +6,9 @@
  *   order, ready to be pasted into the terminal.
  */
 
+import { activeServerTls } from '../stores/appStore';
+import { schemesFor } from './platform';
+
 interface UploadOpts {
   serverUrl: string;
   authToken: string | null;
@@ -30,8 +33,7 @@ export async function uploadFiles(
   if (list.length === 0) return [];
 
   const hostOnly = serverUrl.trim().replace(/^(wss?|https?):\/\//i, '');
-  const scheme = window.location.protocol === 'https:' ? 'https://' : 'http://';
-  const baseUrl = `${scheme}${hostOnly}`;
+  const baseUrl = `${schemesFor(activeServerTls()).http}${hostOnly}`;
 
   const form = new FormData();
   for (const file of list) form.append('file', file);

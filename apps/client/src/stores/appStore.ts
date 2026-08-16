@@ -16,6 +16,7 @@ import {
   getCredentials, clearCredentials,
 } from '../lib/biometric';
 import { getInitialDims } from '../lib/terminalDims';
+import { pageHost, schemesFor } from '../lib/platform';
 import { useLayoutStore } from './layoutStore';
 
 // ============================================================================
@@ -33,6 +34,9 @@ export interface ServerEntry {
   label: string;
   host: string;
   useOrigin: boolean;
+  /** Explicit scheme choice from the typed host (https/wss → true, http/ws →
+   *  false). Undefined = legacy entry, scheme falls back per platform. */
+  tls?: boolean;
   authToken: string | null;
   serverName: string | null;
   lastConnectedAt: number | null;
@@ -259,15 +263,21 @@ function filterKilled<T extends { id: string }>(sessions: T[]): T[] {
   return sessions.filter((s) => !recentlyKilled.has(s.id));
 }
 
-// When the client is served by the server itself (plain browser, not
-// Capacitor/Electron and not the Vite dev server on a different port),
-// default to the current origin's host so users don't have to re-enter it.
+/** The active server's explicit-scheme choice, for HTTP calls (upload, files)
+ *  that build URLs from the bare `serverUrl` host. Undefined = legacy/origin
+ *  entry → schemesFor falls back per platform. */
+export function activeServerTls(): boolean | undefined {
+  const s = useAppStore.getState();
+  return s.servers.find((e) => e.id === s.activeServerId)?.tls;
+}
+
+// When the client is served by the server itself (plain browser, not the
+// Capacitor shell and not the Vite dev server on a different port), default
+// to the current origin's host so users don't have to re-enter it.
+// pageHost() is already empty in the native shell and on non-http pages.
 function inferDefaultServerUrl(): string {
-  if (typeof window === 'undefined') return '';
-  const { protocol, host } = window.location;
-  if (protocol !== 'http:' && protocol !== 'https:') return '';
   if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) return '';
-  return host;
+  return pageHost();
 }
 
 export const useAppStore = create<AppState>()(
@@ -325,14 +335,21 @@ export const useAppStore = create<AppState>()(
       })),
 
       addServer: (label, host) => {
-        const cleaned = host.trim().replace(/^(wss?|https?):\/\//i, '').replace(/\/+$/, '');
+        const raw = host.trim();
+        // A typed scheme pins the transport (needed in the native shell where
+        // there's no page protocol to infer from).
+        const tls = /^(https|wss):\/\//i.test(raw) ? true
+          : /^(http|ws):\/\//i.test(raw) ? false
+          : undefined;
+        const cleaned = raw.replace(/^(wss?|https?):\/\//i, '').replace(/\/+$/, '');
         if (!cleaned) return;
-        const pageHost = typeof window !== 'undefined' ? window.location.host : '';
+        const ph = pageHost();
         const entry: ServerEntry = {
           id: crypto.randomUUID(),
           label: label.trim() || cleaned,
           host: cleaned,
-          useOrigin: !!pageHost && cleaned === pageHost,
+          useOrigin: !!ph && cleaned === ph,
+          tls,
           authToken: null,
           serverName: null,
           lastConnectedAt: null,
@@ -370,10 +387,10 @@ export const useAppStore = create<AppState>()(
         wsClient?.disconnect();
         wsClient = null;
         wsGeneration++; // invalidate in-flight callbacks from the old socket
-        const pageHost = typeof window !== 'undefined' ? window.location.host : '';
+        const ph = pageHost();
         set({
           activeServerId: id,
-          serverUrl: entry.useOrigin && pageHost ? pageHost : entry.host,
+          serverUrl: entry.useOrigin && ph ? ph : entry.host,
           authToken: entry.authToken,
           serverName: entry.serverName,
           // Everything below is per-server state from the previous server.
@@ -400,18 +417,13 @@ export const useAppStore = create<AppState>()(
         // useOrigin entries follow the page host so the SPA keeps working via
         // every alias of its own server (mDNS / Tailscale / LAN IP) and the WS
         // origin check stays happy. Added entries connect to the typed host.
-        const pageHost = typeof window !== 'undefined' && window.location?.host
-          ? window.location.host
-          : '';
-        const hostOnly = entry.useOrigin && pageHost
-          ? pageHost
+        const ph = pageHost();
+        const hostOnly = entry.useOrigin && ph
+          ? ph
           : entry.host.trim().replace(/^(wss?|https?):\/\//i, '');
         if (!hostOnly) return;
 
-        const scheme = typeof window !== 'undefined' && window.location.protocol === 'https:'
-          ? 'wss://'
-          : 'ws://';
-        const wsUrl = `${scheme}${hostOnly}`;
+        const wsUrl = `${schemesFor(entry.tls).ws}${hostOnly}`;
         console.log('[PersaLink] connecting to', wsUrl);
 
         if (wsClient) wsClient.disconnect();
@@ -794,13 +806,13 @@ export const useAppStore = create<AppState>()(
       migrate: (persisted: unknown, version: number) => {
         const p = persisted as Record<string, unknown> & { servers?: ServerEntry[] };
         if (version === 0 && p && !p.servers && (p.serverUrl || p.authToken)) {
-          const pageHost = typeof window !== 'undefined' ? window.location.host : '';
+          const ph = pageHost();
           const host = typeof p.serverUrl === 'string' ? p.serverUrl.trim() : '';
           const entry: ServerEntry = {
             id: crypto.randomUUID(),
-            label: host || pageHost || 'My server',
-            host: host || pageHost,
-            useOrigin: !!pageHost,
+            label: host || ph || 'My server',
+            host: host || ph,
+            useOrigin: !!ph,
             authToken: typeof p.authToken === 'string' ? p.authToken : null,
             serverName: null,
             lastConnectedAt: null,

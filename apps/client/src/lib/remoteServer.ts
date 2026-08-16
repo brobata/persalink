@@ -9,15 +9,15 @@
 
 import type { SessionInfo, Profile, ServerMessage } from '@persalink/shared/protocol';
 import type { ServerEntry } from '../stores/appStore';
+import { pageHost, schemesFor } from './platform';
 
 export function resolveEntryHost(entry: ServerEntry): string {
-  const pageHost = typeof window !== 'undefined' ? window.location.host : '';
-  return entry.useOrigin && pageHost ? pageHost : entry.host;
+  const ph = pageHost();
+  return entry.useOrigin && ph ? ph : entry.host;
 }
 
 function wsUrlFor(entry: ServerEntry): string {
-  const scheme = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-  return `${scheme}${resolveEntryHost(entry)}`;
+  return `${schemesFor(entry.tls).ws}${resolveEntryHost(entry)}`;
 }
 
 interface RemoteCallOpts<T> {

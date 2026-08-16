@@ -8,7 +8,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useAppStore } from '../stores/appStore';
+import { useAppStore, activeServerTls } from '../stores/appStore';
+import { schemesFor } from '../lib/platform';
 
 interface FileEntry {
   name: string;
@@ -39,8 +40,7 @@ export function FilesScreen() {
   const [fileShareUp, setFileShareUp] = useState(false);
   const previewUrlRef = useRef<string | null>(null);
 
-  const scheme = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
-  const base = `${scheme}//${serverUrl.trim().replace(/^(wss?|https?):\/\//i, '')}`;
+  const base = `${schemesFor(activeServerTls()).http}${serverUrl.trim().replace(/^(wss?|https?):\/\//i, '')}`;
   const headers: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
 
   const load = useCallback(async (target: string) => {

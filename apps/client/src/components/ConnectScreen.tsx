@@ -7,16 +7,16 @@
  */
 import { useState, useEffect } from 'react';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
+import { pageHost, schemesFor } from '../lib/platform';
 
 /** Probe a server's /health. no-cors: an opaque response still proves the
  *  host is up, and it works cross-origin without the server sending CORS
  *  headers. Rejection/timeout = unreachable. */
-async function probeHealth(host: string): Promise<boolean> {
-  const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
+async function probeHealth(host: string, tls: boolean | undefined): Promise<boolean> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 2500);
   try {
-    await fetch(`${proto}//${host}/health`, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal });
+    await fetch(`${schemesFor(tls).http}${host}/health`, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal });
     return true;
   } catch {
     return false;
@@ -26,8 +26,8 @@ async function probeHealth(host: string): Promise<boolean> {
 }
 
 function resolveHost(entry: ServerEntry): string {
-  const pageHost = typeof window !== 'undefined' ? window.location.host : '';
-  return entry.useOrigin && pageHost ? pageHost : entry.host;
+  const ph = pageHost();
+  return entry.useOrigin && ph ? ph : entry.host;
 }
 
 // One-shot per page load, module-level ON PURPOSE. A per-mount ref re-fires on
@@ -47,7 +47,9 @@ function ServerRow({ entry, isActive, reachable, connState, onRemove }: {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const host = resolveHost(entry);
   const pageOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-  const crossOrigin = !entry.useOrigin && typeof window !== 'undefined' && entry.host !== window.location.host;
+  // In the native shell every server is cross-origin (page = bundled webview).
+  const ph = pageHost();
+  const crossOrigin = !entry.useOrigin && (ph === '' || entry.host !== ph);
   // Reachable over HTTP but the WS never authenticates → almost certainly the
   // server's origin allowlist. Say so, with the exact fix.
   const likelyOriginBlocked = isActive && crossOrigin && reachable === true && connState === 'disconnected';
@@ -125,10 +127,10 @@ export function ConnectScreen() {
   useEffect(() => {
     if (didAutoConnect) return;
     didAutoConnect = true;
-    const pageHost = typeof window !== 'undefined' ? window.location.host : '';
+    const ph = pageHost(); // empty in the native shell → first run = add form
     const isDev = !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
-    if (servers.length === 0 && pageHost && !isDev) {
-      addServer('This server', pageHost);
+    if (servers.length === 0 && ph && !isDev) {
+      addServer('This server', ph);
     } else if (servers.length > 0 && connectionState === 'disconnected') {
       connect();
     }
@@ -139,7 +141,7 @@ export function ConnectScreen() {
   useEffect(() => {
     let cancelled = false;
     const sweep = async () => {
-      const results = await Promise.all(servers.map(async (e) => [e.id, await probeHealth(resolveHost(e))] as const));
+      const results = await Promise.all(servers.map(async (e) => [e.id, await probeHealth(resolveHost(e), e.tls)] as const));
       if (!cancelled) setReachability(Object.fromEntries(results));
     };
     void sweep();
@@ -209,7 +211,7 @@ export function ConnectScreen() {
               value={newHost}
               onChange={(e) => setNewHost(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-              placeholder="hostname:9877"
+              placeholder="192.168.1.44:9877 or https://box.ts.net"
               className="w-full px-3 py-2.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm font-mono text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
               autoFocus
             />

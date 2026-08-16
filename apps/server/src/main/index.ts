@@ -982,7 +982,13 @@ function setupWebSocket(server: http.Server): void {
       const allowed = config.security.allowedOrigins;
       if (origin) {
         const sameOrigin = origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
-        if (!sameOrigin && (allowed.length === 0 || !allowed.includes(origin))) {
+        // The Capacitor shell (Play Store app) serves its bundled client from
+        // a localhost webview — that origin is first-party, not a hostile
+        // page. Browsers never let a remote page claim a localhost origin, so
+        // this doesn't weaken the DNS-rebinding defense.
+        const nativeShell = origin === 'https://localhost' || origin === 'http://localhost'
+          || origin === 'capacitor://localhost';
+        if (!sameOrigin && !nativeShell && (allowed.length === 0 || !allowed.includes(origin))) {
           audit('ws_rejected_origin', { ip, origin });
           cb(false, 403, 'Origin not allowed');
           return;
