@@ -58,3 +58,28 @@ body {
 .pl-fab-item {
   animation: pl-fab-in 120ms ease-out both;
 }
+
+/* Native-selection mirror: transparent DOM copy of the terminal viewport,
+   pixel-aligned over the canvas (geometry + font set from JS). The visible
+   glyphs are the canvas; this layer only exists so Android's long-press
+   selection (magnifier, handles, system Copy menu) has real text to grab. */
+.pl-select-mirror {
+  position: absolute;
+  z-index: 3;
+  overflow: hidden;
+  white-space: pre;
+  color: transparent;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-tap-highlight-color: transparent;
+  cursor: text;
+  /* contenteditable (for the native Paste menu item) — but it must never
+     LOOK editable: no caret, no focus ring. */
+  caret-color: transparent;
+  outline: none;
+}
+.pl-select-mirror::selection,
+.pl-select-mirror *::selection {
+  background: rgba(56, 189, 248, 0.4);
+  color: transparent;
+}

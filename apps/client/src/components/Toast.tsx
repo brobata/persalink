@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { COPY_PENDING_OP, completePendingCopy } from '../lib/clipboardBridge';
+import { SHARE_PENDING_OP, consumePendingShare } from '../lib/shareTarget';
 
 const AUTO_DISMISS_MS = 5_000;
-// Tap-to-finish copy toasts get longer — the user has to notice AND reach them.
-const COPY_PENDING_DISMISS_MS = 12_000;
+// Tap-to-act toasts (finish a copy, insert shared text) get longer — the
+// user has to notice AND reach them.
+const TAP_ACTION_DISMISS_MS = 12_000;
 
 export function ToastStack() {
   const notifications = useAppStore((s) => s.notifications);
@@ -13,7 +15,7 @@ export function ToastStack() {
   useEffect(() => {
     if (notifications.length === 0) return;
     const timers = notifications.map((n) => {
-      const ttl = n.op === COPY_PENDING_OP ? COPY_PENDING_DISMISS_MS : AUTO_DISMISS_MS;
+      const ttl = n.op === COPY_PENDING_OP || n.op === SHARE_PENDING_OP ? TAP_ACTION_DISMISS_MS : AUTO_DISMISS_MS;
       const remaining = Math.max(0, ttl - (Date.now() - n.createdAt));
       return setTimeout(() => dismiss(n.id), remaining);
     });
@@ -41,6 +43,20 @@ export function ToastStack() {
                 className="flex-1 min-w-0 text-left"
               >
                 <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 mb-0.5">copy</div>
+                <div className="break-words">{n.message}</div>
+              </button>
+            ) : n.op === SHARE_PENDING_OP ? (
+              // Share-sheet intake: the tap is the user's consent to type the
+              // shared text into the attached session.
+              <button
+                onClick={() => {
+                  const text = consumePendingShare();
+                  if (text) useAppStore.getState().sendInput(text);
+                  dismiss(n.id);
+                }}
+                className="flex-1 min-w-0 text-left"
+              >
+                <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 mb-0.5">share</div>
                 <div className="break-words">{n.message}</div>
               </button>
             ) : (

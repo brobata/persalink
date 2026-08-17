@@ -13,6 +13,7 @@ import { GridLayout } from './components/GridLayout';
 import { ToastStack } from './components/Toast';
 import { UpdatePill } from './components/UpdatePill';
 import { useLayoutStore } from './stores/layoutStore';
+import { stashShare } from './lib/shareTarget';
 
 // ============================================================================
 // Desktop breakpoint hook
@@ -63,7 +64,19 @@ export function App() {
         useAppStore.setState({ pendingProfileLaunch: profile });
         window.history.replaceState({}, '', window.location.pathname);
       }
+      // Android share sheet (manifest share_target): stash the payload —
+      // attaching a session surfaces a tap-to-insert toast for it.
+      const sharedText = params.get('text');
+      const sharedUrl = params.get('url');
+      if (sharedText || sharedUrl) {
+        stashShare([sharedText, sharedUrl].filter(Boolean).join(' '));
+        window.history.replaceState({}, '', window.location.pathname);
+      }
     } catch { /* no-op */ }
+    // Ask Android not to evict this origin's storage (saved server + auth
+    // token live in localStorage) under storage pressure. Fire-and-forget;
+    // installed PWAs are usually granted silently.
+    try { void navigator.storage?.persist?.(); } catch { /* unsupported */ }
     const { serverUrl, authToken, connectionState: cs } = useAppStore.getState();
     if (serverUrl && authToken && cs === 'disconnected') {
       useAppStore.getState().connect();
