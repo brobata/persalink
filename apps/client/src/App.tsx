@@ -182,11 +182,29 @@ export function App() {
 }
 
 function ReconnectingOverlay() {
+  // A warm reconnect lands in <1s. If we're still spinning after this long,
+  // the server almost certainly isn't reachable — on this deployment that
+  // means the Tailscale tunnel is down (phone VPN killed in the background,
+  // desktop fresh-boot before tailscaled is up). Say so instead of letting
+  // the user force-close the app to "fix" it.
+  const HINT_AFTER_MS = 8_000;
+  const [showHint, setShowHint] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShowHint(true), HINT_AFTER_MS);
+    return () => clearTimeout(t);
+  }, []);
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="flex flex-col items-center gap-3 text-zinc-400">
+      <div className="flex flex-col items-center gap-3 text-zinc-400 px-8 text-center">
         <div className="h-5 w-5 border-2 border-zinc-500 border-t-zinc-200 rounded-full animate-spin" />
         <span className="text-sm">Reconnecting...</span>
+        {showHint && (
+          <span className="text-xs text-amber-300/90 max-w-xs">
+            Still trying — the app retries automatically. If this device reaches the
+            server through Tailscale (or another VPN), check that it&apos;s connected;
+            after a reboot it can take a moment to come up.
+          </span>
+        )}
       </div>
     </div>
   );

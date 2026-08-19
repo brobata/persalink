@@ -36,5 +36,16 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Split rarely-changing dependencies from app code so a deploy only
+        // invalidates the small app chunk. Before this, every deploy forced
+        // clients to re-pull one ~810KB bundle — painful through a cold or
+        // DERP-relayed Tailscale tunnel (the "slow to connect after updates"
+        // report, 2026-08-19).
+        manualChunks: (id: string) =>
+          id.includes('node_modules') ? 'vendor' : undefined,
+      },
+    },
   },
 });

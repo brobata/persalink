@@ -53,6 +53,12 @@ function ServerRow({ entry, isActive, reachable, connState, onRemove }: {
   // Reachable over HTTP but the WS never authenticates → almost certainly the
   // server's origin allowlist. Say so, with the exact fix.
   const likelyOriginBlocked = isActive && crossOrigin && reachable === true && connState === 'disconnected';
+  // Actively trying but the health probe can't reach the host at all → the
+  // path to the server is down, not the server. For ts.net-style deployments
+  // that means the local Tailscale/VPN client (killed in the background on
+  // Android, still starting after a desktop reboot).
+  const likelyTunnelDown = isActive && reachable === false
+    && (connState === 'connecting' || connState === 'reconnecting');
 
   return (
     <div className={`rounded-xl border ${isActive ? 'border-zinc-600 bg-zinc-900' : 'border-zinc-800 bg-zinc-900/50'}`}>
@@ -105,6 +111,14 @@ function ServerRow({ entry, isActive, reachable, connState, onRemove }: {
           <span className="font-mono">~/.persalink/config.json</span>:{' '}
           <span className="font-mono text-amber-200">{`"security": { "allowedOrigins": ["${pageOrigin}"] }`}</span>{' '}
           and restart PersaLink there.
+        </div>
+      )}
+      {likelyTunnelDown && (
+        <div className="px-4 pb-3 text-[11px] leading-snug text-amber-300/90">
+          Can&apos;t reach this address right now. If it&apos;s a Tailscale/VPN
+          hostname, make sure the tunnel is connected on <em>this</em> device —
+          it can take a moment after a reboot, and Android sometimes stops it in
+          the background. Retrying automatically.
         </div>
       )}
     </div>

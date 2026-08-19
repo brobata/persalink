@@ -248,6 +248,16 @@ export function TerminalPane({
               // top-left corner of the pane.
               try { fitRef.current?.fit(); } catch { /* detached */ }
               client.send({ type: 'session.resize', cols: term.cols, rows: term.rows });
+              // Repaint after the attach burst settles. Panes reuse ONE
+              // terminal across session switches (reset → scrollback prefill
+              // → tmux redraw), and the WebGL renderer sometimes leaves a
+              // black frame after that sequence until the next viewport
+              // change — users were scrolling up/down to force a paint.
+              const repaint = () => {
+                try { term.refresh(0, term.rows - 1); } catch { /* detached */ }
+              };
+              requestAnimationFrame(repaint);
+              setTimeout(repaint, 350);
             }
             break;
           }
