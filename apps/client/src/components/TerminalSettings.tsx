@@ -173,6 +173,24 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
 
       <div className="flex items-center justify-between pt-1">
         <div>
+          <label htmlFor="hw-ime-compat" className="text-xs text-zinc-300">Keyboard-app compatibility</label>
+          <p className="text-[10px] text-zinc-600 leading-snug">
+            On physical-keyboard phones (Titan + Physiboard etc.), let the keyboard app
+            handle Alt symbol layers and auto-caps like in other apps. Turn off for raw
+            terminal keys (Alt acts as Meta/Esc prefix).
+          </p>
+        </div>
+        <input
+          id="hw-ime-compat"
+          type="checkbox"
+          checked={style.hwImeCompat}
+          onChange={(e) => style.setHwImeCompat(e.target.checked)}
+          className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0 ml-3"
+        />
+      </div>
+
+      <div className="flex items-center justify-between pt-1">
+        <div>
           <label htmlFor="input-debug" className="text-xs text-zinc-300">Input debug overlay</label>
           <p className="text-[10px] text-zinc-600 leading-snug">Show raw key/wheel/touch events in the terminal — for diagnosing exotic keyboards.</p>
         </div>

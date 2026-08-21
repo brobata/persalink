@@ -289,6 +289,12 @@ interface TerminalStyleState {
   /** Touch-scroll multiplier (1–5). Devices that inject tiny synthetic drags
    *  (Titan keyboard-swipe ≈ 35px ≈ 1 line) need gain to feel alive. */
   scrollGain: number;
+  /** Keep a real IME connection open on hardware-keyboard devices (Titan +
+   *  Physiboard etc.), so the keyboard app's Alt symbol layer and auto-caps
+   *  logic run like in any other app. Off = raw terminal keys (Alt = Meta/ESC
+   *  prefix). Only takes effect once a physical keyboard has been detected,
+   *  so Gboard-only phones never get a surprise soft keyboard. */
+  hwImeCompat: boolean;
 
   setFontFamily: (f: FontFamilyChoice) => void;
   setFontSize: (s: number) => void;
@@ -298,6 +304,7 @@ interface TerminalStyleState {
   setDoubleTapTab: (v: boolean) => void;
   setInputDebug: (v: boolean) => void;
   setScrollGain: (v: number) => void;
+  setHwImeCompat: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -322,6 +329,7 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       doubleTapTab: true,
       inputDebug: false,
       scrollGain: 1,
+      hwImeCompat: true,
 
       setFontFamily: (fontFamily) => set({ fontFamily }),
       setFontSize: (fontSize) => set({ fontSize: Math.min(24, Math.max(8, Math.round(fontSize))) }),
@@ -331,10 +339,11 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       setDoubleTapTab: (doubleTapTab) => set({ doubleTapTab }),
       setInputDebug: (inputDebug) => set({ inputDebug }),
       setScrollGain: (scrollGain) => set({ scrollGain: Math.min(5, Math.max(1, Math.round(scrollGain))) }),
+      setHwImeCompat: (hwImeCompat) => set({ hwImeCompat }),
       reset: () => set({
         fontFamily: 'cascadia', fontSize: 13, fontWeight: '400',
         theme: 'persalink', historyOnAttach: 0, doubleTapTab: true, inputDebug: false,
-        scrollGain: 1,
+        scrollGain: 1, hwImeCompat: true,
       }),
     }),
     {

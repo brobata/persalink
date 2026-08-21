@@ -668,20 +668,46 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // bar, hardware keys, selection — but no soft keyboard), and the floating
   // keyboard button below flips it to text + refocuses. Tapping anywhere in
   // the session no longer summons Gboard.
+  //
+  // EXCEPT on hardware-keyboard devices (hwImeCompat, default on):
+  // inputmode="none" also cuts the IME out of the key pipeline, so keyboard
+  // apps like Physiboard lose their Alt symbol layer (Alt+M → ".") and their
+  // auto-caps logic runs blind and inverts. A detected physical keyboard
+  // keeps a real "text" connection — its IME is a thin helper, not a
+  // screen-covering Gboard, so the original problem doesn't apply.
   const [softKbOn, setSoftKbOn] = useState(false);
   const softKbOnRef = useRef(false);
+  const hwKeyboardRef = useRef(hwKeyboard);
+  hwKeyboardRef.current = hwKeyboard;
+  const resolveInputMode = useCallback((on: boolean): 'text' | 'none' => {
+    if (on) return 'text';
+    return hwKeyboardRef.current && useTerminalStyleStore.getState().hwImeCompat ? 'text' : 'none';
+  }, []);
   const applySoftKb = useCallback((on: boolean) => {
     softKbOnRef.current = on;
     setSoftKbOn(on);
     const term = terminalRef.current;
     const ta = term?.textarea;
     if (!ta) return;
-    ta.inputMode = on ? 'text' : 'none';
+    ta.inputMode = resolveInputMode(on);
     // Android only re-reads inputmode on a fresh focus — cycle it.
     ta.blur();
     if (on) term?.focus();
     else term?.focus(); // refocus keeps hardware keys + cursor; no soft kb with inputmode none
-  }, []);
+  }, [resolveInputMode]);
+  // Re-apply when hw-keyboard detection or the compat setting flips (Android
+  // only re-reads inputmode on a fresh focus, hence the blur/focus cycle).
+  const hwImeCompat = useTerminalStyleStore((s) => s.hwImeCompat);
+  useEffect(() => {
+    const term = terminalRef.current;
+    const ta = term?.textarea;
+    if (!ta) return;
+    const mode = resolveInputMode(softKbOnRef.current);
+    if (ta.inputMode === mode) return;
+    ta.inputMode = mode;
+    ta.blur();
+    term?.focus();
+  }, [hwKeyboard, hwImeCompat, resolveInputMode]);
 
   // Sticky Ctrl (key bar): state drives the button highlight, the ref is what
   // the xterm onData closure reads — it mounts once and never re-binds.
@@ -924,7 +950,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // Apply the soft-keyboard policy to this terminal's textarea (a new
     // textarea is born with every terminal instance).
     if (term.textarea) {
-      term.textarea.inputMode = softKbOnRef.current ? 'text' : 'none';
+      term.textarea.inputMode = resolveInputMode(softKbOnRef.current);
     }
 
     // OSC 52 passthrough: programs inside the session (tmux copy-mode `y`,
