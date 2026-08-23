@@ -198,7 +198,7 @@ export class TmuxManager {
 
       return {
         id: parsed.name,
-        name: this.customNames.get(parsed.name) || profile?.name || parsed.name.replace(SESSION_PREFIX, ''),
+        name: this.customNames.get(parsed.name) || this.instanceName(parsed.name, profileId, profile) || parsed.name.replace(SESSION_PREFIX, ''),
         profileId,
         profileName: profile?.name,
         profileColor: profile?.color ?? undefined,
@@ -274,6 +274,12 @@ export class TmuxManager {
     // reattach. 50k gives plenty of headroom (~20MB per session worst case).
     try {
       await tmux('set-option', '-t', sessionName, 'history-limit', '10000');
+    } catch { /* ignore */ }
+
+    // tmux's default status-left-length (10) truncates "[pl-claude-2]" to
+    // "[pl-claude" — the two instances look identical in the status bar.
+    try {
+      await tmux('set-option', '-t', sessionName, 'status-left-length', '30');
     } catch { /* ignore */ }
 
     // Mouse mode lets tmux interpret wheel events as scrollback navigation
@@ -536,6 +542,19 @@ export class TmuxManager {
   }
 
   /** Extract profile ID from tmux session name */
+  /**
+   * Display name for a profile-backed session. The first instance is just the
+   * profile name; duplicates (`pl-<id>-2`, `-3`, …) get a ` · N` suffix so two
+   * "Claude" sessions are distinguishable everywhere the name is shown.
+   */
+  private instanceName(sessionName: string, profileId: string | undefined, profile?: Profile): string | undefined {
+    if (!profile || !profileId) return undefined;
+    const rest = sessionName.slice(SESSION_PREFIX.length);
+    if (rest === profileId) return profile.name;
+    const m = rest.slice(profileId.length).match(/^-(\d+)$/);
+    return m ? `${profile.name} \u00b7 ${m[1]}` : profile.name;
+  }
+
   private extractProfileId(sessionName: string, profileMap?: Map<string, Profile>): string | undefined {
     if (!sessionName.startsWith(SESSION_PREFIX)) return undefined;
     const rest = sessionName.slice(SESSION_PREFIX.length);

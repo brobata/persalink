@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
+import { useLongPress } from '../lib/useLongPress';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // ============================================================================
@@ -151,7 +152,7 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
   profile: Profile; isLive: boolean; reordering: boolean;
   onMove?: (direction: 'up' | 'down') => void;
 }) {
-  const { createSession, sessions, healthStatuses, editProfile } = useAppStore();
+  const { createSession, attachSession, sessions, healthStatuses, editProfile } = useAppStore();
 
   const health = healthStatuses.find(h => h.profileId === profile.id);
   const liveSessions = sessions.filter(s => s.profileId === profile.id);
@@ -162,9 +163,18 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
   const hasUnseen = liveSessions.some(s => s.unseen);
   const liveDotColor = needsAttention ? 'bg-amber-400' : hasUnseen ? 'bg-emerald-400' : 'bg-green-500';
 
-  const handleTap = () => {
+  // Same gesture contract as the desktop sidebar: tap opens the existing
+  // session (or starts one if none is live); long-press always starts a new
+  // instance. Desktop additionally accepts shift/alt-click for the latter.
+  const handleTap = useCallback(() => {
+    const existing = liveSessions[0];
+    if (existing) attachSession(existing.id);
+    else createSession(profile.id);
+  }, [liveSessions, attachSession, createSession, profile.id]);
+  const handleNewInstance = useCallback(() => {
     createSession(profile.id);
-  };
+  }, [createSession, profile.id]);
+  const press = useLongPress(handleNewInstance, handleTap);
 
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -190,9 +200,11 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
         </div>
       )}
       <button
-        onClick={handleTap}
-        className={`flex items-center gap-3 flex-1 min-w-0 px-4 py-3.5
+        {...press}
+        title={liveCount > 0 ? 'Tap to open. Hold for a new instance.' : profile.name}
+        className={`flex items-center gap-3 flex-1 min-w-0 px-4 py-3.5 select-none
                    active:bg-zinc-800 transition-colors text-left ${reordering ? '' : 'rounded-l-xl'}`}
+        style={{ WebkitTouchCallout: 'none' }}
       >
         <div className="relative shrink-0">
           <span className="text-lg">{profile.icon || '\uD83D\uDCC2'}</span>

@@ -4,10 +4,11 @@
  *   and quick actions always visible alongside the terminal.
  */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { useLayoutStore } from '../stores/layoutStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
+import { useLongPress } from '../lib/useLongPress';
 
 // ============================================================================
 // Session Pill (compact, for sidebar)
@@ -123,26 +124,31 @@ function ProfileRow({ profile }: { profile: Profile }) {
   const focusedSessionId = panes.find(p => p.id === focusedPaneId)?.sessionId;
   const isActive = !!(focusedSessionId && liveSessions.some(s => s.id === focusedSessionId));
 
-  const handleClick = (e: React.MouseEvent) => {
-    // Shift/Alt-click forces a new instance even if one already exists.
-    // Plain click attaches the first existing session (default ergonomic).
+  // Shift/Alt-click OR long-press forces a new instance even if one already
+  // exists. Plain click attaches the first existing session (default
+  // ergonomic). Mirrors the mobile profile card's tap / hold contract.
+  const handleNewInstance = useCallback(() => {
+    markPendingAssign(focusedPaneId);
+    createSession(profile.id);
+  }, [markPendingAssign, focusedPaneId, createSession, profile.id]);
+  const handleClick = useCallback((e: React.MouseEvent) => {
     const forceNew = e.shiftKey || e.altKey;
     const existing = liveSessions[0];
     if (existing && !forceNew) {
       useLayoutStore.getState().assignSession(focusedPaneId, existing.id);
       return;
     }
-    markPendingAssign(focusedPaneId);
-    createSession(profile.id);
-  };
+    handleNewInstance();
+  }, [liveSessions, focusedPaneId, handleNewInstance]);
+  const press = useLongPress(handleNewInstance, handleClick);
 
   return (
     <div className={`flex items-center gap-0 rounded-lg transition-colors ${
       isActive ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
     }`}>
       <button
-        onClick={handleClick}
-        title={liveCount > 0 ? 'Click to attach. Shift+click for a new instance.' : profile.name}
+        {...press}
+        title={liveCount > 0 ? 'Click to attach. Shift+click or hold for a new instance.' : profile.name}
         className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 text-left"
       >
         <div className="relative shrink-0">
