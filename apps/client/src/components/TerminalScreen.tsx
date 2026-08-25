@@ -455,6 +455,60 @@ function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
   );
 }
 
+// Enter and Backspace are the two keys a soft keyboard reports with a real `code`, so
+// they cannot count as evidence of a physical one — treating them as such would put a
+// keyboard-less phone back into inputmode="text" and summon Gboard on every terminal tap,
+// which is the whole thing inputmode="none" exists to prevent.
+const SOFT_KEYBOARD_CODES = new Set(['Enter', 'NumpadEnter', 'Backspace']);
+
+/**
+ * Whether a keydown came from a real key rather than a soft keyboard's composition.
+ *
+ * A soft IME composites text and reports keydowns with keyCode 229, an empty `code`, or
+ * key "Unidentified". Anything else carrying a genuine `code` came from hardware.
+ */
+/**
+ * Phones whose defining feature is a physical keyboard. Matched against the device model so a
+ * fresh install knows before a key is ever pressed — detection alone cannot cover that case,
+ * because the keypress that would prove the keyboard exists has already bypassed the IME by
+ * the time we see it.
+ */
+const HARDWARE_KEYBOARD_MODELS =
+  /\b(?:Titan|BB[BEF]100|Pro1|Astro[ _]?Slide|Cosmo[ _]?Communicator)\b/i;
+
+/**
+ * Synchronous best effort. Chrome's reduced Android user-agent freezes the model to "K", so
+ * this only fires where the full string survives (WebViews, older Chrome). The client-hint
+ * path below covers everywhere else.
+ */
+function userAgentSuggestsHardwareKeyboard(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  try { return HARDWARE_KEYBOARD_MODELS.test(navigator.userAgent); } catch { return false; }
+}
+
+/**
+ * The real device model, via high-entropy client hints — the one place Chrome still exposes
+ * it on Android. Async, so it lands a tick after mount, which is still long before a keypress.
+ */
+async function modelSuggestsHardwareKeyboard(): Promise<boolean> {
+  try {
+    const uaData = (navigator as Navigator & {
+      userAgentData?: { getHighEntropyValues(hints: string[]): Promise<{ model?: string }> };
+    }).userAgentData;
+    if (!uaData?.getHighEntropyValues) return false;
+    const { model } = await uaData.getHighEntropyValues(['model']);
+    return !!model && HARDWARE_KEYBOARD_MODELS.test(model);
+  } catch { return false; }
+}
+
+function isPhysicalKeyEvent(e: KeyboardEvent): boolean {
+  return e.isTrusted
+    && e.keyCode !== 229
+    && !!e.code
+    && e.key !== 'Unidentified'
+    && !SOFT_KEYBOARD_CODES.has(e.code);
+}
+
 export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: boolean }) {
   const {
     attachedSession, sendInput, exitScroll, resize, detachSession, killSession,
@@ -547,18 +601,33 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     tick();
   }, [sendInput]);
   useEffect(() => () => fabJoyStop(), [fabJoyStop]);
-  // Hardware-keyboard detection (Titan etc.): soft IMEs composite text and
-  // don't emit per-letter keydowns with real codes, so the first trusted
-  // KeyA-style keydown means a physical keyboard exists. Sticky per device —
-  // once seen, the soft-keyboard dial item is dead weight and hides.
+  // Hardware-keyboard detection (Titan etc.): soft IMEs composite text and don't emit
+  // keydowns with real codes, so the first trusted one that does means a physical keyboard
+  // exists. Deliberately NOT limited to letters and digits: reaching a symbol on the Titan
+  // starts with Alt or Sym, and until detection flips, inputmode stays "none" and the IME is
+  // out of the pipeline — so the very chord that most needs the IME was the one that could
+  // never switch it on, and its symbol was swallowed. Modifiers count as evidence now.
+  // Sticky per device — once seen, the soft-keyboard dial item is dead weight and hides.
   const [hwKeyboard, setHwKeyboard] = useState(() => {
     if (typeof window === 'undefined') return false;
+    if (userAgentSuggestsHardwareKeyboard()) return true;
     try { return localStorage.getItem('persalink-hw-keyboard') === 'true'; } catch { return false; }
   });
+  // Client hints resolve a tick after mount. Deliberately NOT written to localStorage: a model
+  // match should stay a live answer, so a wrong pattern here can never be baked into a device
+  // permanently the way a real keypress legitimately is.
+  useEffect(() => {
+    if (hwKeyboard) return;
+    let cancelled = false;
+    void modelSuggestsHardwareKeyboard().then((isHardware) => {
+      if (!cancelled && isHardware) setHwKeyboard(true);
+    });
+    return () => { cancelled = true; };
+  }, [hwKeyboard]);
   useEffect(() => {
     if (hwKeyboard) return;
     const onKey = (e: KeyboardEvent) => {
-      if (!e.isTrusted || !/^(Key[A-Z]|Digit[0-9])$/.test(e.code)) return;
+      if (!isPhysicalKeyEvent(e)) return;
       setHwKeyboard(true);
       try { localStorage.setItem('persalink-hw-keyboard', 'true'); } catch { /* private mode */ }
     };
