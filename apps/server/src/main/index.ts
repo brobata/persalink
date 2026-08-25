@@ -1260,6 +1260,19 @@ async function main(): Promise<void> {
   healthChecker = new HealthChecker(tmuxManager);
   healthChecker.start(profileManager.list());
 
+  // profiles.json is edited out-of-band often enough to matter (scripts, a
+  // hand-edit while retiring a project). Until this watcher existed the
+  // running server never re-read the file, so a new group stayed missing from
+  // the home screen and the editor's group chips until a restart — and the
+  // next UI save silently wrote the stale in-memory list back over the edit.
+  profileManager.onExternalChange(() => {
+    const profiles = profileManager.list();
+    audit('profiles_reloaded', { count: profiles.length });
+    broadcastToAuthenticated({ type: 'profiles.list', profiles });
+    healthChecker.start(profiles);
+  });
+  profileManager.watch();
+
   tokenStore = new TokenStore();
   rateLimiter = new RateLimiter();
   pushManager = new PushManager();

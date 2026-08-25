@@ -26,6 +26,7 @@ export type AuditEvent =
   | 'tmux_session_detached'
   | 'action_executed'
   | 'profiles_discovered'
+  | 'profiles_reloaded'
   | 'permanent_lock'
   | 'setup_rejected_remote'
   | 'ws_rejected_origin'

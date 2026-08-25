@@ -7,6 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { Profile } from '@persalink/shared/protocol';
@@ -50,6 +51,12 @@ export function validateProfile(profile: Profile): string | null {
 
 export class ProfileManager {
   private profiles: Map<string, Profile> = new Map();
+  /** Hash of the profiles.json content we last read or wrote — lets the file
+   *  watcher tell an external edit apart from the echo of our own save(). */
+  private lastKnownHash = '';
+  private watcher: fs.FSWatcher | null = null;
+  private watchDebounce: NodeJS.Timeout | null = null;
+  private changeListeners: Array<() => void> = [];
 
   constructor() {
     const isFirstRun = !fs.existsSync(PROFILES_FILE);
@@ -240,6 +247,118 @@ export class ProfileManager {
     return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
   }
 
+  /**
+   * Register a callback fired when profiles.json changes underneath us
+   * (a hand-edit, a script, another tool) and the reload succeeds.
+   */
+  onExternalChange(listener: () => void): void {
+    this.changeListeners.push(listener);
+  }
+
+  /**
+   * Watch profiles.json for out-of-band edits.
+   *
+   * Without this the constructor's one-shot load() is the only read that ever
+   * happens: a file edited while the server runs stays invisible until a
+   * restart, and — worse — the next save() writes the stale in-memory list
+   * straight over the edit.
+   *
+   * Watches the DIRECTORY, not the file: atomicWriteFileSync() replaces
+   * profiles.json via rename, and a file-level watch would keep following the
+   * replaced inode and go permanently deaf after the first write.
+   */
+  watch(): void {
+    if (this.watcher) return;
+    try {
+      this.watcher = fs.watch(CONFIG_DIR, (_event, filename) => {
+        if (filename === path.basename(PROFILES_FILE)) this.scheduleReload();
+      });
+      this.watcher.on('error', (err) => {
+        console.error('[profiles] watcher error:', (err as Error).message);
+        this.stopWatching();
+      });
+    } catch (err) {
+      // Not fatal — the server just falls back to load-at-boot behaviour.
+      console.error(`[profiles] could not watch ${CONFIG_DIR}:`, (err as Error).message);
+    }
+  }
+
+  stopWatching(): void {
+    if (this.watchDebounce) {
+      clearTimeout(this.watchDebounce);
+      this.watchDebounce = null;
+    }
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+  }
+
+  /** Coalesce the burst of events a single logical edit produces. */
+  private scheduleReload(): void {
+    if (this.watchDebounce) clearTimeout(this.watchDebounce);
+    this.watchDebounce = setTimeout(() => {
+      this.watchDebounce = null;
+      this.reloadIfChanged();
+    }, 200);
+  }
+
+  /**
+   * Non-destructive counterpart to load(). Where load() throws and renames a
+   * corrupt file aside (correct at boot), this one keeps the current profiles
+   * and waits for the next write — a watcher must never destroy state on what
+   * may just be a half-written file caught mid-edit.
+   */
+  private reloadIfChanged(): void {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(PROFILES_FILE, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('[profiles] reload: read failed:', (err as Error).message);
+      }
+      return;
+    }
+
+    const hash = hashContent(raw);
+    if (hash === this.lastKnownHash) return; // our own save, or a no-op touch
+
+    let list: unknown;
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      console.error('[profiles] reload: file is not valid JSON yet — keeping current profiles');
+      return;
+    }
+    if (!Array.isArray(list)) {
+      console.error('[profiles] reload: expected an array — keeping current profiles');
+      return;
+    }
+
+    const next = new Map<string, Profile>();
+    for (const profile of list as Profile[]) {
+      if (profile && typeof profile.id === 'string' && profile.id) next.set(profile.id, profile);
+    }
+    if (next.size === 0) {
+      console.error('[profiles] reload: no usable profiles — keeping current profiles');
+      return;
+    }
+    // Mirror the constructor's guarantee that 'default' always exists, but in
+    // memory only — writing here would race the editor that just saved.
+    if (!next.has('default')) next.set('default', DEFAULT_PROFILE);
+
+    this.profiles = next;
+    this.lastKnownHash = hash;
+
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error('[profiles] reload listener failed:', (err as Error).message);
+      }
+    }
+  }
+
   private load(): void {
     let raw: string;
     try {
@@ -267,6 +386,7 @@ export class ProfileManager {
     for (const profile of list) {
       this.profiles.set(profile.id, profile);
     }
+    this.lastKnownHash = hashContent(raw);
   }
 
   private save(): void {
@@ -274,6 +394,15 @@ export class ProfileManager {
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
     }
     const list = Array.from(this.profiles.values());
-    atomicWriteFileSync(PROFILES_FILE, JSON.stringify(list, null, 2), 0o600);
+    const json = JSON.stringify(list, null, 2);
+    // Record before writing: the watcher fires on our own rename too, and
+    // without this baseline every UI save would echo back as an "external"
+    // change and trigger a redundant reload + broadcast.
+    this.lastKnownHash = hashContent(json);
+    atomicWriteFileSync(PROFILES_FILE, json, 0o600);
   }
+}
+
+function hashContent(data: string): string {
+  return crypto.createHash('sha256').update(data).digest('hex');
 }
