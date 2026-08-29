@@ -17,6 +17,26 @@ const COLOR_PRESETS = [
   '#3b82f6', '#8b5cf6', '#a855f7', '#ec4899', '#6b7280',
 ];
 
+const BYPASS_FLAG = '--dangerously-skip-permissions';
+
+/** Only `claude ...` commands get the bypass toggle — the flag means nothing
+ *  to anything else. */
+function isClaudeCommand(command: string): boolean {
+  return /^\s*claude\b/.test(command);
+}
+
+function hasBypassFlag(command: string): boolean {
+  return command.includes(BYPASS_FLAG);
+}
+
+/** Add or remove the flag immediately after `claude`, leaving the rest of the
+ *  command line (slash command, other flags) untouched. */
+function setBypassFlag(command: string, enabled: boolean): string {
+  const stripped = command.replace(/\s*--dangerously-skip-permissions\b/g, '');
+  if (!enabled) return stripped;
+  return stripped.replace(/^(\s*claude)\b/, `$1 ${BYPASS_FLAG}`);
+}
+
 /** Slugify a display name into a valid profile id (alphanumeric/-/_). */
 function slugifyId(name: string): string {
   return name
@@ -492,6 +512,28 @@ export function ProfileEditor() {
             />
             <Hint>Typed into the terminal automatically when the session is created — start Claude, tail logs, ssh somewhere.</Hint>
           </div>
+
+          {isClaudeCommand(form.command || '') && (
+            <div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="bypass-permissions"
+                  checked={hasBypassFlag(form.command || '')}
+                  onChange={(e) => patch({ command: setBypassFlag(form.command || '', e.target.checked) })}
+                  className="w-4 h-4 rounded bg-zinc-800 border-zinc-600"
+                />
+                <label htmlFor="bypass-permissions" className="text-sm text-zinc-400">
+                  Skip permission prompts <span className="text-amber-500">(bypass mode)</span>
+                </label>
+              </div>
+              <Hint>
+                Adds <span className="font-mono text-zinc-500">{BYPASS_FLAG}</span> to the command.
+                Claude runs every tool without asking — no confirmations for file edits, shell commands, or deletes.
+                Only for projects you trust.
+              </Hint>
+            </div>
+          )}
         </section>
 
         {/* Quick Actions */}
