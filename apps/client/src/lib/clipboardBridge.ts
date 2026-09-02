@@ -42,6 +42,32 @@ export async function completePendingCopy(): Promise<void> {
   }
 }
 
+/** Copy arbitrary text from inside a user gesture (a tap on our selection
+ *  bar). Modern API on secure origins; execCommand('copy') through a scratch
+ *  textarea on plain http. Resolves false only when both refused. */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch { /* fall through to the legacy path */ }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** OSC 52 handler for term.parser.registerOscHandler(52, ...). Write-only —
  *  clipboard READ queries ("?") are never answered. */
 export function handleOsc52(data: string): boolean {
