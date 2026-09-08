@@ -5,7 +5,9 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { useAppStore } from '../stores/appStore';
-import { handleOsc52, copyTextToClipboard } from '../lib/clipboardBridge';
+import { handleOsc52 } from '../lib/clipboardBridge';
+import { ReaderMirror } from '../lib/readerMirror';
+import { isNativeShell } from '../lib/platform';
 import { hasPendingShare, SHARE_PENDING_OP } from '../lib/shareTarget';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { TerminalSettings } from './TerminalSettings';
@@ -48,70 +50,6 @@ const JOY_GEARS = [
 const ARROW_SEQ = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' } as const;
 const JOY_HOLD_MS = 300;
 const JOY_ACTIVATE_PX = 14;
-
-// Android-style selection handle: a teardrop whose TIP sits on the selection
-// boundary (bottom-left of the first cell / bottom-right of the last), inside
-// a 44px hit box so a thumb can actually grab it. Pointer-captured so a drag
-// never scrolls the terminal underneath, and the grab offset is preserved so
-// the boundary doesn't jump to the fingertip the moment it's touched — the
-// two things the first (20px, offset-above-finger) version got wrong.
-function SelHandle({ x, y, side, onDrag, onDragEnd }: {
-  x: number;
-  y: number;
-  side: 'start' | 'end';
-  onDrag: (tipClientX: number, tipClientY: number) => void;
-  onDragEnd: () => void;
-}) {
-  const grab = useRef<{ dx: number; dy: number } | null>(null);
-  const HIT = 44;
-  const DOT = 22;
-  const TIP_X = side === 'start' ? HIT - 11 : 11; // tip offset inside the hit box
-  const TIP_Y = 6;
-  return (
-    <div
-      className="absolute z-30"
-      style={{ left: x - TIP_X, top: y - TIP_Y, width: HIT, height: HIT, touchAction: 'none' }}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const r = e.currentTarget.getBoundingClientRect();
-        grab.current = { dx: e.clientX - (r.left + TIP_X), dy: e.clientY - (r.top + TIP_Y) };
-        e.currentTarget.setPointerCapture(e.pointerId);
-      }}
-      onPointerMove={(e) => {
-        if (!grab.current || e.buttons === 0) return;
-        onDrag(e.clientX - grab.current.dx, e.clientY - grab.current.dy);
-      }}
-      onPointerUp={() => { grab.current = null; onDragEnd(); }}
-      onPointerCancel={() => { grab.current = null; onDragEnd(); }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div
-        className={`absolute rounded-full bg-sky-400 border-2 border-sky-100 shadow-lg ${
-          side === 'start' ? 'rounded-tr-none' : 'rounded-tl-none'
-        }`}
-        style={{ width: DOT, height: DOT, left: side === 'start' ? TIP_X - DOT : TIP_X, top: TIP_Y }}
-      />
-    </div>
-  );
-}
-
-function SelBarButton({ onClick, children, muted }: {
-  onClick: () => void;
-  children: React.ReactNode;
-  muted?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`h-10 px-3.5 text-[13px] font-medium active:bg-zinc-700 whitespace-nowrap ${
-        muted ? 'text-zinc-400' : 'text-zinc-100'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
 
 // Space that doubles as a trackpad: tap = space, hold + slide = arrow keys —
 // Termius's "hold Space and slide" alternative cursor control. Trackpad
@@ -896,25 +834,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     );
   }, [attachedSession?.id]);
 
-  // In-place selection (Termius model): xterm highlights + extracts the text,
-  // this state carries the pixel geometry for the two handles and the
-  // floating Copy/Paste bar. The imperative engine lives inside the terminal
-  // effect and is reached through selApiRef.
-  const [selOverlay, setSelOverlay] = useState<null | {
-    sx: number; sy: number; ex: number; ey: number;
-    startVisible: boolean; endVisible: boolean;
-    barX: number; barY: number;
-    text: string;
-  }>(null);
-  const selOverlayRef = useRef(selOverlay);
-  selOverlayRef.current = selOverlay;
-  const selApiRef = useRef<null | {
-    beginAtCursor: () => void;
-    dragTip: (which: 'start' | 'end', tipClientX: number, tipClientY: number) => void;
-    endDrag: () => void;
-    selectAll: () => void;
-    clear: () => void;
-  }>(null);
+  // OS-native text selection over the canvas (lib/readerMirror.ts). Built
+  // inside the terminal effect; the toolbar and the click guard reach it here.
+  const readerRef = useRef<ReaderMirror | null>(null);
   // Fallback paste surface for origins where the clipboard API is locked
   // (plain-http LAN servers): an editable box the OS *will* offer Paste on.
   const [pasteCatcher, setPasteCatcher] = useState(false);
@@ -927,6 +849,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // and xterm's canvas offers no long-press paste menu).
   const pasteFromClipboard = useCallback(async () => {
     try {
+      if (isNativeShell()) {
+        // The Capacitor WebView rejects navigator.clipboard.readText (it has
+        // no permission UI); the plugin reads the system clipboard directly.
+        const { Clipboard } = await import('@capacitor/clipboard');
+        const { value, type } = await Clipboard.read();
+        if (value && (!type || type.startsWith('text'))) sendInput(value);
+        terminalRef.current?.focus();
+        return;
+      }
       if (!navigator.clipboard?.readText || !window.isSecureContext) throw new Error('clipboard unavailable');
       const text = await navigator.clipboard.readText();
       if (text) sendInput(text);
@@ -1170,10 +1101,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       pendingOutputRef.current = [];
     }
 
-    // Touch-selection anchors (see the in-place selection engine below);
-    // declared here because the desktop auto-copy hook must ignore them.
-    let selAnchor: { a: number; b: number } | null = null;
-
     // Auto-copy on select. Modern API works on https/localhost; insecure
     // HTTP falls back to execCommand('copy') via a temp textarea. Trigger
     // on mouseup/touchend so it runs once per selection in user-gesture
@@ -1222,7 +1149,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       if (term.hasSelection()) hasFreshSelection = true;
     });
     const onSelectionEnd = () => {
-      if (!hasFreshSelection || selAnchor) return; // touch selections copy via their bar
+      if (!hasFreshSelection) return;
       hasFreshSelection = false;
       const sel = term.getSelection();
       if (sel) clipboardWrite(sel);
@@ -1502,221 +1429,52 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     });
 
     // ------------------------------------------------------------------
-    // In-place selection (Termius model). xterm's own selection service does
-    // the highlight and the text (it joins soft-wrapped rows, so a wrapped
-    // path or URL copies unbroken); this layer owns the touch UX:
-    //   hold ~400ms, finger still → word under the finger selected (haptic)
-    //   keep holding + drag       → extend from that word, edge auto-scroll
-    //   release                   → two handles + Copy/Paste/All bar stay up
-    //   drag a handle             → move that end, cell-snapped, edge scroll
-    //   drag on the text          → scroll; handles ride with their rows
-    //   tap anywhere              → dismiss
-    // No OS text selection is involved (xterm is a canvas), and no
-    // transparent DOM mirror either — that approach fought the canvas over
-    // alignment, froze under streaming output, and put the caret/Paste
-    // bubble where a word selection was wanted. Selection state = two linear
-    // cell indices (row * cols + col) so a crossover swaps ends via min/max.
-    const WORD_CHAR = /[\p{L}\p{N}_\-./~:@#$%+=?&]/u;
+    // Reader mirror — OS-native selection (lib/readerMirror.ts). xterm is a
+    // canvas, so a touch that holds still lays a transparent DOM copy of the
+    // buffer over it; Android's own long-press then lands on real text and
+    // brings its own handles and Copy / Share / Select-all toolbar. The copy
+    // becomes an opaque frozen page the moment a selection exists and goes
+    // away when that selection collapses (tap, Copy) or the touch turns into
+    // a scroll. Nothing in it is editable: select and copy, never move.
     const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
-    const screenEl = () => container.querySelector('.xterm-screen') as HTMLElement | null;
-    let selDragEnd = false; // the finger that started the hold is extending
-    let autoScrollTimer: ReturnType<typeof setInterval> | null = null;
-    let autoScrollDir = 0;
-    let lastDrag: { which: 'start' | 'end'; x: number; y: number; mode: 'tip' | 'finger' } | null = null;
-
-    const cellGeom = () => {
-      const el = screenEl();
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) return null;
-      return { r, cellW: r.width / term.cols, cellH: r.height / term.rows };
+    const reader = new ReaderMirror(term, container);
+    readerRef.current = reader;
+    let readerTeardown: ReturnType<typeof setTimeout> | null = null;
+    const cancelReaderTeardown = () => {
+      if (readerTeardown !== null) clearTimeout(readerTeardown);
+      readerTeardown = null;
     };
-    // Clamped to the grid: a finger above/below the screen maps to the first/
-    // last visible row, which is exactly what edge auto-scroll wants.
-    const cellFromPoint = (clientX: number, clientY: number) => {
-      const g = cellGeom();
-      if (!g) return null;
-      const col = Math.min(term.cols - 1, Math.max(0, Math.floor((clientX - g.r.left) / g.cellW)));
-      const vrow = Math.min(term.rows - 1, Math.max(0, Math.floor((clientY - g.r.top) / g.cellH)));
-      return { col, row: vrow + term.buffer.active.viewportY };
-    };
-
-    const publishOverlay = () => {
-      const g = cellGeom();
-      const pos = term.getSelectionPosition();
-      if (!g || !pos || !selAnchor) {
-        setSelOverlay(null);
-        return;
+    // Promote the transparent hit target to the visible page as soon as the
+    // OS puts a selection in it; retire it once that selection is gone.
+    const syncReader = () => {
+      if (!reader.active) return;
+      if (reader.hasSelection()) {
+        cancelReaderTeardown();
+        if (!reader.isRevealed) {
+          reader.reveal();
+          term.blur(); // reading mode: keyboard down, handles unobstructed
+          try { navigator.vibrate?.(15); } catch { /* unsupported */ }
+        }
+        // The OS's Select all spans the page; keep it on the terminal text.
+        reader.clampSelection();
+      } else if (reader.isRevealed && readerTeardown === null) {
+        // Debounced — selectionchange can report collapsed transiently.
+        readerTeardown = setTimeout(() => {
+          readerTeardown = null;
+          if (!reader.hasSelection()) reader.dispose();
+        }, 150);
       }
-      const host = container.getBoundingClientRect();
-      const vp = term.buffer.active.viewportY;
-      const toPx = (col: number, row: number) => ({
-        x: g.r.left - host.left + col * g.cellW,
-        y: g.r.top - host.top + (row - vp) * g.cellH,
-      });
-      // pos.end.x is exclusive — the end handle's tip sits on that boundary.
-      const sPx = toPx(pos.start.x, pos.start.y);
-      const ePx = toPx(pos.end.x, pos.end.y);
-      const inView = (row: number) => row >= vp && row < vp + term.rows;
-      // Bar hugs the visible part of the selection: above its first visible
-      // row when there's room, otherwise below its last visible row.
-      const firstVis = Math.max(pos.start.y, vp);
-      const lastVis = Math.min(pos.end.y, vp + term.rows - 1);
-      const topY = toPx(0, firstVis).y;
-      const botY = toPx(0, lastVis).y + g.cellH;
-      // Below the selection the handles hang ~44px under the last row — the
-      // bar must clear them or it covers the end handle.
-      const barY = topY > 60 ? topY - 52 : botY + 48;
-      const midX = (Math.max(sPx.x, 0) + Math.min(ePx.x, host.width)) / 2;
-      const barX = Math.min(Math.max(midX, 110), Math.max(110, host.width - 110));
-      setSelOverlay({
-        sx: sPx.x, sy: sPx.y + g.cellH, ex: ePx.x, ey: ePx.y + g.cellH,
-        startVisible: inView(pos.start.y), endVisible: inView(pos.end.y),
-        barX, barY,
-        text: term.getSelection(),
-      });
     };
-
-    const applyLinear = () => {
-      if (!selAnchor) return;
-      const lo = Math.min(selAnchor.a, selAnchor.b);
-      const hi = Math.max(selAnchor.a, selAnchor.b);
-      term.select(lo % term.cols, Math.floor(lo / term.cols), hi - lo + 1);
-      publishOverlay();
+    document.addEventListener('selectionchange', syncReader);
+    const disposeReader = () => {
+      cancelReaderTeardown();
+      reader.dispose();
     };
-
-    // Word under a cell (shell-ish word chars: paths, URLs, flags, hashes);
-    // a blank cell selects just itself so a drag can still grow from there.
-    const wordRangeAt = (row: number, col: number) => {
-      const text = term.buffer.active.getLine(row)?.translateToString(false) ?? '';
-      let s0 = col;
-      let e0 = col;
-      if (WORD_CHAR.test(text[col] ?? '')) {
-        while (s0 > 0 && WORD_CHAR.test(text[s0 - 1])) s0--;
-        while (e0 < text.length - 1 && WORD_CHAR.test(text[e0 + 1])) e0++;
-      }
-      return { s: s0, e: e0 };
-    };
-    const enterSelection = (row: number, s0: number, e0: number) => {
-      selAnchor = { a: row * term.cols + s0, b: row * term.cols + e0 };
-      applyLinear();
-      // Reading mode: drop the soft keyboard so handles and bar aren't buried
-      // under Gboard (and its clipboard suggestion strip).
-      term.blur();
-      try { navigator.vibrate?.(15); } catch { /* unsupported */ }
-    };
-    const beginSelectionAt = (clientX: number, clientY: number): boolean => {
-      const cell = cellFromPoint(clientX, clientY);
-      if (!cell) return false;
-      const { s: s0, e: e0 } = wordRangeAt(cell.row, cell.col);
-      enterSelection(cell.row, s0, e0);
-      return true;
-    };
-    // Toolbar entry (no long-press needed): the cursor's line, trimmed.
-    const beginAtCursor = () => {
-      const buf = term.buffer.active;
-      const row = buf.baseY + buf.cursorY;
-      const text = buf.getLine(row)?.translateToString(true) ?? '';
-      const first = text.search(/\S/);
-      if (first < 0) enterSelection(row, 0, 0);
-      else enterSelection(row, first, text.length - 1);
-    };
-
-    const setEnd = (which: 'start' | 'end', cell: { col: number; row: number }) => {
-      if (!selAnchor) return;
-      const idx = cell.row * term.cols + cell.col;
-      // 'start' drives the lower linear index, 'end' the higher; a crossover
-      // swaps roles naturally through the min/max in applyLinear.
-      if (which === 'start') {
-        if (selAnchor.a <= selAnchor.b) selAnchor.a = idx;
-        else selAnchor.b = idx;
-      } else {
-        if (selAnchor.b >= selAnchor.a) selAnchor.b = idx;
-        else selAnchor.a = idx;
-      }
-      applyLinear();
-    };
-    // A handle reports its TIP (the cell boundary); the cell it means is half
-    // a cell inward and half a cell up from there. A bare finger is the cell.
-    const resolveDrag = (d: NonNullable<typeof lastDrag>) => {
-      const g = cellGeom();
-      if (!g) return null;
-      if (d.mode === 'finger') return cellFromPoint(d.x, d.y);
-      const dx = d.which === 'start' ? g.cellW / 2 : -g.cellW / 2;
-      return cellFromPoint(d.x + dx, d.y - g.cellH / 2);
-    };
-    // Edge auto-scroll while dragging near the top/bottom of the grid. Normal
-    // buffer only — an alt-screen app (Claude Code, vim) owns its scrollback
-    // and xterm can't move it. Speed scales with how far past the edge.
-    const EDGE_PX = 32;
-    const stopAutoScroll = () => {
-      if (autoScrollTimer) clearInterval(autoScrollTimer);
-      autoScrollTimer = null;
-      autoScrollDir = 0;
-    };
-    const updateAutoScroll = (clientY: number) => {
-      const g = cellGeom();
-      let dir = 0;
-      if (g && term.buffer.active.type === 'normal') {
-        if (clientY < g.r.top + EDGE_PX) dir = -1;
-        else if (clientY > g.r.bottom - EDGE_PX) dir = 1;
-      }
-      if (dir === autoScrollDir) return;
-      stopAutoScroll();
-      autoScrollDir = dir;
-      if (dir === 0) return;
-      autoScrollTimer = setInterval(() => {
-        const gg = cellGeom();
-        if (!gg || !lastDrag) return;
-        const past = dir < 0 ? gg.r.top + EDGE_PX - lastDrag.y : lastDrag.y - (gg.r.bottom - EDGE_PX);
-        const step = past > EDGE_PX * 2 ? 3 : 1;
-        term.scrollLines(dir * step);
-        const buf = term.buffer.active;
-        setScrolledUp(buf.viewportY < buf.baseY);
-        const cell = resolveDrag(lastDrag);
-        if (cell) setEnd(lastDrag.which, cell);
-      }, 60);
-    };
-    const drag = (which: 'start' | 'end', x: number, y: number, mode: 'tip' | 'finger') => {
-      lastDrag = { which, x, y, mode };
-      const cell = resolveDrag(lastDrag);
-      if (cell) setEnd(which, cell);
-      updateAutoScroll(y);
-    };
-    const endDrag = () => {
-      stopAutoScroll();
-      lastDrag = null;
-      publishOverlay();
-    };
-    const clearSelection = () => {
-      stopAutoScroll();
-      lastDrag = null;
-      selDragEnd = false;
-      if (!selAnchor) return;
-      selAnchor = null;
-      term.clearSelection();
-      setSelOverlay(null);
-    };
-    const selectAllBuffer = () => {
-      const buf = term.buffer.active;
-      selAnchor = { a: 0, b: buf.length * term.cols - 1 };
-      applyLinear();
-    };
-    selApiRef.current = {
-      beginAtCursor,
-      dragTip: (which, x, y) => drag(which, x, y, 'tip'),
-      endDrag,
-      selectAll: selectAllBuffer,
-      clear: clearSelection,
-    };
-    // Normal-buffer scrolls move the viewport under the selection — handles
-    // and bar track their rows instead of floating loose.
-    const selScrollDisp = term.onScroll(() => {
-      if (selAnchor) publishOverlay();
-    });
-    // A long-press on the canvas fires contextmenu on Android; nothing useful
-    // lives there and it would steal the gesture from our hold timer.
-    const onContextMenu = (e: Event) => { if (coarsePointer) e.preventDefault(); };
+    // A long-press fires contextmenu on Android. Swallow it on the bare
+    // canvas (nothing useful lives there) — but NEVER while the mirror is
+    // armed: preventDefault there is exactly what cancels OS text selection.
+    const onContextMenu = (e: Event) => { if (coarsePointer && !reader.active) e.preventDefault(); };
+    container.addEventListener('contextmenu', onContextMenu);
     container.addEventListener('contextmenu', onContextMenu);
 
     // ------------------------------------------------------------------
@@ -1724,19 +1482,23 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     //   plain drag                 → scroll (with momentum fling)
     //   two-finger pinch           → font size (live, persisted)
     //   double-tap                 → Tab (completion; toggleable in settings)
-    //   hold (still) then release  → select word, handles + Copy/Paste bar
-    //   hold (still) then drag     → select word and extend while dragging
+    //   hold (still)               → OS text selection (reader mirror)
     // The arrow-key joystick that used to live on long-press moved to a
     // hold-and-drag on the quick-actions FAB.
     const TAP_MAX_MS = 250;
-    const LONG_PRESS_MS = 400;
+    const ARM_MS = 120; // well ahead of Android's own ~500ms long-press
     let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-    let touchStartedWithSel = false;
     const cancelLongPress = () => {
       if (longPressTimer !== null) {
         clearTimeout(longPressTimer);
         longPressTimer = null;
       }
+    };
+    // The touch is not a hold after all: drop the timer and any hit target
+    // that never received a selection.
+    const disarmReader = () => {
+      cancelLongPress();
+      if (reader.active && !reader.isRevealed) disposeReader();
     };
     const TAP_SLOP_PX = 12;
     const DOUBLE_TAP_GAP_MS = 300;
@@ -1777,14 +1539,13 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     );
 
     const onTouchStart = (e: TouchEvent) => {
+      if (reader.isRevealed) return; // native page: taps, scrolls, handles are the OS's
       cancelMomentum();
       cancelKbDismiss(); // a second tap (double-tap Tab) keeps the keyboard up
-      cancelLongPress();
+      disarmReader();
       if (e.touches.length >= 2) {
         // Second finger down → pinch. Kill every single-finger gesture state.
         tapCandidate = false;
-        selDragEnd = false;
-        stopAutoScroll();
         pinching = true;
         pinchStartDist = touchDist(e);
         pinchStartSize = useTerminalStyleStore.getState().fontSize;
@@ -1802,19 +1563,21 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       emittedInGesture = false;
       velocity = 0;
       tapCandidate = true;
-      touchStartedWithSel = !!selAnchor;
-      // Hold still → selection. The timer is cancelled by movement past the
+      // Hold still → arm the reader mirror under the finger, ahead of the OS
+      // long-press that will select on it. Cancelled by movement past the
       // tap slop (a scroll), a second finger, or lift.
       const sx = touchStartX;
       const sy = touchStartY;
-      longPressTimer = setTimeout(() => {
-        longPressTimer = null;
-        if (!tapCandidate) return;
-        tapCandidate = false;
-        if (beginSelectionAt(sx, sy)) selDragEnd = true;
-      }, LONG_PRESS_MS);
+      if (coarsePointer) {
+        longPressTimer = setTimeout(() => {
+          longPressTimer = null;
+          if (!tapCandidate || !reader.overGrid(sx, sy)) return;
+          reader.arm();
+        }, ARM_MS);
+      }
     };
     const onTouchMove = (e: TouchEvent) => {
+      if (reader.isRevealed) return;
       if (pinching) {
         // Swallow all moves while the pinch flag is up — including the tail
         // where one finger lifted — so the leftover finger can't scroll-jump.
@@ -1828,15 +1591,10 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const t = e.touches[0];
       const y = t.clientY;
 
-      // The hold that started a selection is still down: it extends the end.
-      if (selDragEnd) {
-        drag('end', t.clientX, y, 'finger');
-        return;
-      }
       if (tapCandidate
         && Math.hypot(t.clientX - touchStartX, y - touchStartY) > TAP_SLOP_PX) {
         tapCandidate = false;
-        cancelLongPress();
+        disarmReader(); // it's a scroll
       }
       const dy = lastMoveY - y; // positive when finger moves up = scroll content up
       const dt = Math.max(1, now - lastMoveTime);
@@ -1860,22 +1618,18 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         return;
       }
       cancelLongPress();
-      // Hold-and-drag finished: leave handles + bar up, no fling.
-      if (selDragEnd) {
-        selDragEnd = false;
-        endDrag();
+      // The OS selection may have landed before its selectionchange task ran
+      // — check directly so this lift isn't mistaken for a tap or a fling.
+      syncReader();
+      if (reader.isRevealed) {
+        tapCandidate = false;
         velocity = 0;
         return;
       }
+      disarmReader();
       // Double-tap → Tab. Two quick, still taps close together.
       const now = performance.now();
       if (tapCandidate && now - touchStartTime < TAP_MAX_MS) {
-        // A tap while a selection is up dismisses it — and nothing else.
-        if (touchStartedWithSel) {
-          clearSelection();
-          velocity = 0;
-          return;
-        }
         const withinGap = now - lastTapEnd < DOUBLE_TAP_GAP_MS + TAP_MAX_MS;
         const withinRadius = Math.hypot(touchStartX - lastTapX, touchStartY - lastTapY) < DOUBLE_TAP_RADIUS_PX;
         if (withinGap && withinRadius && useTerminalStyleStore.getState().doubleTapTab) {
@@ -2020,7 +1774,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         lastCols = term.cols;
         lastRows = term.rows;
         saveDims(term.cols, term.rows);
-        clearSelection(); // handles would point at reflowed content
+        disposeReader(); // the snapshot would point at reflowed content
       }
       // Always re-send, even when the grid didn't change. A resize message can
       // be lost server-side (it races the async attach flow) or client-side
@@ -2075,9 +1829,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       cancelMomentumRef.current = null;
       unsubStyle();
       cancelLongPress();
-      stopAutoScroll();
-      selScrollDisp.dispose();
-      selApiRef.current = null;
+      disposeReader();
+      readerRef.current = null;
+      document.removeEventListener('selectionchange', syncReader);
       container.removeEventListener('contextmenu', onContextMenu);
       osc52Disp.dispose();
       searchResultsDisp.dispose();
@@ -2220,9 +1974,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           </svg>
         </button>
         <button
-          onPointerDown={(e) => { e.preventDefault(); selApiRef.current?.beginAtCursor(); }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            const r = readerRef.current;
+            if (!r) return;
+            if (r.active) r.dispose();
+            else if (r.open()) terminalRef.current?.blur();
+          }}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Select text (or hold a word on the terminal)"
+          title="Text view — hold a word to select, like a web page"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h10M4 14h16M4 18h10" />
@@ -2315,9 +2075,19 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       )}
 
       {/* Terminal — absolute positioning gives xterm.js real pixel dimensions */}
-      {/* No focus while a selection is up: the synthesized click after a
-          hold-release would raise the keyboard over the handles and bar. */}
-      <div className="flex-1 min-h-0 relative" onClick={() => { if (!selOverlayRef.current) terminalRef.current?.focus(); }}>
+      <div
+        className="flex-1 min-h-0 relative"
+        onClick={() => {
+          const r = readerRef.current;
+          if (r?.active) {
+            // A tap on the text page with nothing selected closes it; with a
+            // selection the OS collapses it and selectionchange closes it.
+            if (!r.hasSelection()) r.dispose();
+            return;
+          }
+          terminalRef.current?.focus();
+        }}
+      >
         <div ref={termRef} className="absolute inset-0 overflow-hidden" />
         {/* Input-debug overlay — raw events, newest at the bottom */}
         {inputDebug && (
@@ -2344,60 +2114,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             </svg>
             Jump to live
           </button>
-        )}
-        {/* In-place selection: two draggable handles + floating Copy/Paste bar.
-            xterm draws the highlight; these anchor to its buffer coordinates. */}
-        {selOverlay && (
-          <>
-            {selOverlay.startVisible && (
-              <SelHandle
-                x={selOverlay.sx}
-                y={selOverlay.sy}
-                side="start"
-                onDrag={(cx, cy) => selApiRef.current?.dragTip('start', cx, cy)}
-                onDragEnd={() => selApiRef.current?.endDrag()}
-              />
-            )}
-            {selOverlay.endVisible && (
-              <SelHandle
-                x={selOverlay.ex}
-                y={selOverlay.ey}
-                side="end"
-                onDrag={(cx, cy) => selApiRef.current?.dragTip('end', cx, cy)}
-                onDragEnd={() => selApiRef.current?.endDrag()}
-              />
-            )}
-            <div
-              className="absolute z-30 flex items-center overflow-hidden rounded-xl bg-zinc-800/95 border border-zinc-600 shadow-xl divide-x divide-zinc-700"
-              style={{ left: selOverlay.barX, top: Math.max(4, selOverlay.barY), transform: 'translateX(-50%)' }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <SelBarButton
-                onClick={() => {
-                  const text = selOverlay.text;
-                  // Inside the tap's user gesture — the only time Android lets
-                  // a page write the clipboard. Success is silent (user call).
-                  void copyTextToClipboard(text).then((ok) => {
-                    if (!ok) useAppStore.getState().pushNotification('error', 'Copy blocked by browser', 'copy');
-                  });
-                  try { navigator.vibrate?.(10); } catch { /* unsupported */ }
-                  selApiRef.current?.clear();
-                }}
-              >
-                Copy
-              </SelBarButton>
-              <SelBarButton onClick={() => { selApiRef.current?.clear(); void pasteFromClipboard(); }}>
-                Paste
-              </SelBarButton>
-              <SelBarButton muted onClick={() => selApiRef.current?.selectAll()}>
-                All
-              </SelBarButton>
-              <SelBarButton muted onClick={() => selApiRef.current?.clear()}>
-                ✕
-              </SelBarButton>
-            </div>
-          </>
         )}
         {/* Paste catcher — the clipboard API refused (plain-http server or a
             webview without the permission UI). Android will still offer Paste
