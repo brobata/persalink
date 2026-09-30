@@ -1928,7 +1928,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/*,video/*,.pdf,.txt,.log,.json,.csv,.zip,.tar,.gz"
           onChange={handleFileUpload}
           className="hidden"
         />
