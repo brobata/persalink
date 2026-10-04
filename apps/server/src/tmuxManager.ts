@@ -289,22 +289,7 @@ export class TmuxManager {
       await tmux('set-option', '-t', sessionName, 'mouse', 'on');
     } catch { /* ignore */ }
 
-    // Restore tmux's *default* wheel bindings explicitly. We need this set
-    // because an earlier PersaLink build attempted to override them to
-    // force tmux copy-mode on every wheel-up, which made scrollback
-    // useless inside alt-screen apps like Claude Code (Claude's
-    // conversation history is in Claude's own buffer, not tmux's).
-    // The default behavior is correct: forward wheel to inner app if it
-    // uses mouse mode (gives Claude/vim/less their own scrollback),
-    // otherwise enter tmux copy-mode (gives shell users tmux's 10k history).
-    try {
-      await tmux('bind-key', '-T', 'root', 'WheelUpPane',
-        'if-shell -F -t = "#{?pane_in_mode,1,#{mouse_any_flag}}" "send-keys -M" "select-pane -t=; copy-mode -e; send-keys -M"');
-    } catch { /* ignore */ }
-    try {
-      await tmux('bind-key', '-T', 'root', 'WheelDownPane',
-        'if-shell -F -t = "#{?pane_in_mode,1,#{mouse_any_flag}}" "send-keys -M" "select-pane -t="');
-    } catch { /* ignore */ }
+    await this.applyMouseBindings();
 
     // Set environment variables via tmux set-environment (safe — no shell)
     if (profile?.env) {
@@ -424,17 +409,38 @@ export class TmuxManager {
     try {
       await tmux('set-option', '-t', sessionName, 'mouse', 'on');
     } catch { /* ignore */ }
-    // Wheel bindings are server-level (`-T root` not `-t session`) so this
-    // re-establishes the default forwarding behavior on every attach in
-    // case anything else (or an old build) has overridden them.
-    try {
-      await tmux('bind-key', '-T', 'root', 'WheelUpPane',
-        'if-shell -F -t = "#{?pane_in_mode,1,#{mouse_any_flag}}" "send-keys -M" "select-pane -t=; copy-mode -e; send-keys -M"');
-    } catch { /* ignore */ }
-    try {
-      await tmux('bind-key', '-T', 'root', 'WheelDownPane',
-        'if-shell -F -t = "#{?pane_in_mode,1,#{mouse_any_flag}}" "send-keys -M" "select-pane -t="');
-    } catch { /* ignore */ }
+    // Mouse bindings are server-level (`-T root`), so re-establish them on
+    // every attach in case anything else (or an old build) overrode them.
+    await this.applyMouseBindings();
+  }
+
+  /** Root-table mouse bindings PersaLink depends on. Server-wide, idempotent. */
+  private async applyMouseBindings(): Promise<void> {
+    const bindings: string[][] = [
+      // Restore tmux's *default* wheel bindings explicitly. An earlier build
+      // forced copy-mode on every wheel-up, which made scrollback useless
+      // inside alt-screen apps like Claude Code. Default is correct: forward
+      // to the inner app if it uses the mouse (Claude/vim/less), otherwise
+      // enter tmux copy-mode (shell users get tmux's 10k history).
+      ['WheelUpPane',
+        'if-shell -F -t = "#{?pane_in_mode,1,#{mouse_any_flag}}" "send-keys -M" "select-pane -t=; copy-mode -e; send-keys -M"'],
+      ['WheelDownPane',
+        'if-shell -F -t = "#{?pane_in_mode,1,#{mouse_any_flag}}" "send-keys -M" "select-pane -t="'],
+      // Right-click belongs to the browser's context menu (Paste). tmux's
+      // default pops its own display-menu at the same moment, and that menu
+      // swallows the pasted text as menu keystrokes — Paste "does nothing".
+      // Keep forwarding to mouse-aware apps; otherwise just focus the pane.
+      // Alt+right-click (M-MouseDown3*) still opens tmux's menus.
+      ['MouseDown3Pane',
+        'if-shell -F -t = "#{||:#{mouse_any_flag},#{&&:#{pane_in_mode},#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}}}" "select-pane -t=; send-keys -M" "select-pane -t="'],
+      ['MouseDown3Status', 'select-window -t='],
+      ['MouseDown3StatusLeft', 'select-window -t='],
+    ];
+    for (const [key, command] of bindings) {
+      try {
+        await tmux('bind-key', '-T', 'root', key, command);
+      } catch { /* ignore */ }
+    }
   }
 
   /** Capture only the visible pane (current screen) for attention detection —
