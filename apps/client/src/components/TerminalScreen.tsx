@@ -6,6 +6,9 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { useAppStore } from '../stores/appStore';
 import { handleOsc52 } from '../lib/clipboardBridge';
+import { openExternal, promptOpen } from '../lib/linkOpen';
+import { ClaudeReplyPanel } from './ClaudeReplyPanel';
+import { Composer, wrapForPaste } from './Composer';
 import { ReaderMirror } from '../lib/readerMirror';
 import { isNativeShell } from '../lib/platform';
 import { hasPendingShare, SHARE_PENDING_OP } from '../lib/shareTarget';
@@ -306,7 +309,7 @@ function LinkSheet({ links, onClose }: { links: string[]; onClose: () => void })
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between">
-          <span className="text-sm font-semibold text-zinc-300">Links on screen</span>
+          <span className="text-sm font-semibold text-zinc-300">Recent links</span>
           <button onClick={onClose} className="px-2 py-1 text-zinc-500 text-sm">Close</button>
         </div>
         <div className="px-3 py-2 pb-[max(12px,env(safe-area-inset-bottom))]">
@@ -517,8 +520,10 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     initialScrollback, windows, selectWindow, createWindow, serverUrl, authToken,
     sessions, activeTabId, switchTab, closeTab, showTabPicker, setShowTabPicker, getTabs,
     attachSession, connectionState, requestLinks, sessionLinks, clearSessionLinks,
-    snippets,
+    snippets, claudeReply, requestClaudeReply, clearClaudeReply,
   } = useAppStore();
+  // Text-box composer (FAB → Message): write, edit, dictate, then send once.
+  const [composerOpen, setComposerOpen] = useState(false);
 
   // 'authenticated' is the only fully-usable state; anything else means input
   // won't reach the session, so surface it instead of dropping keystrokes silently.
@@ -1007,7 +1012,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(new WebLinksAddon());
+    // A tap on a visible URL opens it. OSC 8 hyperlinks (which programs mark
+    // up themselves, and which stay one link across wrapped rows) can show
+    // text that differs from their target, so a tap on one surfaces the real
+    // URL in the open-link toast first; one more tap opens it.
+    term.loadAddon(new WebLinksAddon((_e, uri) => { openExternal(uri); }));
+    term.options.linkHandler = {
+      activate: (_e, uri) => { promptOpen(uri); },
+      allowNonHttpProtocols: false,
+    };
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
     searchAddonRef.current = searchAddon;
@@ -1954,9 +1967,18 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           </svg>
         </button>
         <button
+          onPointerDown={(e) => { e.preventDefault(); requestClaudeReply(); }}
+          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
+          title="Copy from Claude — last reply and its code blocks"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          </svg>
+        </button>
+        <button
           onPointerDown={(e) => { e.preventDefault(); requestLinks(); }}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Links on screen — wrapped URLs rejoined"
+          title="Recent links — whole, even when wrapped"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5" />
@@ -2196,6 +2218,20 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
                 {'{}'}
               </button>
             </div>
+            <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '60ms' }}>
+              <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Message</span>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => { setComposerOpen(true); setFabOpen(false); }}
+                className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700"
+                aria-label="Write a message"
+              >
+                <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+              </button>
+            </div>
             <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '50ms' }}>
               <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Paste</span>
               <button
@@ -2308,6 +2344,19 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         </div>
       )}
 
+      {/* Text-box composer — sends the message as one paste + Enter */}
+      {composerOpen && attachedSession && (
+        <Composer
+          variant="sheet"
+          onSend={(text) => {
+            const bracketed = terminalRef.current?.modes.bracketedPasteMode ?? false;
+            sendInput(wrapForPaste(text, bracketed));
+            setTimeout(() => sendInput('\r'), 60);
+          }}
+          onClose={() => setComposerOpen(false)}
+        />
+      )}
+
       {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
       {!sidebarVisible && showKeyBar && (
         <TerminalKeyBar sendInput={sendInput} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl} onOpenSnippets={() => setShowSnippets(true)} />
@@ -2329,6 +2378,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
       {/* Harvested links — opens when the server's session.links reply lands */}
       {sessionLinks !== null && <LinkSheet links={sessionLinks} onClose={clearSessionLinks} />}
+
+      {/* Copy from Claude — last reply + code blocks from the transcript */}
+      {claudeReply !== null && <ClaudeReplyPanel state={claudeReply} onClose={clearClaudeReply} variant="sheet" />}
 
       {/* Terminal appearance sheet — live theme/font/size changes */}
       {showStyleSheet && <TerminalSettings variant="sheet" onClose={() => setShowStyleSheet(false)} />}

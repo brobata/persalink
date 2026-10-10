@@ -24,6 +24,8 @@ import { PROTOCOL_VERSION, parseClientMessage } from '@persalink/shared/protocol
 import { extractLinks } from '@persalink/shared/links';
 import { LogManager } from '../logManager';
 import { SnippetManager } from '../snippetManager';
+import { LinkBridge, linkBridgeEnv, type OpenRequest } from '../linkBridge';
+import { getClaudeReply, getClaudeText } from '../claudeSessions';
 import * as fs from 'fs';
 import * as os from 'os';
 
@@ -128,6 +130,24 @@ const previewCache = new Map<string, string>();
 // Tmux activity epoch we last classified a session at — lets the monitor skip
 // re-capturing panes that haven't changed (every state change bumps activity).
 const lastClassifiedActivity = new Map<string, number>();
+
+let linkBridge: LinkBridge | null = null;
+
+/** Show a link-open prompt on whoever is viewing the session that asked.
+ *  Nobody attached (or the request came from outside a pl- session) → every
+ *  authenticated client, so the link is never silently lost. */
+function deliverOpenRequest(req: OpenRequest): void {
+  const message: ServerMessage = { type: 'link.open', url: req.url, sessionId: req.sessionId };
+  const viewers = [...clients.values()].filter(
+    (c) => c.authenticated && req.sessionId !== null && c.attachedSession === req.sessionId,
+  );
+  audit('link_open_request', { sessionId: req.sessionId ?? undefined, reason: viewers.length > 0 ? 'viewers' : 'broadcast' });
+  if (viewers.length > 0) {
+    for (const c of viewers) send(c, message);
+  } else {
+    broadcastToAuthenticated(message);
+  }
+}
 
 function markSeen(sessionId: string): void {
   lastSeen.set(sessionId, Math.floor(Date.now() / 1000));
@@ -622,10 +642,26 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     // ---- Link harvest ----
     case 'session.links': {
       if (client.attachedSession) {
+        const sessionId = client.attachedSession;
         const lines = Math.max(0, Math.min(message.lines || 2000, 10000));
-        const text = await tmuxManager.captureJoined(client.attachedSession, lines);
-        send(client, { type: 'session.links', links: extractLinks(text) });
+        const screen = await tmuxManager.captureJoined(sessionId, lines);
+        // Claude's transcript first: its URLs are whole even when the
+        // terminal wrapped them mid-token with a gutter (which -J can't
+        // rejoin). extractLinks ranks later text as newer, so the screen
+        // text goes last — what's visible right now sorts to the top.
+        const claude = getClaudeText(sessionId, await tmuxManager.activePaneId(sessionId));
+        send(client, { type: 'session.links', links: extractLinks(`${claude}\n${screen}`) });
       }
+      break;
+    }
+
+    case 'claude.reply': {
+      if (!client.attachedSession) {
+        send(client, { type: 'claude.reply', found: false, reason: 'No session attached.' });
+        break;
+      }
+      const sessionId = client.attachedSession;
+      send(client, { type: 'claude.reply', ...getClaudeReply(sessionId, await tmuxManager.activePaneId(sessionId)) });
       break;
     }
 
@@ -1250,6 +1286,15 @@ async function main(): Promise<void> {
   await tmuxManager.init();
   // OSC 52 clipboard passthrough (best-effort; guarded against user config).
   await tmuxManager.ensureClipboardPassthrough();
+  await tmuxManager.ensureHyperlinkPassthrough();
+  // $BROWSER inside sessions → "Open link" prompt on the viewing device.
+  tmuxManager.setSessionEnv(linkBridgeEnv());
+  linkBridge = new LinkBridge(deliverOpenRequest);
+  try {
+    linkBridge.start();
+  } catch (err) {
+    console.warn('[PersaLink] link bridge unavailable:', err instanceof Error ? err.message : err);
+  }
   // Session-log retention: prune at boot and every 6 hours.
   logManager.prune();
   setInterval(() => logManager.prune(), 6 * 3600 * 1000).unref();
@@ -1321,6 +1366,7 @@ async function main(): Promise<void> {
     console.log(`[PersaLink] Shutting down (${signal})...`);
     healthChecker.dispose();
     rateLimiter.dispose();
+    linkBridge?.dispose();
     for (const client of clients.values()) {
       detachClient(client);
       try { client.ws.close(1001, 'Server shutting down'); } catch { /* best effort */ }

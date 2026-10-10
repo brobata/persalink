@@ -5,11 +5,12 @@
  *   a session picker popup when the user clicks to fill an empty pane.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
 import { useLayoutStore, type Layout } from '../stores/layoutStore';
 import { TerminalPane } from './TerminalPane';
 import { TerminalSettings } from './TerminalSettings';
+import { ShortcutsPanel, useDesktopShortcuts } from './ShortcutsPanel';
 import { remoteSnapshot, remoteCreateSession, resolveEntryHost } from '../lib/remoteServer';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
@@ -251,6 +252,9 @@ export function GridLayout() {
 
   const [pickerPaneId, setPickerPaneId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const toggleShortcuts = useCallback(() => setShowShortcuts((v) => !v), []);
+  useDesktopShortcuts({ onPickSession: setPickerPaneId, onToggleHelp: toggleShortcuts });
 
   // Resolve a pane's connection target from its bound server. Legacy panes
   // (serverId null) follow the active server, same as before phase 2.
@@ -271,6 +275,21 @@ export function GridLayout() {
         <span className="text-[10px] text-zinc-600">
           {panes.length} pane{panes.length > 1 ? 's' : ''} &middot; click a pane to focus
         </span>
+        <div className="relative">
+          <button
+            onClick={toggleShortcuts}
+            className={`p-1.5 rounded transition-colors ${
+              showShortcuts ? 'text-zinc-100 bg-zinc-800' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+            }`}
+            title="Keyboard shortcuts (Ctrl+Shift+/)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="6" width="20" height="12" rx="2" />
+              <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
+            </svg>
+          </button>
+          {showShortcuts && <ShortcutsPanel onClose={() => setShowShortcuts(false)} />}
+        </div>
         <div className="relative">
           <button
             onClick={() => setShowSettings((v) => !v)}

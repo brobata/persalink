@@ -20,6 +20,12 @@ import { useVoiceInput } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
+import { cleanTerminalCopy } from '@persalink/shared/cleanCopy';
+import { openExternal, promptOpen } from '../lib/linkOpen';
+import { ClaudeReplyPanel } from './ClaudeReplyPanel';
+import { Composer, wrapForPaste } from './Composer';
+import type { ClaudeReplyState } from '../stores/appStore';
+import { PANE_COMMAND_EVENT, type PaneCommandDetail } from '../lib/paneCommands';
 
 interface TerminalPaneProps {
   paneId: string;
@@ -100,6 +106,15 @@ export function TerminalPane({
   // tmux-wrapped URLs via capture-pane -J; see LinkSheet in TerminalScreen).
   const [paneLinks, setPaneLinks] = useState<string[] | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  // "Copy from Claude" dropdown — null = closed.
+  const [claudeReply, setClaudeReply] = useState<ClaudeReplyState | null>(null);
+  const claudeReplyOpenRef = useRef(false);
+  useEffect(() => { claudeReplyOpenRef.current = claudeReply !== null; }, [claudeReply]);
+  const [composerOpen, setComposerOpen] = useState(false);
+  // Which session's frame xterm is currently showing. A reconnect re-attaches
+  // the same session: keep that frame on screen (no reset, no history
+  // prefill) and let tmux's redraw paint over it, instead of flashing black.
+  const renderedSessionRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WSClient | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -137,6 +152,61 @@ export function TerminalPane({
     if (!voice.error) return;
     useAppStore.getState().pushNotification('error', voice.error, 'voice');
   }, [voice.error]);
+
+  // Toggles read the open state through refs: a socket send doesn't belong
+  // inside a setState updater (React may run updaters twice).
+  const paneLinksOpenRef = useRef(false);
+  useEffect(() => { paneLinksOpenRef.current = paneLinks !== null; }, [paneLinks]);
+
+  const toggleLinks = useCallback(() => {
+    if (paneLinksOpenRef.current) {
+      setPaneLinks(null);
+      return;
+    }
+    wsRef.current?.send({ type: 'session.links' });
+  }, []);
+
+  const toggleClaudeReply = useCallback(() => {
+    if (claudeReplyOpenRef.current) {
+      setClaudeReply(null);
+      return;
+    }
+    claudeReplyOpenRef.current = true; // the reply may land before the next render
+    setClaudeReply('loading');
+    wsRef.current?.send({ type: 'claude.reply' });
+  }, []);
+
+  // Composer → session: one bracketed paste (when the program enabled it, as
+  // Claude Code does), then Enter as its own write so the program sees the
+  // paste end before the submit.
+  const sendComposed = useCallback((text: string) => {
+    const bracketed = termRef.current?.modes.bracketedPasteMode ?? false;
+    sendInput(wrapForPaste(text, bracketed));
+    setTimeout(() => sendInput('\r'), 60);
+  }, [sendInput]);
+
+  const closeComposer = useCallback(() => {
+    setComposerOpen(false);
+    termRef.current?.focus();
+  }, []);
+
+  // Keyboard shortcuts addressed to this pane (see lib/paneCommands).
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const { paneId: target, command } = (e as CustomEvent<PaneCommandDetail>).detail;
+      if (target !== paneId || !sessionIdRef.current) return;
+      if (command === 'composer') setComposerOpen((open) => !open);
+      else if (command === 'links') toggleLinks();
+      else if (command === 'claude') toggleClaudeReply();
+    };
+    window.addEventListener(PANE_COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(PANE_COMMAND_EVENT, onCommand);
+  }, [paneId, toggleLinks, toggleClaudeReply]);
+
+  // A closed composer hands typing back to the terminal.
+  useEffect(() => {
+    if (!composerOpen) termRef.current?.focus();
+  }, [composerOpen]);
 
   const selectWindow = useCallback((index: number) => {
     wsRef.current?.send({ type: 'window.select', windowIndex: index });
@@ -200,7 +270,8 @@ export function TerminalPane({
             setConnState('ready');
             const target = sessionIdRef.current;
             if (target) {
-              const lines = useTerminalStyleStore.getState().historyOnAttach;
+              const resuming = renderedSessionRef.current === target;
+              const lines = resuming ? 0 : useTerminalStyleStore.getState().historyOnAttach;
               const t = termRef.current;
               const fallback = getInitialDims();
               client.send({
@@ -222,7 +293,12 @@ export function TerminalPane({
             setWindows(msg.session.windows);
             const term = termRef.current;
             if (term) {
-              term.reset();
+              // Same session coming back after a reconnect with no history
+              // prefill: keep the last frame and scrollback; tmux's attach
+              // redraw repaints the screen in place.
+              const resuming = renderedSessionRef.current === msg.session.id && !msg.scrollback;
+              renderedSessionRef.current = msg.session.id;
+              if (!resuming) term.reset();
               // Optional history prefill — controlled by the
               // historyOnAttach setting (0 = skip). Sequence is critical:
               //   1. Write captured plain-text history (cursor advances)
@@ -269,6 +345,7 @@ export function TerminalPane({
           }
           case 'session.ended':
             if (msg.sessionId === sessionIdRef.current) {
+              renderedSessionRef.current = null;
               setAttachedSession(null);
               setWindows([]);
               // Clear the dead session's last frame immediately, and vacate
@@ -281,6 +358,7 @@ export function TerminalPane({
             }
             break;
           case 'session.detached':
+            renderedSessionRef.current = null;
             setAttachedSession(null);
             setWindows([]);
             break;
@@ -303,6 +381,13 @@ export function TerminalPane({
           case 'session.links':
             setPaneLinks(msg.links);
             break;
+          case 'claude.reply':
+            // Ignore a late reply after the dropdown was closed.
+            if (claudeReplyOpenRef.current) setClaudeReply(msg);
+            break;
+          case 'link.open':
+            promptOpen(msg.url);
+            break;
         }
       },
       onStateChange: (state) => {
@@ -320,6 +405,10 @@ export function TerminalPane({
       client.disconnect();
       wsRef.current = null;
       authedRef.current = false;
+      // A new socket may point at another server whose session has the same
+      // name (pl-claude exists everywhere) — never "resume" across sockets.
+      // WSClient's own reconnects don't run this cleanup, so they still do.
+      renderedSessionRef.current = null;
     };
   }, [serverUrl, authToken]);
 
@@ -331,6 +420,8 @@ export function TerminalPane({
     if (!client || !authedRef.current) return;
     pendingRef.current = [];
     setPaneLinks(null); // links belong to the previous session
+    setClaudeReply(null);
+    setComposerOpen(false); // a draft never follows the pane to another session
     // Drop any partial-composition residue carried over from the previous
     // session — otherwise the first keystroke into the new session can
     // re-send the prior session's buffered text.
@@ -374,7 +465,29 @@ export function TerminalPane({
 
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon());
+    // Links open on Ctrl/Cmd+click (plain clicks belong to the program and to
+    // pane focus), like Windows Terminal and VS Code. Two kinds: URLs xterm
+    // spots in the text, and OSC 8 hyperlinks a program marks up itself —
+    // those survive wrapping across rows, which plain-text detection can't.
+    // The tooltip shows the real target: an OSC 8 link's visible text can
+    // differ from where it goes.
+    const linkHint = (uri: string | null) => {
+      const el = containerRef.current;
+      if (el) el.title = uri ? `${uri}\nCtrl+click to open` : '';
+    };
+    const activateLink = (event: MouseEvent, uri: string) => {
+      if (event.ctrlKey || event.metaKey) openExternal(uri);
+    };
+    term.loadAddon(new WebLinksAddon(activateLink, {
+      hover: (_e, uri) => linkHint(uri),
+      leave: () => linkHint(null),
+    }));
+    term.options.linkHandler = {
+      activate: activateLink,
+      hover: (_e, uri) => linkHint(uri),
+      leave: () => linkHint(null),
+      allowNonHttpProtocols: false,
+    };
     term.open(containerRef.current);
 
     // OSC 52 passthrough — same handler as TerminalScreen: in-session copies
@@ -465,7 +578,7 @@ export function TerminalPane({
       if (!hasFreshSelection) return;
       hasFreshSelection = false;
       const sel = term.getSelection();
-      if (sel) clipboardWrite(sel);
+      if (sel) clipboardWrite(cleanTerminalCopy(sel, term.cols));
     };
     // Mouse only — touch selections copy via explicit buttons (see
     // TerminalScreen); Android blocks background clipboard writes anyway.
@@ -482,15 +595,26 @@ export function TerminalPane({
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
-      // Ctrl/Cmd+C: copy if there's a selection, otherwise let it through
-      // as SIGINT to the terminal program. Matches VS Code terminal UX.
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && term.hasSelection()) {
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      // Ctrl+Shift+C: copy the selection exactly as it appears on screen.
+      // Never reaches the program (terminals can't tell it from Ctrl+C).
+      if (mod && e.shiftKey && key === 'c') {
         const sel = term.getSelection();
         if (sel) clipboardWrite(sel);
         e.preventDefault();
         return false;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+      // Ctrl/Cmd+C: copy if there's a selection — cleaned of the TUI's gutter
+      // and mid-URL wraps — otherwise let it through as SIGINT.
+      if (mod && !e.shiftKey && key === 'c' && term.hasSelection()) {
+        const sel = term.getSelection();
+        if (sel) clipboardWrite(cleanTerminalCopy(sel, term.cols));
+        e.preventDefault();
+        return false;
+      }
+      // Ctrl+V and Ctrl+Shift+V (Windows Terminal's paste) both paste.
+      if (mod && key === 'v') {
         document.execCommand('paste');
         return false;
       }
@@ -784,12 +908,27 @@ export function TerminalPane({
               className="hidden"
             />
             <button
-              onClick={() => {
-                if (paneLinks !== null) setPaneLinks(null);
-                else wsRef.current?.send({ type: 'session.links' });
-              }}
+              onClick={() => setComposerOpen((open) => !open)}
+              className={`p-1 transition-colors ${composerOpen ? 'text-zinc-200' : 'text-zinc-600 hover:text-zinc-300'}`}
+              title="Write a message (Ctrl+Shift+M)"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+            </button>
+            <button
+              onClick={toggleClaudeReply}
+              className={`p-1 transition-colors ${claudeReply !== null ? 'text-zinc-200' : 'text-zinc-600 hover:text-zinc-300'}`}
+              title="Copy from Claude — last reply and its code blocks (Ctrl+Shift+K)"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+              </svg>
+            </button>
+            <button
+              onClick={toggleLinks}
               className={`p-1 transition-colors ${paneLinks !== null ? 'text-zinc-200' : 'text-zinc-600 hover:text-zinc-300'}`}
-              title="Links on screen — wrapped URLs rejoined"
+              title="Recent links — whole, even when wrapped (Ctrl+Shift+L)"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5" />
@@ -853,7 +992,7 @@ export function TerminalPane({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="sticky top-0 bg-zinc-900 px-3 pt-2 pb-1.5 border-b border-zinc-800 flex items-center justify-between rounded-t-lg">
-              <span className="text-[11px] font-semibold text-zinc-400">Links on screen</span>
+              <span className="text-[11px] font-semibold text-zinc-400">Recent links</span>
               <button
                 onClick={() => setPaneLinks(null)}
                 className="px-1.5 text-zinc-600 hover:text-zinc-300 text-xs"
@@ -903,6 +1042,9 @@ export function TerminalPane({
             </div>
           </div>
         )}
+        {claudeReply !== null && (
+          <ClaudeReplyPanel state={claudeReply} onClose={() => setClaudeReply(null)} variant="pane" />
+        )}
         {attachedSession && voice.isSupported && (
           <button
             // onMouseDown preventDefault stops the browser from moving focus
@@ -940,6 +1082,9 @@ export function TerminalPane({
           </div>
         )}
       </div>
+      {composerOpen && attachedSession && (
+        <Composer onSend={sendComposed} onClose={closeComposer} variant="pane" />
+      )}
     </div>
   );
 }

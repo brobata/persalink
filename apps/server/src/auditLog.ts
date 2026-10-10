@@ -27,6 +27,7 @@ export type AuditEvent =
   | 'action_executed'
   | 'profiles_discovered'
   | 'profiles_reloaded'
+  | 'link_open_request'
   | 'permanent_lock'
   | 'setup_rejected_remote'
   | 'ws_rejected_origin'

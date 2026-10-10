@@ -2,6 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import './styles/index.css';
+// Must run before the browser fires beforeinstallprompt (once, early).
+import './lib/installPrompt';
 
 // Self-hosted terminal fonts — variable where available so a single file
 // covers all weights the TerminalSettings UI exposes (300-600).

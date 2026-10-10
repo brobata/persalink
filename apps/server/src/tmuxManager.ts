@@ -231,6 +231,47 @@ export class TmuxManager {
     }
   }
 
+  /** Environment applied to every PersaLink session (link bridge etc.).
+   *  Profile env wins on a key collision. */
+  private sessionEnv: Record<string, string> = {};
+  /** Sessions already stamped with sessionEnv (cleared on server restart,
+   *  which is when the env itself can change). */
+  private envStamped = new Set<string>();
+
+  setSessionEnv(env: Record<string, string>): void {
+    this.sessionEnv = { ...env };
+  }
+
+  /** `new-session -e` arrived in tmux 3.2. */
+  private supportsNewSessionEnv(): boolean {
+    const m = this.getVersion().match(/(\d+)\.(\d+)/);
+    if (!m) return false;
+    const [major, minor] = [Number(m[1]), Number(m[2])];
+    return major > 3 || (major === 3 && minor >= 2);
+  }
+
+  /** Stamp the PersaLink session env onto an existing session so windows
+   *  opened from now on get it (running shells keep their own env). */
+  async applySessionEnv(sessionName: string): Promise<void> {
+    if (this.envStamped.has(sessionName)) return;
+    this.envStamped.add(sessionName);
+    for (const [key, value] of Object.entries(this.sessionEnv)) {
+      try {
+        await tmux('set-environment', '-t', sessionName, key, value);
+      } catch { /* session vanished */ }
+    }
+  }
+
+  /** The active pane's id (e.g. "%92") in a session, or null. */
+  async activePaneId(sessionName: string): Promise<string | null> {
+    try {
+      const id = (await tmux('display-message', '-p', '-t', sessionName, '#{pane_id}')).trim();
+      return /^%\d+$/.test(id) ? id : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Create a new tmux session from a profile (or bare) */
   async createSession(profile?: Profile, cols: number = 120, rows: number = 40): Promise<string> {
     let sessionName: string;
@@ -251,6 +292,13 @@ export class TmuxManager {
       '-x', String(Math.max(10, Math.min(500, cols))),
       '-y', String(Math.max(2, Math.min(200, rows))),
     ];
+    // Environment must be on new-session itself (-e, tmux >= 3.2): the first
+    // pane's shell is already running by the time set-environment could act,
+    // so set-environment alone only reaches windows opened later.
+    const env = { ...this.sessionEnv, ...(profile?.env ?? {}) };
+    if (this.supportsNewSessionEnv()) {
+      for (const [key, value] of Object.entries(env)) args.push('-e', `${key}=${value}`);
+    }
 
     const cwd = profile?.cwd
       ? profile.cwd.replace(/^~/, process.env.HOME || '/home')
@@ -291,11 +339,10 @@ export class TmuxManager {
 
     await this.applyMouseBindings();
 
-    // Set environment variables via tmux set-environment (safe — no shell)
-    if (profile?.env) {
-      for (const [key, value] of Object.entries(profile.env)) {
-        await tmux('set-environment', '-t', sessionName, key, value);
-      }
+    // Also record the env on the session (safe — no shell) so windows opened
+    // later inherit it, and so pre-3.2 tmux at least covers those.
+    for (const [key, value] of Object.entries(env)) {
+      await tmux('set-environment', '-t', sessionName, key, value);
     }
 
     // Run startup command via tmux send-keys (delivered to the tmux pane, not a shell exec)
@@ -388,6 +435,19 @@ export class TmuxManager {
     } catch { /* ignore */ }
   }
 
+  /** One-time tmux server setup so OSC 8 hyperlinks from inside sessions
+   *  reach xterm.js. tmux strips them unless the outer terminal is declared
+   *  to support them (verified: tmux 3.4 drops OSC 8 without the feature).
+   *  Append once, never clobbering user config. */
+  async ensureHyperlinkPassthrough(): Promise<void> {
+    try {
+      const current = await tmux('show-options', '-sv', 'terminal-features').catch(() => '');
+      if (!/xterm-256color:hyperlinks/.test(current)) {
+        await tmux('set-option', '-as', 'terminal-features', ',xterm-256color:hyperlinks');
+      }
+    } catch { /* ignore — tmux < 3.2 has no terminal-features */ }
+  }
+
   /** Capture pane text with tmux's wrapped lines rejoined (-J), so a URL that
    *  was hard-wrapped at the pane width comes back whole. Raw material for the
    *  session.links harvester. */
@@ -412,6 +472,9 @@ export class TmuxManager {
     // Mouse bindings are server-level (`-T root`), so re-establish them on
     // every attach in case anything else (or an old build) overrode them.
     await this.applyMouseBindings();
+    // Sessions created before the session env existed pick it up for any
+    // window opened from now on.
+    await this.applySessionEnv(sessionName);
   }
 
   /** Root-table mouse bindings PersaLink depends on. Server-wide, idempotent. */

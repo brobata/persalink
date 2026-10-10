@@ -2,11 +2,14 @@ import { useEffect } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { COPY_PENDING_OP, completePendingCopy } from '../lib/clipboardBridge';
 import { SHARE_PENDING_OP, consumePendingShare } from '../lib/shareTarget';
+import { LINK_OPEN_OP, openExternal } from '../lib/linkOpen';
 
 const AUTO_DISMISS_MS = 5_000;
 // Tap-to-act toasts (finish a copy, insert shared text) get longer — the
 // user has to notice AND reach them.
 const TAP_ACTION_DISMISS_MS = 12_000;
+// Link prompts wait longer still: the user may be reading the reply first.
+const LINK_DISMISS_MS = 30_000;
 
 export function ToastStack() {
   const notifications = useAppStore((s) => s.notifications);
@@ -15,7 +18,9 @@ export function ToastStack() {
   useEffect(() => {
     if (notifications.length === 0) return;
     const timers = notifications.map((n) => {
-      const ttl = n.op === COPY_PENDING_OP || n.op === SHARE_PENDING_OP ? TAP_ACTION_DISMISS_MS : AUTO_DISMISS_MS;
+      const ttl = n.op === LINK_OPEN_OP
+        ? LINK_DISMISS_MS
+        : n.op === COPY_PENDING_OP || n.op === SHARE_PENDING_OP ? TAP_ACTION_DISMISS_MS : AUTO_DISMISS_MS;
       const remaining = Math.max(0, ttl - (Date.now() - n.createdAt));
       return setTimeout(() => dismiss(n.id), remaining);
     });
@@ -44,6 +49,17 @@ export function ToastStack() {
               >
                 <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 mb-0.5">copy</div>
                 <div className="break-words">{n.message}</div>
+              </button>
+            ) : n.op === LINK_OPEN_OP ? (
+              // A program in the session asked to open this link. The tap is
+              // the user gesture window.open needs.
+              <button
+                onClick={() => { openExternal(n.message); dismiss(n.id); }}
+                className="flex-1 min-w-0 text-left"
+                title={n.message}
+              >
+                <div className="text-[11px] font-mono uppercase tracking-wider text-sky-400 mb-0.5">open link</div>
+                <div className="break-all line-clamp-2 text-sky-200 underline decoration-sky-500/40">{n.message}</div>
               </button>
             ) : n.op === SHARE_PENDING_OP ? (
               // Share-sheet intake: the tap is the user's consent to type the

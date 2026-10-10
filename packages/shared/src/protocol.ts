@@ -202,6 +202,9 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.scrollback'), lines: z.number().int().optional() }),
   // Link harvest — URLs from the attached pane, wrap-joined server-side
   z.object({ type: z.literal('session.links'), lines: z.number().int().min(0).max(10000).optional() }),
+  // Claude's last reply in the attached session, read from Claude Code's own
+  // transcript (raw markdown — no terminal wrapping or gutter).
+  z.object({ type: z.literal('claude.reply') }),
   // Session output logs (server-side, per-profile opt-in)
   z.object({ type: z.literal('logs.list') }),
   z.object({ type: z.literal('logs.read'), name: z.string().min(1).max(200) }),
@@ -274,6 +277,12 @@ export type ServerMessage =
   | { type: 'session.scrollback'; data: string }
   // Link harvest — deduped URLs, newest first
   | { type: 'session.links'; links: string[] }
+  // Claude's last reply (raw markdown) + its fenced code blocks
+  | { type: 'claude.reply'; found: true; text: string; blocks: Array<{ lang: string; code: string }> }
+  | { type: 'claude.reply'; found: false; reason: string }
+  // A program in a session asked to open a URL ($BROWSER → link bridge).
+  // Browsers block window.open outside a user gesture, so clients prompt.
+  | { type: 'link.open'; url: string; sessionId: string | null }
   // Session output logs
   | { type: 'logs.list'; logs: Array<{ name: string; size: number; mtime: number }> }
   | { type: 'logs.read'; name: string; data: string; truncated: boolean }

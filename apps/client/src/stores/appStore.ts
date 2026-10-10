@@ -18,6 +18,10 @@ import {
 import { getInitialDims } from '../lib/terminalDims';
 import { pageHost, schemesFor } from '../lib/platform';
 import { useLayoutStore } from './layoutStore';
+import { promptOpen } from '../lib/linkOpen';
+
+export type ClaudeReplyMessage = Extract<ServerMessage, { type: 'claude.reply' }>;
+export type ClaudeReplyState = ClaudeReplyMessage | 'loading';
 
 // ============================================================================
 // Types
@@ -110,6 +114,10 @@ interface AppState {
   // session.links response arrives, cleared on close/detach).
   sessionLinks: string[] | null;
 
+  // Claude's last reply for the copy sheet — 'loading' while the request is
+  // in flight, null when the sheet is closed.
+  claudeReply: ClaudeReplyState | null;
+
   // True when the server is serving a newer client bundle than the one
   // running — drives the "Update ready" pill. A plain reload picks it up
   // (the SW is network-first on the shell).
@@ -178,6 +186,8 @@ interface AppState {
   requestScrollback: (lines?: number) => void;
   requestLinks: () => void;
   clearSessionLinks: () => void;
+  requestClaudeReply: () => void;
+  clearClaudeReply: () => void;
   requestLogs: () => void;
   readLog: (name: string) => void;
   closeLogView: () => void;
@@ -309,6 +319,7 @@ export const useAppStore = create<AppState>()(
       showTabPicker: false,
       actionResult: null,
       sessionLinks: null,
+      claudeReply: null,
       updateAvailable: false,
       sessionLogs: null,
       logView: null,
@@ -370,7 +381,7 @@ export const useAppStore = create<AppState>()(
             connectionState: 'disconnected', view: 'connect',
             sessions: [], profiles: [], healthStatuses: [], discoveredProfiles: [],
             attachedSession: null, windows: [], activeTabId: null, switchingToId: null,
-            lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null,
+            lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null, claudeReply: null,
           });
         }
       },
@@ -396,7 +407,7 @@ export const useAppStore = create<AppState>()(
           // Everything below is per-server state from the previous server.
           sessions: [], profiles: [], healthStatuses: [], discoveredProfiles: [],
           attachedSession: null, windows: [], activeTabId: null, switchingToId: null,
-          lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null,
+          lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null, claudeReply: null,
           authError: null, view: 'connect',
         });
         get().connect();
@@ -504,7 +515,7 @@ export const useAppStore = create<AppState>()(
 
       detachSession: () => {
         wsClient?.send({ type: 'session.detach' });
-        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null, switchingToId: null, sessionLinks: null });
+        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null, switchingToId: null, sessionLinks: null, claudeReply: null });
       },
 
       killSession: (sessionId) => {
@@ -713,6 +724,13 @@ export const useAppStore = create<AppState>()(
       },
 
       clearSessionLinks: () => set({ sessionLinks: null }),
+
+      requestClaudeReply: () => {
+        set({ claudeReply: 'loading' });
+        wsClient?.send({ type: 'claude.reply' });
+      },
+
+      clearClaudeReply: () => set({ claudeReply: null }),
 
       requestLogs: () => {
         wsClient?.send({ type: 'logs.list' });
@@ -1024,6 +1042,15 @@ function handleServerMessage(
 
     case 'session.links':
       set({ sessionLinks: msg.links });
+      break;
+
+    case 'claude.reply':
+      // Ignore a late reply after the sheet was closed.
+      if (get().claudeReply !== null) set({ claudeReply: msg });
+      break;
+
+    case 'link.open':
+      promptOpen(msg.url);
       break;
 
     case 'logs.list':
