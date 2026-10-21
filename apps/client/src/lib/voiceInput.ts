@@ -56,6 +56,13 @@ const AUTO_STOP_ON_SILENCE = (() => {
   } catch { return false; }
 })();
 
+// Only one recognizer may hold the mic at a time. Chrome lets a second
+// SpeechRecognition start by aborting the first; the first's onend then
+// auto-restarts (its user still wants to listen), which aborts the second,
+// whose onend restarts it... an endless ping-pong that freezes the app. So
+// starting dictation in any pane first hard-stops whichever pane has the mic.
+let activeMic: { abandon: () => void } | null = null;
+
 export type VoiceInputState = {
   isSupported: boolean;
   isListening: boolean;
@@ -85,7 +92,10 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
   const acquireWakeLock = useCallback(async () => {
     try {
       if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && document.visibilityState === 'visible') {
-        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        const lock = await navigator.wakeLock.request('screen');
+        // Stopped (or another pane took the mic) while the request was pending.
+        if (!wantListeningRef.current) { void lock.release(); return; }
+        wakeLockRef.current = lock;
       }
     } catch { /* unsupported / denied — dictation still works, just no keep-awake */ }
   }, []);
@@ -120,6 +130,28 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     try { return typeof window !== 'undefined' && localStorage.getItem('persalink_voice') === 'off'; }
     catch { return false; }
   })();
+  // Tear down immediately, without waiting for onend: used when another pane
+  // takes the mic and when the page is hidden. recognitionRef is cleared BEFORE
+  // abort so the late onend sees a stale instance and neither restarts nor
+  // clobbers state.
+  const abandon = useCallback(() => {
+    wantListeningRef.current = false;
+    clearSilenceTimer();
+    releaseWakeLock();
+    const rec = recognitionRef.current;
+    recognitionRef.current = null;
+    setIsListening(false);
+    if (rec) {
+      try { rec.abort(); } catch { /* ignore */ }
+    }
+  }, [releaseWakeLock, clearSilenceTimer]);
+  // Stable identity for the module-level activeMic slot; `abandon` kept current.
+  const ownerRef = useRef({ abandon });
+  ownerRef.current.abandon = abandon;
+  const releaseOwnership = () => {
+    if (activeMic === ownerRef.current) activeMic = null;
+  };
+
   const isSupported = !killed && getCtor() !== null && (typeof window === 'undefined' || window.isSecureContext);
 
   const start = useCallback(() => {
@@ -133,6 +165,8 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
       return;
     }
     if (recognitionRef.current) return;
+    if (activeMic && activeMic !== ownerRef.current) activeMic.abandon();
+    activeMic = ownerRef.current;
     const rec = new Ctor();
     rec.lang = 'en-US';
     rec.continuous = true;
@@ -164,12 +198,16 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
       }
     };
     rec.onend = () => {
+      // Abandoned (another pane took the mic, or the page was hidden) — it's
+      // already torn down; restarting here is exactly the ping-pong to avoid.
+      if (recognitionRef.current !== rec) return;
       if (wantListeningRef.current) {
         try { rec.start(); } catch { /* restart raced with stop */ }
       } else {
         recognitionRef.current = null;
         setIsListening(false);
         releaseWakeLock();
+        releaseOwnership();
       }
     };
     recognitionRef.current = rec;
@@ -187,6 +225,7 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
       setIsListening(false);
       releaseWakeLock();
       clearSilenceTimer();
+      releaseOwnership();
       setError(err instanceof Error ? err.message : 'Failed to start');
     }
   }, [acquireWakeLock, releaseWakeLock, armSilenceTimer, clearSilenceTimer]);
@@ -216,28 +255,26 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
   useEffect(() => {
     const onVisibility = () => {
       if (document.visibilityState === 'hidden' && recognitionRef.current) {
-        wantListeningRef.current = false;
-        clearSilenceTimer();
-        releaseWakeLock();
-        try { recognitionRef.current.abort(); } catch { /* ignore */ }
-        recognitionRef.current = null;
-        setIsListening(false);
+        abandon();
+        releaseOwnership();
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [releaseWakeLock, clearSilenceTimer]);
+  }, [abandon]);
 
   useEffect(() => {
+    const owner = ownerRef.current;
     return () => {
       wantListeningRef.current = false;
       clearSilenceTimer();
       releaseWakeLock();
       const rec = recognitionRef.current;
+      recognitionRef.current = null;
       if (rec) {
         try { rec.abort(); } catch { /* ignore */ }
-        recognitionRef.current = null;
       }
+      if (activeMic === owner) activeMic = null;
     };
   }, [releaseWakeLock, clearSilenceTimer]);
 
