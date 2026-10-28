@@ -63,6 +63,8 @@ interface ConnectedClient {
   accessExpiresAt: number | null;
   /** Public door: closes the socket when the Access session or login ends. */
   expiryTimer: ReturnType<typeof setTimeout> | null;
+  /** The stored token this connection authenticated with (or was issued). */
+  tokenId: string | null;
 }
 
 // SGR mouse wheel-up report: ESC [ < 64 ; col ; row M. This is what the client
@@ -396,6 +398,7 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
     rateLimiter.recordSuccess(client.ip);
     tokenStore.touch(stored.tokenHash);
     client.tokenName = stored.name;
+    client.tokenId = stored.id;
     completeAuth(client, stored.name, true, stored.expiresAt);
   }
 }
@@ -417,6 +420,7 @@ function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCrea
       : tokenStore.createAccessToken(name, config.security.tokenTtlDays);
     token = plaintext;
     tokenExpiresAt = stored.expiresAt;
+    client.tokenId = stored.id;
     audit('token_created', { ip: client.ip, name: stored.name, tokenId: stored.id, door: client.door });
   }
 
@@ -956,6 +960,16 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       break;
     }
 
+    case 'auth.logout': {
+      if (client.tokenId && tokenStore.revoke(client.tokenId)) {
+        audit('token_revoked', { ip: client.ip, tokenId: client.tokenId, door: client.door, reason: 'logout' });
+      }
+      client.tokenId = null;
+      send(client, { type: 'auth.loggedOut' });
+      client.ws.close(4002, 'Signed out');
+      break;
+    }
+
     default: {
       send(client, { type: 'error', message: `Unknown message type: ${(message as any).type}` });
     }
@@ -1154,6 +1168,7 @@ function setupWebSocket(server: http.Server, door: Door = 'tailnet', verifyAcces
       accessEmail: accessIdentityByReq.get(req)?.email ?? null,
       accessExpiresAt: accessIdentityByReq.get(req)?.expiresAt ?? null,
       expiryTimer: null,
+      tokenId: null,
     };
 
     clients.set(clientId, client);

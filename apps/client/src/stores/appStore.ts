@@ -157,6 +157,9 @@ interface AppState {
   openServers: () => void;
   connect: () => void;
   disconnect: () => void;
+  /** End this browser's login everywhere: revoke it on the server, wipe local
+   *  state, and (public door) sign out of Cloudflare Access too. */
+  signOut: () => Promise<void>;
   authenticate: (password: string, tokenName?: string) => void;
   authenticateWithToken: () => void;
   createSession: (profileId?: string, cols?: number, rows?: number) => void;
@@ -226,6 +229,8 @@ let switchDebounce: ReturnType<typeof setTimeout> | null = null;
 // superseded socket check their generation and drop themselves, so a late
 // sessions.list from server A can never land after we've switched to server B.
 let wsGeneration = 0;
+/** Resolves when the server confirms auth.logout (see signOut). */
+let onLoggedOut: (() => void) | null = null;
 
 // Ask the server which client build it's serving; flag when it's newer than
 // the one running. Fired after every auth.ok — reconnects happen right after a
@@ -477,6 +482,23 @@ export const useAppStore = create<AppState>()(
           authToken: null,
           servers: s.servers.map((e) => e.id === s.activeServerId ? { ...e, authToken: null } : e),
         }));
+      },
+
+      signOut: async () => {
+        if (wsClient && get().connectionState === 'authenticated') {
+          // Wait for the revoke to land; navigating away first can drop it.
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, 1500);
+            onLoggedOut = () => { clearTimeout(t); resolve(); };
+            wsClient?.send({ type: 'auth.logout' });
+          });
+          onLoggedOut = null;
+        }
+        get().disconnect();
+        if (isPublicDoor) {
+          try { sessionStorage.clear(); } catch { /* storage blocked */ }
+          window.location.href = '/cdn-cgi/access/logout';
+        }
       },
 
       authenticate: (password, tokenName) => {
@@ -1117,6 +1139,10 @@ function handleServerMessage(
       break;
 
     case 'pong':
+      break;
+
+    case 'auth.loggedOut':
+      onLoggedOut?.();
       break;
   }
 }

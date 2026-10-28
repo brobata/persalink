@@ -187,14 +187,28 @@ export function App() {
 /** Always-visible marker when this page came in through the public door, so
  *  it's never ambiguous which connection a session is on. */
 function PublicBadge() {
+  const signOut = useAppStore((s) => s.signOut);
+  const [leaving, setLeaving] = useState(false);
   if (!isPublicDoor) return null;
+  const onSignOut = () => {
+    if (leaving || !window.confirm('Sign out of PersaLink on this computer?')) return;
+    setLeaving(true);
+    void signOut();
+  };
   return (
     <div
-      className="fixed top-0 left-1/2 -translate-x-1/2 z-[60] pointer-events-none select-none
-                 px-2 py-px rounded-b text-[10px] font-semibold tracking-wide bg-amber-500/90 text-black"
+      className="fixed top-0 left-1/2 -translate-x-1/2 z-[60] flex items-center select-none
+                 rounded-b text-[10px] font-semibold tracking-wide bg-amber-500/90 text-black overflow-hidden"
       title="Connected through the public internet entrance"
     >
-      PUBLIC
+      <span className="px-2 py-px">PUBLIC</span>
+      <button
+        onClick={onSignOut}
+        disabled={leaving}
+        className="px-2 py-px border-l border-black/20 hover:bg-amber-400 active:bg-amber-300 disabled:opacity-60"
+      >
+        {leaving ? 'Signing out…' : 'Sign out'}
+      </button>
     </div>
   );
 }

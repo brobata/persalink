@@ -229,6 +229,8 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('push.test') }),
   // Keepalive
   z.object({ type: z.literal('ping') }),
+  /** Revoke the login this connection is using (Sign out). */
+  z.object({ type: z.literal('auth.logout') }),
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -260,6 +262,7 @@ export type ServerMessage =
   | { type: 'token.list'; tokens: TokenInfo[] }
   | { type: 'token.created'; token: string; tokenId: string; name: string; expiresAt: string | null }
   | { type: 'token.revoked'; tokenId: string }
+  | { type: 'auth.loggedOut' }
   // Password management
   | { type: 'password.changed'; token?: string }
   // Session events

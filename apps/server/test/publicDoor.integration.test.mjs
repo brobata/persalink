@@ -226,3 +226,19 @@ test('a public socket is closed when the Access session ends', async () => {
   const code = await new Promise((resolve) => pub.ws.on('close', (c) => resolve(c)));
   assert.equal(code, 4001);
 });
+
+test('sign out revokes the login it was made with', async () => {
+  const h = { 'cf-access-jwt-assertion': await jwt() };
+  const pub = await login(PORTS.public, h);
+  const token = pub.ok.token;
+  const closed = new Promise((resolve) => pub.ws.on('close', (c) => resolve(c)));
+  pub.send({ type: 'auth.logout' });
+  await pub.next('auth.loggedOut');
+  assert.equal(await closed, 4002);
+
+  const again = await connect(PORTS.public, h);
+  await again.next('auth.required');
+  again.send({ type: 'auth.token', token });
+  assert.match((await again.next('auth.failed')).message, /Invalid or expired/);
+  again.ws.close();
+});
