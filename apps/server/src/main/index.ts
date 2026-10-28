@@ -172,7 +172,12 @@ let settingUpPassword = false;
 
 function resolveClientIp(req: http.IncomingMessage): string {
   if (config.security.trustProxy) {
-    const fwd = (req.headers['x-forwarded-for'] as string || '').split(',')[0].trim();
+    // Assumes exactly ONE trusted proxy hop (tailscale serve). Right-most hop =
+    // the address that proxy appended. A second local hop would make this
+    // 127.0.0.1 for everyone — revisit if one is ever added. The first
+    // entry is whatever the client sent, so trusting it let a spoofed header
+    // dodge per-IP rate limiting.
+    const fwd = (req.headers['x-forwarded-for'] as string || '').split(',').pop()!.trim();
     if (fwd) return fwd;
   }
   return req.socket.remoteAddress || 'unknown';
@@ -1318,7 +1323,7 @@ async function main(): Promise<void> {
   });
   profileManager.watch();
 
-  tokenStore = new TokenStore();
+  tokenStore = new TokenStore(config.security.tokenIdleDays);
   rateLimiter = new RateLimiter();
   pushManager = new PushManager();
   pushManager.init();
@@ -1334,7 +1339,10 @@ async function main(): Promise<void> {
   });
 
   const validateAuthToken = (token: string): boolean => {
-    return tokenStore.validateToken(token) !== null;
+    const stored = tokenStore.validateToken(token);
+    // HTTP use (uploads, file browser) counts as activity for idle expiry.
+    if (stored) tokenStore.touch(stored.tokenHash);
+    return stored !== null;
   };
 
   const server = http.createServer(

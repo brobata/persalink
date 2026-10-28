@@ -108,6 +108,14 @@ export function createHttpHandler(
 
     if (urlPath === '/api/server-info' && req.method === 'GET') {
       res.setHeader('Cache-Control', 'no-store');
+      // Hostname + tmux version are recon material — authenticated callers only.
+      const authHeader = req.headers['authorization'];
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+      if (!token || !validateAuthToken?.(token)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Authentication required' }));
+        return;
+      }
       if (getServerInfo) {
         const info = getServerInfo();
         res.writeHead(200, { 'Content-Type': 'application/json' });

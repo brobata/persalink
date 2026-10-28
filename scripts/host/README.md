@@ -72,3 +72,14 @@ sudo systemctl unmask  apt-daily.timer apt-daily-upgrade.timer
 sudo systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades
 ```
+
+## Nightly config backup
+
+`scripts/host/backup-config.sh` tars `~/.persalink` (minus logs) into
+`~/backups/persalink/persalink-YYYY-MM-DD.tgz` and keeps 14 days. Cron:
+
+```
+15 3 * * * /home/disdiqqq/projects/persalink/scripts/host/backup-config.sh >/dev/null 2>&1 # persalink config backup
+```
+
+Restore: stop the server, `tar -xzf <file> -C ~`, start it.

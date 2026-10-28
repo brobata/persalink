@@ -153,11 +153,28 @@ function ensureConfigDir(): void {
   }
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export class TokenStore {
   private tokens: StoredToken[] = [];
 
-  constructor() {
+  /** @param idleDays tokens unused this long are dead (see SecurityConfig.tokenIdleDays). */
+  private readonly idleDays: number | null;
+
+  constructor(idleDays: number | null = null) {
+    // Hand-edited config: 0/negative/garbage would lock out every device
+    // within a minute, so anything but a positive number disables idle expiry.
+    this.idleDays = typeof idleDays === 'number' && idleDays > 0 ? idleDays : null;
     this.load();
+  }
+
+  private isDead(token: StoredToken, now: Date): boolean {
+    if (token.expiresAt && new Date(token.expiresAt) < now) return true;
+    if (this.idleDays != null) {
+      const lastUsed = new Date(token.lastUsedAt).getTime();
+      if (Number.isFinite(lastUsed) && now.getTime() - lastUsed > this.idleDays * DAY_MS) return true;
+    }
+    return false;
   }
 
   private load(): void {
@@ -198,10 +215,7 @@ export class TokenStore {
     const tokenHash = hashToken(plaintext);
     for (const token of this.tokens) {
       if (token.tokenHash !== tokenHash) continue;
-      if (token.expiresAt && new Date(token.expiresAt) < new Date()) {
-        return null;
-      }
-      return token;
+      return this.isDead(token, new Date()) ? null : token;
     }
     return null;
   }
@@ -241,12 +255,10 @@ export class TokenStore {
     }));
   }
 
-  purgeExpired(): number {
-    const now = new Date();
+  /** Drops expired and idle tokens. */
+  purgeExpired(now: Date = new Date()): number {
     const before = this.tokens.length;
-    this.tokens = this.tokens.filter(
-      (t) => !t.expiresAt || new Date(t.expiresAt) >= now
-    );
+    this.tokens = this.tokens.filter((t) => !this.isDead(t, now));
     const removed = before - this.tokens.length;
     if (removed > 0) this.save();
     return removed;
@@ -270,7 +282,7 @@ export class TokenStore {
       tokenHash: hash,
       createdAt: now.toISOString(),
       lastUsedAt: now.toISOString(),
-      expiresAt: new Date(now.getTime() + effectiveTtl * 24 * 60 * 60 * 1000).toISOString(),
+      expiresAt: new Date(now.getTime() + effectiveTtl * DAY_MS).toISOString(),
     };
     this.add(stored);
     return { stored, plaintext };

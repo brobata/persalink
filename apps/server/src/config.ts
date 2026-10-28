@@ -27,6 +27,10 @@ export interface SecurityConfig {
   // clear. Direct http://<lan-ip>:<port> access stops working when set to
   // loopback; tailnet/HTTPS access is unaffected.
   bindHost: string;
+  // A device token unused for this many days stops working and is pruned,
+  // so lost or retired devices don't keep a live shell credential for the
+  // full TTL. null disables idle expiry.
+  tokenIdleDays: number | null;
 }
 
 export interface ServerConfig {
@@ -62,6 +66,7 @@ const DEFAULT_SECURITY: SecurityConfig = {
   maxTotalSessions: 50,
   allowRemoteSetup: false,
   bindHost: '0.0.0.0',
+  tokenIdleDays: 90,
 };
 
 const DEFAULT_CONFIG: ServerConfig = {

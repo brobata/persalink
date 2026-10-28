@@ -13,7 +13,7 @@
     "start:server": "npm run start -w @persalink/server",
     "dev:client": "npm run dev -w @persalink/client",
     "build:client": "npm run build -w @persalink/client",
-    "test": "node --test packages/shared/test/*.test.ts"
+    "test": "npm run build:server && node --test packages/shared/test/*.test.ts apps/server/test/*.test.mjs"
   },
   "keywords": ["tmux", "terminal", "xterm", "websocket", "session-manager", "remote-terminal", "mobile-terminal"],
   "author": "Brobata",
