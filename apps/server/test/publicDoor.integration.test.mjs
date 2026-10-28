@@ -231,10 +231,17 @@ test('sign out revokes the login it was made with', async () => {
   const h = { 'cf-access-jwt-assertion': await jwt() };
   const pub = await login(PORTS.public, h);
   const token = pub.ok.token;
+  // A second tab on the same login.
+  const tab2 = await connect(PORTS.public, h);
+  await tab2.next('auth.required');
+  tab2.send({ type: 'auth.token', token });
+  await tab2.next('auth.ok');
+  const tab2Closed = new Promise((resolve) => tab2.ws.on('close', (c) => resolve(c)));
   const closed = new Promise((resolve) => pub.ws.on('close', (c) => resolve(c)));
   pub.send({ type: 'auth.logout' });
   await pub.next('auth.loggedOut');
   assert.equal(await closed, 4002);
+  assert.equal(await tab2Closed, 4002, 'other tabs on the same login are signed out too');
 
   const again = await connect(PORTS.public, h);
   await again.next('auth.required');

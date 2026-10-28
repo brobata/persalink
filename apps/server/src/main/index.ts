@@ -909,7 +909,8 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
       saveConfig(config);
       tokenStore.revokeAll();
       const name = client.tokenName || client.ip;
-      const { plaintext } = tokenStore.createAccessToken(name, config.security.tokenTtlDays);
+      const { stored, plaintext } = tokenStore.createAccessToken(name, config.security.tokenTtlDays);
+      client.tokenId = stored.id;
       send(client, { type: 'password.changed', token: plaintext });
       for (const c of clients.values()) {
         if (c.id !== client.id && c.authenticated) {
@@ -961,8 +962,18 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     }
 
     case 'auth.logout': {
-      if (client.tokenId && tokenStore.revoke(client.tokenId)) {
-        audit('token_revoked', { ip: client.ip, tokenId: client.tokenId, door: client.door, reason: 'logout' });
+      const id = client.tokenId;
+      if (id && tokenStore.revoke(id)) {
+        audit('token_revoked', { ip: client.ip, tokenId: id, door: client.door, reason: 'logout' });
+      }
+      // Other tabs/panes signed in with the same login go too.
+      if (id) {
+        for (const c of clients.values()) {
+          if (c.id !== client.id && c.tokenId === id) {
+            send(c, { type: 'auth.failed', message: 'Signed out' });
+            c.ws.close(4002, 'Signed out');
+          }
+        }
       }
       client.tokenId = null;
       send(client, { type: 'auth.loggedOut' });
