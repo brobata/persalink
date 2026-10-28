@@ -69,6 +69,10 @@ interface AppState {
   setupMode: boolean;
   authToken: string | null;
   authError: string | null;
+  /** Public door: second steps the server offers after the password. */
+  secondFactor: { push: boolean; totp: boolean } | null;
+  /** Public door: waiting on the phone; the number to match. */
+  approvalNumber: string | null;
 
   // Biometric
   biometricAvailable: boolean;
@@ -160,7 +164,7 @@ interface AppState {
   /** End this browser's PersaLink login: revoke it on the server and wipe
    *  local state. Leaves the Cloudflare Access sign-in alone. */
   signOut: () => Promise<void>;
-  authenticate: (password: string, tokenName?: string) => void;
+  authenticate: (password: string, tokenName?: string, second?: { totp?: string; approval?: boolean }) => void;
   authenticateWithToken: () => void;
   createSession: (profileId?: string, cols?: number, rows?: number) => void;
   attachSession: (sessionId: string, cols?: number, rows?: number) => void;
@@ -308,6 +312,8 @@ export const useAppStore = create<AppState>()(
       setupMode: false,
       authToken: null,
       authError: null,
+      secondFactor: null,
+      approvalNumber: null,
       biometricAvailable: false,
       biometricLocked: false,
       deviceName: '',
@@ -453,9 +459,18 @@ export const useAppStore = create<AppState>()(
             if (gen !== wsGeneration) return; // superseded socket — drop
             handleServerMessage(msg, set, get);
           },
-          onStateChange: (state) => {
+          onStateChange: (state, closeCode) => {
             if (gen !== wsGeneration) return;
             set({ connectionState: state });
+            // Public door: login timed out (4000) or idle sign-out (4003).
+            // Go straight back to a fresh sign-in, keeping the reason the
+            // server sent, instead of the server list (which means nothing
+            // on term.brobata.com).
+            if (state === 'disconnected' && isPublicDoor && (closeCode === 4000 || closeCode === 4003)) {
+              set({ view: 'auth', attachedSession: null, authToken: null });
+              setTimeout(() => { if (gen === wsGeneration) get().connect(); }, 300);
+              return;
+            }
             if (state === 'disconnected') {
               set({ view: 'connect', attachedSession: null });
             }
@@ -503,9 +518,9 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      authenticate: (password, tokenName) => {
-        set({ authError: null });
-        wsClient?.send({ type: 'auth', password, tokenName });
+      authenticate: (password, tokenName, second) => {
+        set({ authError: null, approvalNumber: null });
+        wsClient?.send({ type: 'auth', password, tokenName, ...second });
       },
 
       authenticateWithToken: () => {
@@ -896,7 +911,7 @@ function handleServerMessage(
 ): void {
   switch (msg.type) {
     case 'auth.required':
-      set({ setupMode: msg.setupMode });
+      set({ setupMode: msg.setupMode, secondFactor: msg.secondFactor ?? null, approvalNumber: null });
       // Try token auth first
       const { authToken } = get();
       if (authToken) {
@@ -928,6 +943,7 @@ function handleServerMessage(
         serverName: msg.serverName,
         view: preAuthViews.includes(currentView) ? 'home' : currentView,
         authError: null,
+        approvalNumber: null,
         // Arm the auto-reattach handshake. If the persisted session still
         // exists in the upcoming sessions.list, we'll attach to it.
         pendingAutoAttach: s.lastActiveSessionId,
@@ -951,11 +967,15 @@ function handleServerMessage(
       break;
     }
 
+    case 'auth.pending':
+      set({ approvalNumber: msg.number });
+      break;
+
     case 'auth.failed':
       // This server's token is bad — clear it here AND on its registry entry
       // (other servers keep theirs).
       set((s) => ({
-        authError: msg.message, authToken: null, view: 'auth',
+        authError: msg.message, authToken: null, view: 'auth', approvalNumber: null,
         servers: s.servers.map((e) => e.id === s.activeServerId ? { ...e, authToken: null } : e),
       }));
       break;

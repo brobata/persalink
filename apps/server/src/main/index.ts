@@ -16,6 +16,8 @@ import { HealthChecker } from '../healthChecker';
 import { createHttpHandler, type ServerInfo } from '../httpServer';
 import { TokenStore, hashPassword, verifyPassword, validatePassword, needsRehash, type Door } from '../auth';
 import { createAccessVerifier, type AccessVerifier, type AccessIdentity } from '../accessJwt';
+import { ApprovalManager } from '../approvals';
+import { verifyCode } from '../totp';
 import { RateLimiter } from '../rateLimiter';
 import { audit } from '../auditLog';
 import type { ClientMessage, ServerMessage, SessionInfo } from '@persalink/shared/protocol';
@@ -65,6 +67,8 @@ interface ConnectedClient {
   expiryTimer: ReturnType<typeof setTimeout> | null;
   /** The stored token this connection authenticated with (or was issued). */
   tokenId: string | null;
+  /** Last login or keystroke (public door idle sign-out). */
+  lastActivityAt: number;
 }
 
 // SGR mouse wheel-up report: ESC [ < 64 ; col ; row M. This is what the client
@@ -145,6 +149,147 @@ const lastClassifiedActivity = new Map<string, number>();
 let linkBridge: LinkBridge | null = null;
 /** Non-null when the public door is enabled (see resolvePublicListener). */
 let publicDoor: PublicListenerConfig | null = null;
+const approvals = new ApprovalManager();
+/** Last accepted authenticator step — a code can't be used twice. */
+let lastTotpStep = -1;
+/** Public logins with no open tab: revoked unless a tab reconnects in time. */
+const pendingRevokes = new Map<string, ReturnType<typeof setTimeout>>();
+// Env overrides exist for the integration tests only.
+const PUBLIC_RECONNECT_GRACE_MS = Number(process.env.PERSALINK_PUBLIC_GRACE_MS) || 2 * 60_000;
+const PUBLIC_AUTH_TIMEOUT_MS = 90_000;
+
+function publicSecondFactors(): { push: boolean; totp: boolean } {
+  return { push: pushManager.hasSubscribers(), totp: !!publicDoor?.totpSecret };
+}
+
+/**
+ * Revoke a public login after a short grace unless a tab picks it back up
+ * (token auth clears the entry). Used when the last tab closes, and at boot
+ * for every surviving public token — the in-memory timers died with the old
+ * process, and tokens minted before the second step existed must not live on.
+ */
+function schedulePublicRevoke(tokenId: string, reason: string): void {
+  if (pendingRevokes.has(tokenId)) return;
+  pendingRevokes.set(tokenId, setTimeout(() => {
+    pendingRevokes.delete(tokenId);
+    if (![...clients.values()].some((c) => c.tokenId === tokenId) && tokenStore.revoke(tokenId)) {
+      audit('token_revoked', { tokenId, door: 'public', reason });
+    }
+  }, PUBLIC_RECONNECT_GRACE_MS));
+}
+
+/** Sign out a public login everywhere: revoke it and close its sockets. */
+function endPublicLogin(tokenId: string, reason: string, code: number, message: string): void {
+  const t = pendingRevokes.get(tokenId);
+  if (t) { clearTimeout(t); pendingRevokes.delete(tokenId); }
+  if (tokenStore.revoke(tokenId)) audit('token_revoked', { tokenId, door: 'public', reason });
+  for (const c of clients.values()) {
+    if (c.tokenId === tokenId) {
+      send(c, { type: 'auth.failed', message });
+      c.ws.close(code, message.slice(0, 120));
+    }
+  }
+}
+
+/**
+ * Public door: after the password, the login needs an authenticator code or
+ * an approval from the owner's phone. Returns true when the second step
+ * passed; on false the caller has already been told why.
+ */
+async function passSecondFactor(client: ConnectedClient, message: Extract<ClientMessage, { type: 'auth' }>): Promise<boolean> {
+  const factors = publicSecondFactors();
+  if (awaitingApproval.has(client)) {
+    send(client, { type: 'auth.failed', message: 'Already waiting for your phone' });
+    return false;
+  }
+  if (message.totp) {
+    if (!factors.totp || !publicDoor?.totpSecret) {
+      send(client, { type: 'auth.failed', message: 'Authenticator codes are not set up on this server' });
+      return false;
+    }
+    const step = verifyCode(publicDoor.totpSecret, message.totp, Date.now(), lastTotpStep);
+    if (step === null) {
+      handleFailedAuth(client, 'password', 'Wrong or expired code');
+      return false;
+    }
+    lastTotpStep = step;
+    audit('second_factor_ok', { ip: client.ip, email: client.accessEmail, method: 'totp' });
+    return true;
+  }
+  if (message.approval && factors.push) {
+    awaitingApproval.add(client);
+    try {
+      return await requestPhoneApproval(client);
+    } finally {
+      awaitingApproval.delete(client);
+    }
+  }
+  send(client, {
+    type: 'auth.failed',
+    message: factors.push || factors.totp
+      ? 'A second step is required'
+      : 'No second step is set up — turn on notifications in PersaLink on your phone, or run set-totp on the server',
+  });
+  return false;
+}
+
+const awaitingApproval = new WeakSet<ConnectedClient>();
+
+// Phone prompts are capped (all doors, all IPs — there is one owner) so
+// someone holding the password can't keep buzzing the phone until a tired
+// thumb taps Approve.
+const APPROVAL_LIMIT = 3;
+const APPROVAL_WINDOW_MS = 10 * 60_000;
+let approvalTimes: number[] = [];
+
+/** (Re)start the pre-auth clock. Public logins get longer: password, then a
+ *  code from another app or a phone tap. Every expiry says why. */
+function armAuthTimeout(client: ConnectedClient, ms = client.door === 'public' ? PUBLIC_AUTH_TIMEOUT_MS : 30_000): void {
+  if (client.authTimeout) clearTimeout(client.authTimeout);
+  client.authTimeout = setTimeout(() => {
+    if (!client.authenticated) {
+      send(client, { type: 'auth.failed', message: 'Sign-in timed out — try again' });
+      client.ws.close(4000, 'Auth timeout');
+    }
+  }, ms);
+}
+
+async function requestPhoneApproval(client: ConnectedClient): Promise<boolean> {
+  const now = Date.now();
+  approvalTimes = approvalTimes.filter((t) => now - t < APPROVAL_WINDOW_MS);
+  if (approvalTimes.length >= APPROVAL_LIMIT) {
+    audit('approval_requested', { ip: client.ip, email: client.accessEmail, reason: 'rate_limited' });
+    send(client, { type: 'auth.failed', message: 'Too many phone requests — use an authenticator code, or wait a few minutes' });
+    return false;
+  }
+  approvalTimes.push(now);
+  const req = approvals.create();
+  // Outlast the approval window so the phone's answer can still land.
+  armAuthTimeout(client, 75_000);
+  const onClose = () => req.cancel();
+  client.ws.once('close', onClose);
+  try {
+    const delivered = await pushManager.sendApproval({
+      id: req.id, secret: req.secret, number: req.number,
+      ip: client.ip, email: client.accessEmail, at: new Date().toISOString(),
+    });
+    if (delivered === 0) {
+      req.cancel();
+      send(client, { type: 'auth.failed', message: "Couldn't reach your phone — use an authenticator code" });
+      return false;
+    }
+    audit('approval_requested', { ip: client.ip, email: client.accessEmail, count: delivered });
+    send(client, { type: 'auth.pending', number: req.number, expiresInMs: 60_000 });
+    const outcome = await req.outcome;
+    audit('approval_answered', { ip: client.ip, email: client.accessEmail, reason: outcome });
+    if (outcome === 'approved') return true;
+    if (outcome === 'denied') handleFailedAuth(client, 'password', 'Sign-in was denied on your phone');
+    else if (outcome === 'expired') send(client, { type: 'auth.failed', message: 'No answer from your phone — try again' });
+    return false;
+  } finally {
+    client.ws.off('close', onClose);
+  }
+}
 
 /** Show a link-open prompt on whoever is viewing the session that asked.
  *  Nobody attached (or the request came from outside a pl- session) → every
@@ -381,6 +526,16 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       }
     }
 
+    if (client.door === 'public') {
+      if (!(await passSecondFactor(client, message))) {
+        if (!client.authenticated && client.ws.readyState === client.ws.OPEN) armAuthTimeout(client);
+        return;
+      }
+      // Messages are handled concurrently: a code typed while the phone was
+      // pending may already have logged this socket in. One login per socket.
+      if (client.authenticated) return;
+    }
+
     rateLimiter.recordSuccess(client.ip);
     completeAuth(client, message.tokenName);
 
@@ -399,6 +554,8 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
     tokenStore.touch(stored.tokenHash);
     client.tokenName = stored.name;
     client.tokenId = stored.id;
+    const pending = pendingRevokes.get(stored.id);
+    if (pending) { clearTimeout(pending); pendingRevokes.delete(stored.id); }
     completeAuth(client, stored.name, true, stored.expiresAt);
   }
 }
@@ -412,6 +569,7 @@ function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCrea
   client.tokenName = tokenName || client.ip;
 
   const isPublic = client.door === 'public' && publicDoor !== null;
+  client.lastActivityAt = Date.now();
   let token: string | undefined;
   if (!skipTokenCreate) {
     const name = tokenName || client.ip;
@@ -537,6 +695,7 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     }
 
     case 'session.input': {
+      client.lastActivityAt = Date.now();
       if (client.bridge) {
         // Copy-mode escape. Scrolling up forwards a wheel-up to tmux, which can
         // drop the pane into copy-mode where keystrokes navigate scrollback
@@ -1180,23 +1339,19 @@ function setupWebSocket(server: http.Server, door: Door = 'tailnet', verifyAcces
       accessExpiresAt: accessIdentityByReq.get(req)?.expiresAt ?? null,
       expiryTimer: null,
       tokenId: null,
+      lastActivityAt: Date.now(),
     };
 
     clients.set(clientId, client);
     audit('ws_connected', { ip, clientId, door, email: client.accessEmail });
 
-    // Auth timeout: 30 seconds
-    client.authTimeout = setTimeout(() => {
-      if (!client.authenticated) {
-        send(client, { type: 'auth.failed', message: 'Authentication timeout' });
-        ws.close(4000, 'Auth timeout');
-      }
-    }, 30_000);
+    armAuthTimeout(client);
 
     send(client, {
       type: 'auth.required',
       setupMode: !config.passwordHash,
       protocolVersion: PROTOCOL_VERSION,
+      ...(door === 'public' ? { secondFactor: publicSecondFactors() } : {}),
     });
 
     ws.on('message', async (raw: Buffer | string) => {
@@ -1256,6 +1411,11 @@ function setupWebSocket(server: http.Server, door: Door = 'tailnet', verifyAcces
       if (client.expiryTimer) clearTimeout(client.expiryTimer);
       detachClient(client);
       clients.delete(clientId);
+      // Last tab of a public login closed: give it a short grace to reconnect
+      // (network blip, page reload), then revoke — so "reopen closed tab" on
+      // a shared computer later restores nothing usable.
+      const tid = client.door === 'public' && client.authenticated ? client.tokenId : null;
+      if (tid && ![...clients.values()].some((c) => c.tokenId === tid)) schedulePublicRevoke(tid, 'all_tabs_closed');
       audit('ws_disconnected', { ip, clientId });
     });
 
@@ -1267,9 +1427,26 @@ function setupWebSocket(server: http.Server, door: Door = 'tailnet', verifyAcces
 // Watchdog
 // ---------------------------------------------------------------------------
 
+/** Public logins idle past publicDoor.idleMinutes are signed out everywhere. */
+function signOutIdlePublicLogins(now = Date.now()): void {
+  if (!publicDoor) return;
+  const idleMs = (publicDoor.idleMinutes ?? 30) * 60_000;
+  const lastByToken = new Map<string, number>();
+  for (const c of clients.values()) {
+    if (c.door !== 'public' || !c.authenticated || !c.tokenId) continue;
+    lastByToken.set(c.tokenId, Math.max(lastByToken.get(c.tokenId) ?? 0, c.lastActivityAt));
+  }
+  for (const [tokenId, last] of lastByToken) {
+    if (now - last > idleMs) {
+      endPublicLogin(tokenId, 'idle', 4003, `Signed out after ${publicDoor.idleMinutes ?? 30} minutes without typing`);
+    }
+  }
+}
+
 function startWatchdog(): void {
   setInterval(async () => {
     tokenStore.purgeExpired();
+    signOutIdlePublicLogins();
 
     // Skip the tmux fan-out entirely when nobody is connected — saves
     // N tmux invocations every 60s on an idle server.
@@ -1465,7 +1642,9 @@ async function main(): Promise<void> {
   const pinnedProfiles = () => profileManager.list().filter((p) => p.pinned).map((p) => ({ id: p.id, name: p.name }));
 
   const server = http.createServer(
-    createHttpHandler(staticDir, getServerInfo, tokenValidator('tailnet'), pinnedProfiles),
+    createHttpHandler(staticDir, getServerInfo, tokenValidator('tailnet'), pinnedProfiles, {
+      onApproval: (id, secret, decision) => approvals.answer(id, secret, decision),
+    }),
   );
 
   setupWebSocket(server);
@@ -1474,6 +1653,12 @@ async function main(): Promise<void> {
   publicDoor = resolvePublicListener(config);
   if (publicDoor) {
     const door = publicDoor;
+    // Every public login that outlived the last process gets the same short
+    // grace as a closed tab: an open tab reconnects and keeps it, anything
+    // else (a closed tab on a shared laptop, a pre-second-step login) dies.
+    for (const t of tokenStore.list()) {
+      if (t.door === 'public') schedulePublicRevoke(t.id, 'server_restart');
+    }
     const verifyAccess = createAccessVerifier({
       teamDomain: door.accessTeamDomain,
       aud: door.accessAud,

@@ -12,14 +12,14 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'aut
 interface WSClientOptions {
   url: string;
   onMessage: MessageHandler;
-  onStateChange: (state: ConnectionState) => void;
+  onStateChange: (state: ConnectionState, closeCode?: number) => void;
 }
 
 export class WSClient {
   private ws: WebSocket | null = null;
   private url: string;
   private onMessage: MessageHandler;
-  private onStateChange: (state: ConnectionState) => void;
+  private onStateChange: (state: ConnectionState, closeCode?: number) => void;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -112,7 +112,7 @@ export class WSClient {
       const isAuthFailureClose = event.code >= 4000 && event.code < 5000;
 
       if (this.intentionalClose || isAuthFailureClose) {
-        this.onStateChange('disconnected');
+        this.onStateChange('disconnected', event.code);
         return;
       }
 

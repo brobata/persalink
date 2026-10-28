@@ -12,7 +12,7 @@ import path from 'path';
 import os from 'os';
 import { atomicWriteFileSync } from './atomicWrite';
 
-const CONFIG_DIR = path.join(os.homedir(), '.persalink');
+const CONFIG_DIR = process.env.PERSALINK_CONFIG_DIR || path.join(os.homedir(), '.persalink');
 const VAPID_FILE = path.join(CONFIG_DIR, 'vapid.json');
 const SUBS_FILE = path.join(CONFIG_DIR, 'push-subscriptions.json');
 
@@ -124,6 +124,36 @@ export class PushManager {
       this.subs = this.subs.filter((s) => !dead.includes(s.endpoint));
       this.persist();
     }
+  }
+
+  hasSubscribers(): boolean {
+    return this.subs.length > 0;
+  }
+
+  /**
+   * Sign-in approval request to every subscribed device, ignoring per-event
+   * prefs (it's a security prompt, not an agent notification). Short TTL —
+   * a request the phone sees after it expired is useless. Resolves with how
+   * many push services accepted it.
+   */
+  async sendApproval(payload: Record<string, unknown>): Promise<number> {
+    const body = JSON.stringify({ kind: 'approval', ...payload });
+    let delivered = 0;
+    const dead: string[] = [];
+    await Promise.all(this.subs.map(async (sub) => {
+      try {
+        await webpush.sendNotification(sub, body, { TTL: 60, urgency: 'high' });
+        delivered++;
+      } catch (err) {
+        const code = (err as { statusCode?: number }).statusCode;
+        if (code === 404 || code === 410) dead.push(sub.endpoint);
+      }
+    }));
+    if (dead.length) {
+      this.subs = this.subs.filter((s) => !dead.includes(s.endpoint));
+      this.persist();
+    }
+    return delivered;
   }
 
   private persist(): void {

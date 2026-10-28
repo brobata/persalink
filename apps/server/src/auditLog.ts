@@ -39,7 +39,10 @@ export type AuditEvent =
   | 'ws_rejected_per_ip_cap'
   | 'setup_rejected_public'
   | 'public_ws_rejected'
-  | 'public_http_rejected';
+  | 'public_http_rejected'
+  | 'second_factor_ok'
+  | 'approval_requested'
+  | 'approval_answered';
 
 interface AuditFields {
   ip?: string;

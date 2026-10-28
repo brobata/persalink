@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- @file approve.html — phone page for a sign-in approval (opened from the
+     notification). Logic lives in approve.js because the CSP blocks inline JS. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Approve sign-in</title>
+  <link rel="stylesheet" href="/approve.css">
+</head>
+<body>
+  <main>
+    <h1>Sign-in request</h1>
+    <p class="muted">Someone passed the password on term.brobata.com.</p>
+    <p>Approve only if that screen shows</p>
+    <div id="number" class="number">--</div>
+    <p id="detail" class="muted"></p>
+    <div class="buttons">
+      <button id="deny" class="deny">Deny</button>
+      <button id="approve" class="approve">Approve</button>
+    </div>
+    <p id="result" class="result"></p>
+  </main>
+  <script src="/approve.js"></script>
+</body>
+</html>

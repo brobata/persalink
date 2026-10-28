@@ -69,6 +69,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(cacheFirst(req));
     return;
   }
+  // The approval page is a real file, not the app shell: never let it be
+  // cached as '/' (a cold start offline would then show it instead of the app).
+  if (url.pathname.endsWith('.html') && url.pathname !== '/index.html') return;
   if (req.mode === 'navigate') {
     event.respondWith(networkFirstShell(req));
     return;
@@ -103,6 +106,10 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
+  if (data.kind === 'approval') {
+    event.waitUntil(showApproval(data));
+    return;
+  }
   const title = data.title || 'PersaLink';
   event.waitUntil((async () => {
     // Suppress while the user is LOOKING at the app — a push about the screen
@@ -121,10 +128,67 @@ self.addEventListener('push', (event) => {
   })());
 });
 
+// --- Sign-in approvals (Duo-style) -------------------------------------------
+// Someone passed the password on term.brobata.com. Always shown (even with the
+// app open) and sticky until answered. The one-time secret came inside the
+// encrypted push and goes straight back to /api/approval — it is what proves
+// the answer came from this phone.
+function approvalQuery(d) {
+  const q = new URLSearchParams({ id: d.id, s: d.secret, n: d.number, ip: d.ip || '', at: d.at || '' });
+  return q.toString();
+}
+
+function showApproval(d) {
+  const where = d.ip ? ' from ' + d.ip : '';
+  return self.registration.showNotification('Sign-in request — ' + d.number, {
+    body: 'Someone is signing in to PersaLink' + where + '. Approve only if the screen shows ' + d.number + '.',
+    tag: 'approval-' + d.id,
+    requireInteraction: true,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    actions: [
+      { action: 'approve', title: 'Approve' },
+      { action: 'deny', title: 'Deny' },
+    ],
+    data: { approval: { id: d.id, secret: d.secret, number: d.number, ip: d.ip || '', at: d.at || '' } },
+  });
+}
+
+async function answerApproval(a, decision) {
+  try {
+    const res = await fetch('/api/approval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: a.id, secret: a.secret, decision }),
+    });
+    const ok = res.ok;
+    await self.registration.showNotification(ok ? (decision === 'approve' ? 'Sign-in approved' : 'Sign-in denied') : 'Request expired', {
+      body: ok ? '' : 'That sign-in request is no longer waiting.',
+      tag: 'approval-result',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+    });
+  } catch {
+    await self.registration.showNotification('Could not reach PersaLink', {
+      body: 'Is Tailscale on? Open the app and try again.', tag: 'approval-result', icon: '/icon-192.png',
+    });
+  }
+}
+
 // Tapping a notification focuses an existing window (and asks it to open the
 // session) or opens a fresh one deep-linked to the session.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const approval = event.notification.data && event.notification.data.approval;
+  if (approval) {
+    if (event.action === 'approve' || event.action === 'deny') {
+      event.waitUntil(answerApproval(approval, event.action));
+    } else {
+      // Body tap: a full page with the details and big buttons.
+      event.waitUntil(self.clients.openWindow('/approve.html#' + approvalQuery(approval)));
+    }
+    return;
+  }
   const sessionId = event.notification.data && event.notification.data.sessionId;
   event.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

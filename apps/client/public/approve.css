@@ -1,0 +1,13 @@
+/* @file approve.css — styles for approve.html (CSP allows only same-origin styles) */
+:root { color-scheme: dark; }
+body { margin: 0; background: #09090b; color: #f4f4f5; font: 16px/1.4 system-ui, sans-serif; }
+main { max-width: 380px; margin: 0 auto; padding: 48px 16px; text-align: center; }
+h1 { font-size: 24px; margin: 0 0 8px; }
+.muted { color: #a1a1aa; font-size: 14px; }
+.number { font-size: 72px; font-weight: 700; margin: 8px 0 4px; font-variant-numeric: tabular-nums; }
+.buttons { display: flex; gap: 12px; margin-top: 24px; }
+button { flex: 1; padding: 16px; border: 0; border-radius: 12px; font-size: 18px; font-weight: 600; }
+.approve { background: #f4f4f5; color: #09090b; }
+.deny { background: #27272a; color: #f4f4f5; }
+button:disabled { opacity: .4; }
+.result { margin-top: 24px; font-weight: 600; }

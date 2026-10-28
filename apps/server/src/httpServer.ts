@@ -77,7 +77,11 @@ export function createHttpHandler(
   getServerInfo?: () => ServerInfo,
   validateAuthToken?: (token: string) => boolean,
   getPinnedProfiles?: () => Array<{ id: string; name: string }>,
-  opts: { disableFiles?: boolean } = {},
+  opts: {
+    disableFiles?: boolean;
+    /** Phone's answer to a sign-in approval (tailnet door only). */
+    onApproval?: (id: string, secret: string, decision: 'approve' | 'deny') => boolean;
+  } = {},
 ): http.RequestListener {
   const securityHeaders = getSecurityHeaders();
 
@@ -125,6 +129,21 @@ export function createHttpHandler(
         res.writeHead(404);
         res.end('Not Found');
       }
+      return;
+    }
+
+    // Sign-in approval answer from the phone's service worker. Authorized by
+    // the one-time secret that only reached the phone (inside the encrypted
+    // push), so no bearer token — the SW can't read the app's storage.
+    if (urlPath === '/api/approval' && req.method === 'POST' && opts.onApproval) {
+      readJsonBody(req, 4096).then((body) => {
+        const b = body as { id?: unknown; secret?: unknown; decision?: unknown } | null;
+        const ok = !!b && typeof b.id === 'string' && typeof b.secret === 'string'
+          && (b.decision === 'approve' || b.decision === 'deny')
+          && opts.onApproval!(b.id, b.secret, b.decision);
+        res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok }));
+      });
       return;
     }
 
@@ -212,6 +231,23 @@ export function createHttpHandler(
       });
     });
   };
+}
+
+/** Small JSON body or null (too big, not JSON). Never rejects. */
+function readJsonBody(req: http.IncomingMessage, limit: number): Promise<unknown> {
+  return new Promise((resolve) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > limit) { req.destroy(); resolve(null); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); } catch { resolve(null); }
+    });
+    req.on('error', () => resolve(null));
+  });
 }
 
 const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB per file

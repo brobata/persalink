@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as os from 'os';
 import type { PasswordHash } from './auth';
 import { atomicWriteFileSync } from './atomicWrite';
+import { isValidSecret } from './totp';
 
 export interface SecurityConfig {
   tokenTtlDays: number | null;
@@ -49,6 +50,11 @@ export interface PublicListenerConfig {
   sessionTokenTtlHours: number;
   /** Upload + file browser refused on this door. */
   disableFiles: boolean;
+  /** Authenticator-app secret (base32), set by scripts/host/set-totp.mjs.
+   *  Password logins on this door also need this code or a phone approval. */
+  totpSecret?: string;
+  /** Sign the door's login out after this long with no typing. Default 30. */
+  idleMinutes?: number;
 }
 
 export interface ServerConfig {
@@ -77,6 +83,8 @@ export function resolvePublicListener(config: ServerConfig): PublicListenerConfi
     || p.allowedEmails.some((e) => typeof e !== 'string' || !e.includes('@'))) problems.push('allowedEmails');
   if (typeof p.sessionTokenTtlHours !== 'number' || p.sessionTokenTtlHours <= 0 || p.sessionTokenTtlHours > 24) problems.push('sessionTokenTtlHours (1-24)');
   if (typeof p.disableFiles !== 'boolean') problems.push('disableFiles');
+  if (p.totpSecret !== undefined && !isValidSecret(p.totpSecret)) problems.push('totpSecret');
+  if (p.idleMinutes !== undefined && (typeof p.idleMinutes !== 'number' || p.idleMinutes < 1 || p.idleMinutes > 720)) problems.push('idleMinutes (1-720)');
   if (problems.length) {
     throw new Error(`publicListener is enabled but invalid: ${problems.join(', ')} — fix ~/.persalink/config.json or set enabled:false`);
   }
