@@ -157,8 +157,8 @@ interface AppState {
   openServers: () => void;
   connect: () => void;
   disconnect: () => void;
-  /** End this browser's login everywhere: revoke it on the server, wipe local
-   *  state, and (public door) sign out of Cloudflare Access too. */
+  /** End this browser's PersaLink login: revoke it on the server and wipe
+   *  local state. Leaves the Cloudflare Access sign-in alone. */
   signOut: () => Promise<void>;
   authenticate: (password: string, tokenName?: string) => void;
   authenticateWithToken: () => void;
@@ -496,8 +496,10 @@ export const useAppStore = create<AppState>()(
         }
         get().disconnect();
         if (isPublicDoor) {
+          // PersaLink only — the Cloudflare sign-in is left to run out on its
+          // own (12h), so signing back in is just the PersaLink password.
           try { sessionStorage.clear(); } catch { /* storage blocked */ }
-          window.location.href = '/cdn-cgi/access/logout';
+          window.location.reload();
         }
       },
 
