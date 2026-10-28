@@ -70,7 +70,7 @@ interface AppState {
   authToken: string | null;
   authError: string | null;
   /** Public door: second steps the server offers after the password. */
-  secondFactor: { push: boolean; totp: boolean } | null;
+  secondFactor: { push: boolean; totp: boolean; codeOnly?: boolean } | null;
   /** Public door: waiting on the phone; the number to match. */
   approvalNumber: string | null;
 
@@ -520,7 +520,7 @@ export const useAppStore = create<AppState>()(
 
       authenticate: (password, tokenName, second) => {
         set({ authError: null, approvalNumber: null });
-        wsClient?.send({ type: 'auth', password, tokenName, ...second });
+        wsClient?.send({ type: 'auth', ...(password ? { password } : {}), tokenName, ...second });
       },
 
       authenticateWithToken: () => {

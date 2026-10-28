@@ -163,7 +163,9 @@ const RowsField = z.number().int().min(2).max(200).optional();
 
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   // Auth
-  z.object({ type: z.literal('auth'), password: z.string().min(1).max(256), tokenName: z.string().max(100).optional(),
+  // password is optional only for a code-only public door; the server
+  // refuses a missing one everywhere else.
+  z.object({ type: z.literal('auth'), password: z.string().min(1).max(256).optional(), tokenName: z.string().max(100).optional(),
     // Public door second step: an authenticator code, or ask the phone.
     totp: z.string().regex(/^\d{6}$/).optional(), approval: z.boolean().optional() }),
   z.object({ type: z.literal('auth.token'), token: z.string().min(1).max(512) }),
@@ -261,7 +263,7 @@ export type ServerMessage =
   | { type: 'auth.failed'; message: string; retryAfterMs?: number; permanentLock?: boolean }
   | { type: 'auth.required'; setupMode: boolean; protocolVersion?: number;
       /** Public door: the second steps available after the password. */
-      secondFactor?: { push: boolean; totp: boolean } }
+      secondFactor?: { push: boolean; totp: boolean; codeOnly?: boolean } }
   /** Public door: password OK, waiting for the phone. `number` is shown on
    *  both the login screen and the phone so the owner can match them. */
   | { type: 'auth.pending'; number: string; expiresInMs: number }

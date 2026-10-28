@@ -7,7 +7,10 @@
  *   Existing device logins are NOT revoked. `--public` sets a separate password
  *   for term.brobata.com only (safe to let a work browser save: it never
  *   unlocks the home devices, and that door still needs your phone).
- *   `--public --remove` goes back to the main password there. Restart afterwards:
+ *   `--public --remove` goes back to the main password there. `--public
+ *   --code-only` drops the password there entirely (Access email code +
+ *   authenticator code / phone approval are the login). `--code-only` alone
+ *   does the same over Tailscale (`--code-only --off` undoes it). Restart afterwards:
  *   `pm2 restart persalink`. Needs a built server (apps/server/dist).
  */
 import { createRequire } from 'node:module';
@@ -33,6 +36,23 @@ function ask(prompt) {
 }
 
 const isPublic = process.argv.includes('--public');
+if (!isPublic && process.argv.includes('--code-only')) {
+  const config = loadConfig();
+  if (process.argv.includes('--off')) {
+    delete config.security.codeOnly;
+    saveConfig(config);
+    console.log('At home PersaLink asks for the password again. Now run:  pm2 restart persalink');
+    process.exit(0);
+  }
+  if (!config.publicListener?.totpSecret) {
+    console.error('Set up the authenticator first (set-totp.mjs), or there is no way in. Nothing changed.');
+    process.exit(1);
+  }
+  config.security.codeOnly = true;
+  saveConfig(config);
+  console.log('At home PersaLink now asks only for the authenticator code (devices already signed in stay signed in). Now run:  pm2 restart persalink');
+  process.exit(0);
+}
 if (process.argv.includes('--remove') && !isPublic) {
   console.error('--remove only works with --public. Nothing changed.');
   process.exit(1);
@@ -40,7 +60,19 @@ if (process.argv.includes('--remove') && !isPublic) {
 if (isPublic) {
   const config = loadConfig();
   if (!config.publicListener) { console.error('The public door is not set up. Nothing changed.'); process.exit(1); }
+  if (process.argv.includes('--code-only')) {
+    if (!config.publicListener.totpSecret) {
+      console.error('Set up the authenticator first (set-totp.mjs), or there is no way in. Nothing changed.');
+      process.exit(1);
+    }
+    delete config.publicListener.passwordHash;
+    config.publicListener.codeOnly = true;
+    saveConfig(config);
+    console.log('term.brobata.com now asks only for the authenticator code. Now run:  pm2 restart persalink');
+    process.exit(0);
+  }
   if (process.argv.includes('--remove')) {
+    delete config.publicListener.codeOnly;
     delete config.publicListener.passwordHash;
     saveConfig(config);
     console.log('term.brobata.com uses the main password again. Now run:  pm2 restart persalink');
@@ -60,6 +92,7 @@ if (isPublic) {
     process.exit(1);
   }
   config.publicListener.passwordHash = await hashPassword(first);
+  delete config.publicListener.codeOnly; // a password again
 } else {
   const doorHash = config.publicListener?.passwordHash;
   if (doorHash && await verifyPassword(first, doorHash)) {

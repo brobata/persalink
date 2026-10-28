@@ -11,7 +11,10 @@ export function AuthScreen() {
   const codeReady = /^\d{6}$/.test(code);
   // A half-typed code must not silently turn into a phone request.
   const codePartial = code.length > 0 && !codeReady;
-  const canSubmit = !!password && !codePartial
+  // Code-only public door: no password at all, the code is the login.
+  // (Never in setup mode: that screen creates the password.)
+  const codeOnly = !!secondFactor?.codeOnly && !setupMode;
+  const canSubmit = (codeOnly || !!password) && !codePartial
     && (!secondFactor || codeReady || secondFactor.push || !secondFactor.totp);
   const handleSubmit = () => {
     if (!canSubmit) return;
@@ -45,12 +48,14 @@ export function AuthScreen() {
           <p className="text-zinc-500 text-sm">
             {setupMode
               ? 'Create a password for your server'
-              : 'Enter your server password'}
+              : codeOnly
+                ? 'Enter the code from your authenticator app'
+                : 'Enter your server password'}
           </p>
         </div>
 
         <div className="space-y-3">
-          <input
+          {!codeOnly && <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -60,7 +65,7 @@ export function AuthScreen() {
                        text-zinc-100 placeholder-zinc-600 text-center text-lg
                        focus:outline-none focus:border-zinc-600 focus:ring-1 focus:ring-zinc-600"
             autoFocus
-          />
+          />}
 
           {secondFactor?.totp && (
             <input
@@ -72,6 +77,7 @@ export function AuthScreen() {
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
               placeholder={secondFactor.push ? 'Authenticator code (or leave blank)' : 'Authenticator code'}
+              autoFocus={codeOnly}
               className="w-full px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-xl
                          text-zinc-100 placeholder-zinc-600 text-center text-lg tracking-widest
                          focus:outline-none focus:border-zinc-600 focus:ring-1 focus:ring-zinc-600"

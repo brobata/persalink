@@ -17,7 +17,7 @@ import { createHttpHandler, type ServerInfo } from '../httpServer';
 import { TokenStore, hashPassword, verifyPassword, validatePassword, needsRehash, type Door } from '../auth';
 import { createAccessVerifier, type AccessVerifier, type AccessIdentity } from '../accessJwt';
 import { ApprovalManager } from '../approvals';
-import { verifyCode } from '../totp';
+import { verifyCode, isUsedCode } from '../totp';
 import { RateLimiter } from '../rateLimiter';
 import { audit } from '../auditLog';
 import type { ClientMessage, ServerMessage, SessionInfo } from '@persalink/shared/protocol';
@@ -158,8 +158,23 @@ const pendingRevokes = new Map<string, ReturnType<typeof setTimeout>>();
 const PUBLIC_RECONNECT_GRACE_MS = Number(process.env.PERSALINK_PUBLIC_GRACE_MS) || 2 * 60_000;
 const PUBLIC_AUTH_TIMEOUT_MS = 90_000;
 
-function publicSecondFactors(): { push: boolean; totp: boolean } {
-  return { push: pushManager.hasSubscribers(), totp: !!publicDoor?.totpSecret };
+/** The authenticator secret, whether or not the public door is enabled
+ *  (tailnet code-only uses it too). */
+function totpSecret(): string | undefined {
+  return config.publicListener?.totpSecret;
+}
+
+/** Second steps on a door. Phone approval is internet-door only: on the
+ *  tailnet anything that reaches localhost could send the prompt, and one
+ *  stray tap would open a shell. */
+function publicSecondFactors(door: Door = 'public'): { push: boolean; totp: boolean; codeOnly: boolean } {
+  return { push: door === 'public' && pushManager.hasSubscribers(), totp: !!totpSecret(), codeOnly: isCodeOnly(door) };
+}
+
+/** Code-only login on this door: the authenticator code (or, on the
+ *  internet door, a phone approval) is the whole login. */
+function isCodeOnly(door: Door): boolean {
+  return door === 'public' ? !!publicDoor?.codeOnly : !!config.security.codeOnly;
 }
 
 /**
@@ -179,18 +194,22 @@ function schedulePublicRevoke(tokenId: string, reason: string): void {
 }
 
 /**
- * The door password is owned by scripts/host/set-password.mjs and may change
+ * The door password (and codeOnly) is owned by scripts/host/set-password.mjs and may change
  * on disk while this process runs on an older copy: mirror the disk value
  * (set, changed or removed) before writing, so a save here never undoes it.
  */
 function saveServerConfig(): void {
   try {
     const onDisk = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf-8'));
-    const diskHash = onDisk?.publicListener?.passwordHash;
+    const disk = onDisk?.publicListener;
     if (config.publicListener) {
-      if (diskHash) config.publicListener.passwordHash = diskHash;
+      if (disk?.passwordHash) config.publicListener.passwordHash = disk.passwordHash;
       else delete config.publicListener.passwordHash;
+      if (disk?.codeOnly === true) config.publicListener.codeOnly = true;
+      else delete config.publicListener.codeOnly;
     }
+    if (onDisk?.security?.codeOnly === true) config.security.codeOnly = true;
+    else delete config.security.codeOnly;
   } catch { /* unreadable: keep what we have */ }
   saveConfig(config);
 }
@@ -214,18 +233,24 @@ function endPublicLogin(tokenId: string, reason: string, code: number, message: 
  * passed; on false the caller has already been told why.
  */
 async function passSecondFactor(client: ConnectedClient, message: Extract<ClientMessage, { type: 'auth' }>): Promise<boolean> {
-  const factors = publicSecondFactors();
+  const factors = publicSecondFactors(client.door);
   if (awaitingApproval.has(client)) {
     send(client, { type: 'auth.failed', message: 'Already waiting for your phone' });
     return false;
   }
   if (message.totp) {
-    if (!factors.totp || !publicDoor?.totpSecret) {
+    const secret = totpSecret();
+    if (!secret) {
       send(client, { type: 'auth.failed', message: 'Authenticator codes are not set up on this server' });
       return false;
     }
-    const step = verifyCode(publicDoor.totpSecret, message.totp, Date.now(), lastTotpStep);
+    const step = verifyCode(secret, message.totp, Date.now(), lastTotpStep);
     if (step === null) {
+      // A real code that was just used isn't a guess: don't count it toward the lock.
+      if (isUsedCode(secret, message.totp, Date.now(), lastTotpStep)) {
+        send(client, { type: 'auth.failed', message: 'That code was just used — wait for the next one' });
+        return false;
+      }
       handleFailedAuth(client, 'password', 'Wrong or expired code');
       return false;
     }
@@ -484,6 +509,24 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       return;
     }
 
+    // Code-only public door: no password; the second step is the login.
+    // Only once the server has a password (never a setup path).
+    if (isCodeOnly(client.door) && config.passwordHash) {
+      if (!(await passSecondFactor(client, message))) {
+        if (!client.authenticated && client.ws.readyState === client.ws.OPEN) armAuthTimeout(client);
+        return;
+      }
+      if (client.authenticated) return;
+      rateLimiter.recordSuccess(client.ip);
+      completeAuth(client, message.tokenName);
+      return;
+    }
+    const password = message.password;
+    if (!password) {
+      send(client, { type: 'auth.failed', message: 'Enter your password' });
+      return;
+    }
+
     // Setup mode: first connection sets the password.
     if (!config.passwordHash && !settingUpPassword) {
       // Never through the public door, whatever allowRemoteSetup says: every
@@ -504,12 +547,12 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
 
       settingUpPassword = true;
       try {
-        const validationError = validatePassword(message.password);
+        const validationError = validatePassword(password);
         if (validationError) {
           send(client, { type: 'auth.failed', message: validationError });
           return;
         }
-        config.passwordHash = await hashPassword(message.password);
+        config.passwordHash = await hashPassword(password);
         saveServerConfig();
         audit('password_set', { ip: client.ip });
       } finally {
@@ -525,13 +568,13 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
     // Public door with its own password: only that one works there.
     const doorHash = client.door === 'public' ? publicDoor?.passwordHash : undefined;
     if (doorHash) {
-      if (!(await verifyPassword(message.password, doorHash))) {
+      if (!(await verifyPassword(password, doorHash))) {
         handleFailedAuth(client, 'password', 'Incorrect password');
         return;
       }
     } else if (config.passwordHash) {
       // Normal password verification
-      const valid = await verifyPassword(message.password, config.passwordHash);
+      const valid = await verifyPassword(password, config.passwordHash);
       if (!valid) {
         handleFailedAuth(client, 'password', 'Incorrect password');
         return;
@@ -541,7 +584,7 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       // effort — a failure here must not block a valid login.
       if (needsRehash(config.passwordHash)) {
         try {
-          config.passwordHash = await hashPassword(message.password);
+          config.passwordHash = await hashPassword(password);
           saveServerConfig();
           audit('password_set', { ip: client.ip });
         } catch (err) {
@@ -564,13 +607,17 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
     completeAuth(client, message.tokenName);
 
   } else if (message.type === 'auth.token') {
-    const rateResult = rateLimiter.check(client.ip);
-    if (!rateResult.allowed) {
-      sendRateLimited(client, rateResult);
-      return;
-    }
+    // A valid saved login always works: every tailnet device shares one IP
+    // (127.0.0.1 behind tailscale serve), so a lock earned by wrong
+    // passwords/codes must not sign out devices that already hold a login.
+    // Tokens are 256-bit, so the limiter only matters for bad ones.
     const stored = tokenStore.validateToken(message.token, client.door);
     if (!stored) {
+      const rateResult = rateLimiter.check(client.ip);
+      if (!rateResult.allowed) {
+        sendRateLimited(client, rateResult);
+        return;
+      }
       handleFailedAuth(client, 'token', 'Invalid or expired token');
       return;
     }
@@ -1381,7 +1428,7 @@ function setupWebSocket(server: http.Server, door: Door = 'tailnet', verifyAcces
       type: 'auth.required',
       setupMode: !config.passwordHash,
       protocolVersion: PROTOCOL_VERSION,
-      ...(door === 'public' ? { secondFactor: publicSecondFactors() } : {}),
+      ...(door === 'public' || isCodeOnly(door) ? { secondFactor: publicSecondFactors(door) } : {}),
     });
 
     ws.on('message', async (raw: Buffer | string) => {

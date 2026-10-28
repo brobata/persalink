@@ -11,6 +11,10 @@ import { atomicWriteFileSync } from './atomicWrite';
 import { isValidSecret } from './totp';
 
 export interface SecurityConfig {
+  /** Tailnet logins take the authenticator code (publicListener.totpSecret)
+   *  or a phone approval instead of the password (set-password.mjs
+   *  --code-only). Saved device logins are unaffected. */
+  codeOnly?: boolean;
   tokenTtlDays: number | null;
   allowedOrigins: string[];
   maxConnectionsPerIp: number;
@@ -59,6 +63,10 @@ export interface PublicListenerConfig {
    *  --public). When set, the main password is refused here, so a copy saved
    *  in a work browser never unlocks the home devices. */
   passwordHash?: PasswordHash;
+  /** No password on this door: the Access email code plus the authenticator
+   *  code / phone approval are the whole login (set-password.mjs --public
+   *  --code-only). Both factors live on the owner's phone. */
+  codeOnly?: boolean;
 }
 
 export interface ServerConfig {
@@ -88,6 +96,7 @@ export function resolvePublicListener(config: ServerConfig): PublicListenerConfi
   if (typeof p.sessionTokenTtlHours !== 'number' || p.sessionTokenTtlHours <= 0 || p.sessionTokenTtlHours > 24) problems.push('sessionTokenTtlHours (1-24)');
   if (typeof p.disableFiles !== 'boolean') problems.push('disableFiles');
   if (p.totpSecret !== undefined && !isValidSecret(p.totpSecret)) problems.push('totpSecret');
+  if (p.codeOnly !== undefined && typeof p.codeOnly !== 'boolean') problems.push('codeOnly');
   if (p.passwordHash !== undefined) {
     const h = p.passwordHash as Partial<PasswordHash> | null;
     const ok = !!h && typeof h === 'object' && h.algorithm === 'scrypt' && typeof h.hash === 'string'

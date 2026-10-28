@@ -75,6 +75,15 @@ export function verifyCode(secret: string, code: string, nowMs: number = Date.no
   return null;
 }
 
+/** True when the code is genuine but its step was already used (a replay, or
+ *  the same code typed on a second device inside its 30s): not a guess. */
+export function isUsedCode(secret: string, code: string, nowMs: number, lastStep: number): boolean {
+  if (!/^\d{6}$/.test(code) || lastStep < 0) return false;
+  const current = Math.floor(nowMs / 1000 / STEP_SECONDS);
+  return [current - 1, current, current + 1].some((step) => step <= lastStep
+    && crypto.timingSafeEqual(Buffer.from(codeAt(secret, step)), Buffer.from(code)));
+}
+
 export function otpauthUri(secret: string, account: string, issuer: string): string {
   const label = encodeURIComponent(`${issuer}:${account}`);
   return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`;

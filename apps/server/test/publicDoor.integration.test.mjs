@@ -27,22 +27,23 @@ const PASSWORD = 'door-test-pass-1';
 const TOTP_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
 const DOOR_PASSWORD = 'laptop-only-pass-3';
 const base = 20000 + Math.floor(Math.random() * 20000);
-const PORTS = { tailnet: base, public: base + 1, jwks: base + 2, setupTailnet: base + 3, setupPublic: base + 4, graceTailnet: base + 5, gracePublic: base + 6 };
+const PORTS = { tailnet: base, public: base + 1, jwks: base + 2, setupTailnet: base + 3, setupPublic: base + 4, graceTailnet: base + 5, gracePublic: base + 6, codeTailnet: base + 7, codePublic: base + 8 };
 const GRACE_MS = 1000;
 
 let key, jwksServer;
 const children = [];
 
-function writeConfig(dir, { port, publicPort, passwordHash, totpSecret, doorPasswordHash }) {
+function writeConfig(dir, { port, publicPort, passwordHash, totpSecret, doorPasswordHash, codeOnly, codeOnlyHome }) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     port, serverName: 'doortest', passwordHash: passwordHash ?? null,
-    security: { bindHost: '127.0.0.1' },
+    security: { bindHost: '127.0.0.1', ...(codeOnlyHome ? { codeOnly: true } : {}) },
     publicListener: {
       enabled: true, port: publicPort, accessTeamDomain: TEAM, accessAud: AUD,
       allowedEmails: [EMAIL], sessionTokenTtlHours: 12, disableFiles: true,
       ...(totpSecret ? { totpSecret } : {}),
       ...(doorPasswordHash ? { passwordHash: doorPasswordHash } : {}),
+      ...(codeOnly ? { codeOnly: true } : {}),
     },
     _version: 1,
   }));
@@ -83,6 +84,8 @@ before(async () => {
   await boot(path.join(root, 'setup'), PORTS.setupPublic);
   writeConfig(path.join(root, 'grace'), { port: PORTS.graceTailnet, publicPort: PORTS.gracePublic, passwordHash: await hashPassword(PASSWORD), totpSecret: TOTP_SECRET, doorPasswordHash: await hashPassword(DOOR_PASSWORD) });
   await boot(path.join(root, 'grace'), PORTS.gracePublic, { PERSALINK_PUBLIC_GRACE_MS: String(GRACE_MS) });
+  writeConfig(path.join(root, 'code'), { port: PORTS.codeTailnet, publicPort: PORTS.codePublic, passwordHash: await hashPassword(PASSWORD), totpSecret: TOTP_SECRET, codeOnly: true, codeOnlyHome: true });
+  await boot(path.join(root, 'code'), PORTS.codePublic);
 });
 
 after(() => {
@@ -193,7 +196,7 @@ test('a public password login needs a second step, and a code works once', async
   const h = { 'cf-access-jwt-assertion': await jwt() };
   const c = await connect(PORTS.public, h);
   const req = await c.next('auth.required');
-  assert.deepEqual(req.secondFactor, { push: false, totp: true });
+  assert.deepEqual(req.secondFactor, { push: false, totp: true, codeOnly: false });
   c.send({ type: 'auth', password: PASSWORD });
   assert.match((await c.next('auth.failed')).message, /second step/i);
   c.send({ type: 'auth', password: PASSWORD, approval: true }); // no phone subscribed
@@ -209,7 +212,7 @@ test('a public password login needs a second step, and a code works once', async
   const replay = await connect(PORTS.public, h);
   await replay.next('auth.required');
   replay.send({ type: 'auth', password: PASSWORD, totp: code });
-  assert.match((await replay.next('auth.failed')).message, /wrong or expired code/i);
+  assert.match((await replay.next('auth.failed')).message, /just used/i);
   replay.ws.close();
   ok.ws.close();
 });
@@ -218,6 +221,21 @@ test('the tailnet door never asks for a second step', async () => {
   const c = await connect(PORTS.tailnet);
   assert.equal((await c.next('auth.required')).secondFactor, undefined);
   c.ws.close();
+});
+
+test('without code-only, a missing password is refused on both doors', async () => {
+  const t = await connect(PORTS.tailnet);
+  await t.next('auth.required');
+  t.send({ type: 'auth' });
+  assert.match((await t.next('auth.failed')).message, /enter your password/i);
+  t.send({ type: 'auth', totp: codeAt(TOTP_SECRET, nowStep()) });
+  assert.match((await t.next('auth.failed')).message, /enter your password/i);
+  t.ws.close();
+  const p = await connect(PORTS.public, { 'cf-access-jwt-assertion': await jwt() });
+  await p.next('auth.required');
+  p.send({ type: 'auth', approval: true });
+  assert.match((await p.next('auth.failed')).message, /enter your password/i);
+  p.ws.close();
 });
 
 test('phone answers are accepted only on the tailnet door', async () => {
@@ -378,4 +396,34 @@ test('closing the last tab ends a public login unless a tab comes back in time',
   const late = await tabAgain();
   assert.match((await late.next('auth.failed')).message, /Invalid or expired/);
   late.ws.close();
+});
+
+test('a code-only public door logs in with just the authenticator code', async () => {
+  const h = { 'cf-access-jwt-assertion': await jwt() };
+  const c = await connect(PORTS.codePublic, h);
+  const req = await c.next('auth.required');
+  assert.equal(req.secondFactor.codeOnly, true);
+  c.send({ type: 'auth' }); // nothing at all
+  assert.match((await c.next('auth.failed')).message, /second step/i);
+  c.send({ type: 'auth', totp: codeAt(TOTP_SECRET, nowStep() + 5) });
+  assert.match((await c.next('auth.failed')).message, /wrong or expired code/i);
+  c.send({ type: 'auth', totp: codeAt(TOTP_SECRET, nowStep()) });
+  const ok = await c.next('auth.ok');
+  assert.equal(ok.door, 'public');
+  c.ws.close();
+
+  // Code-only at home too: the tailnet door takes the (next) code alone,
+  // and a password alone is no longer enough there.
+  const t = await connect(PORTS.codeTailnet);
+  const tReq = await t.next('auth.required');
+  assert.equal(tReq.secondFactor.codeOnly, true);
+  assert.equal(tReq.secondFactor.push, false, 'no phone-tap login at home');
+  t.send({ type: 'auth', password: PASSWORD });
+  assert.match((await t.next('auth.failed')).message, /second step/i);
+  // The code just used on the internet door: refused, but not as a guess
+  t.send({ type: 'auth', totp: codeAt(TOTP_SECRET, nowStep()) });
+  assert.match((await t.next('auth.failed')).message, /just used/i);
+  t.send({ type: 'auth', totp: codeAt(TOTP_SECRET, nowStep() + 1) });
+  assert.equal((await t.next('auth.ok')).door, 'tailnet');
+  t.ws.close();
 });
