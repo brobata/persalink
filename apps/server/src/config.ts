@@ -55,6 +55,10 @@ export interface PublicListenerConfig {
   totpSecret?: string;
   /** Sign the door's login out after this long with no typing. Default 30. */
   idleMinutes?: number;
+  /** Separate password for this door only (scripts/host/set-password.mjs
+   *  --public). When set, the main password is refused here, so a copy saved
+   *  in a work browser never unlocks the home devices. */
+  passwordHash?: PasswordHash;
 }
 
 export interface ServerConfig {
@@ -84,6 +88,13 @@ export function resolvePublicListener(config: ServerConfig): PublicListenerConfi
   if (typeof p.sessionTokenTtlHours !== 'number' || p.sessionTokenTtlHours <= 0 || p.sessionTokenTtlHours > 24) problems.push('sessionTokenTtlHours (1-24)');
   if (typeof p.disableFiles !== 'boolean') problems.push('disableFiles');
   if (p.totpSecret !== undefined && !isValidSecret(p.totpSecret)) problems.push('totpSecret');
+  if (p.passwordHash !== undefined) {
+    const h = p.passwordHash as Partial<PasswordHash> | null;
+    const ok = !!h && typeof h === 'object' && h.algorithm === 'scrypt' && typeof h.hash === 'string'
+      && typeof h.salt === 'string' && !!h.params
+      && ['N', 'r', 'p', 'keylen'].every((k) => typeof (h.params as Record<string, unknown>)[k] === 'number');
+    if (!ok) problems.push('passwordHash (run set-password.mjs --public again)');
+  }
   if (p.idleMinutes !== undefined && (typeof p.idleMinutes !== 'number' || p.idleMinutes < 1 || p.idleMinutes > 720)) problems.push('idleMinutes (1-720)');
   if (problems.length) {
     throw new Error(`publicListener is enabled but invalid: ${problems.join(', ')} — fix ~/.persalink/config.json or set enabled:false`);

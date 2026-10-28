@@ -9,7 +9,7 @@ import * as http from 'http';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { loadConfig, saveConfig, resolvePublicListener, type ServerConfig, type PublicListenerConfig } from '../config';
+import { loadConfig, saveConfig, resolvePublicListener, type ServerConfig, type PublicListenerConfig, CONFIG_DIR } from '../config';
 import { TmuxManager, type TmuxSessionBridge } from '../tmuxManager';
 import { ProfileManager } from '../profileManager';
 import { HealthChecker } from '../healthChecker';
@@ -176,6 +176,23 @@ function schedulePublicRevoke(tokenId: string, reason: string): void {
       audit('token_revoked', { tokenId, door: 'public', reason });
     }
   }, PUBLIC_RECONNECT_GRACE_MS));
+}
+
+/**
+ * The door password is owned by scripts/host/set-password.mjs and may change
+ * on disk while this process runs on an older copy: mirror the disk value
+ * (set, changed or removed) before writing, so a save here never undoes it.
+ */
+function saveServerConfig(): void {
+  try {
+    const onDisk = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf-8'));
+    const diskHash = onDisk?.publicListener?.passwordHash;
+    if (config.publicListener) {
+      if (diskHash) config.publicListener.passwordHash = diskHash;
+      else delete config.publicListener.passwordHash;
+    }
+  } catch { /* unreadable: keep what we have */ }
+  saveConfig(config);
 }
 
 /** Sign out a public login everywhere: revoke it and close its sockets. */
@@ -493,7 +510,7 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
           return;
         }
         config.passwordHash = await hashPassword(message.password);
-        saveConfig(config);
+        saveServerConfig();
         audit('password_set', { ip: client.ip });
       } finally {
         // Always clear the flag — a thrown saveConfig must not leave the
@@ -505,8 +522,15 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       return;
     }
 
-    // Normal password verification
-    if (config.passwordHash) {
+    // Public door with its own password: only that one works there.
+    const doorHash = client.door === 'public' ? publicDoor?.passwordHash : undefined;
+    if (doorHash) {
+      if (!(await verifyPassword(message.password, doorHash))) {
+        handleFailedAuth(client, 'password', 'Incorrect password');
+        return;
+      }
+    } else if (config.passwordHash) {
+      // Normal password verification
       const valid = await verifyPassword(message.password, config.passwordHash);
       if (!valid) {
         handleFailedAuth(client, 'password', 'Incorrect password');
@@ -518,7 +542,7 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       if (needsRehash(config.passwordHash)) {
         try {
           config.passwordHash = await hashPassword(message.password);
-          saveConfig(config);
+          saveServerConfig();
           audit('password_set', { ip: client.ip });
         } catch (err) {
           console.error('[auth] password rehash failed:', err);
@@ -1064,8 +1088,14 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
         send(client, { type: 'error', message: validationError });
         break;
       }
+      // The work-laptop password must never also unlock the home devices.
+      const doorHash = publicDoor?.passwordHash;
+      if (doorHash && await verifyPassword(message.newPassword, doorHash)) {
+        send(client, { type: 'error', message: 'That is your term.brobata.com password. Pick a different one.' });
+        break;
+      }
       config.passwordHash = await hashPassword(message.newPassword);
-      saveConfig(config);
+      saveServerConfig();
       tokenStore.revokeAll();
       const name = client.tokenName || client.ip;
       const { stored, plaintext } = tokenStore.createAccessToken(name, config.security.tokenTtlDays);

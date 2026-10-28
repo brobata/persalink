@@ -25,6 +25,7 @@ const AUD = 'a'.repeat(64);
 const EMAIL = 'owner@example.com';
 const PASSWORD = 'door-test-pass-1';
 const TOTP_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+const DOOR_PASSWORD = 'laptop-only-pass-3';
 const base = 20000 + Math.floor(Math.random() * 20000);
 const PORTS = { tailnet: base, public: base + 1, jwks: base + 2, setupTailnet: base + 3, setupPublic: base + 4, graceTailnet: base + 5, gracePublic: base + 6 };
 const GRACE_MS = 1000;
@@ -32,7 +33,7 @@ const GRACE_MS = 1000;
 let key, jwksServer;
 const children = [];
 
-function writeConfig(dir, { port, publicPort, passwordHash, totpSecret }) {
+function writeConfig(dir, { port, publicPort, passwordHash, totpSecret, doorPasswordHash }) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     port, serverName: 'doortest', passwordHash: passwordHash ?? null,
@@ -41,6 +42,7 @@ function writeConfig(dir, { port, publicPort, passwordHash, totpSecret }) {
       enabled: true, port: publicPort, accessTeamDomain: TEAM, accessAud: AUD,
       allowedEmails: [EMAIL], sessionTokenTtlHours: 12, disableFiles: true,
       ...(totpSecret ? { totpSecret } : {}),
+      ...(doorPasswordHash ? { passwordHash: doorPasswordHash } : {}),
     },
     _version: 1,
   }));
@@ -79,7 +81,7 @@ before(async () => {
   writeConfig(path.join(root, 'setup'), { port: PORTS.setupTailnet, publicPort: PORTS.setupPublic });
   await boot(path.join(root, 'main'), PORTS.public);
   await boot(path.join(root, 'setup'), PORTS.setupPublic);
-  writeConfig(path.join(root, 'grace'), { port: PORTS.graceTailnet, publicPort: PORTS.gracePublic, passwordHash: await hashPassword(PASSWORD), totpSecret: TOTP_SECRET });
+  writeConfig(path.join(root, 'grace'), { port: PORTS.graceTailnet, publicPort: PORTS.gracePublic, passwordHash: await hashPassword(PASSWORD), totpSecret: TOTP_SECRET, doorPasswordHash: await hashPassword(DOOR_PASSWORD) });
   await boot(path.join(root, 'grace'), PORTS.gracePublic, { PERSALINK_PUBLIC_GRACE_MS: String(GRACE_MS) });
 });
 
@@ -325,9 +327,33 @@ test('sign out revokes the login it was made with', async () => {
   again.ws.close();
 });
 
+test('a door-only password replaces the main one on the public door only', async () => {
+  const h = { 'cf-access-jwt-assertion': await jwt() };
+  const c = await connect(PORTS.gracePublic, h);
+  await c.next('auth.required');
+  c.send({ type: 'auth', password: PASSWORD, totp: '000000' });
+  assert.match((await c.next('auth.failed')).message, /Incorrect password/);
+  c.ws.close();
+  // The tailnet door still takes the main password, and not the door one.
+  const t = await login(PORTS.graceTailnet);
+  assert.equal(t.ok.door, 'tailnet');
+  // ...and the home password can't be changed to the laptop one.
+  t.send({ type: 'password.change', currentPassword: PASSWORD, newPassword: DOOR_PASSWORD });
+  assert.match((await t.next('error')).message, /term\.brobata\.com password/);
+  t.ws.close();
+  const t2 = await connect(PORTS.graceTailnet);
+  await t2.next('auth.required');
+  t2.send({ type: 'auth', password: DOOR_PASSWORD });
+  assert.match((await t2.next('auth.failed')).message, /Incorrect password/);
+  t2.ws.close();
+});
+
 test('closing the last tab ends a public login unless a tab comes back in time', async () => {
   const h = { 'cf-access-jwt-assertion': await jwt() };
-  const first = await login(PORTS.gracePublic, h, { totp: codeAt(TOTP_SECRET, nowStep()) });
+  const c0 = await connect(PORTS.gracePublic, h);
+  await c0.next('auth.required');
+  c0.send({ type: 'auth', password: DOOR_PASSWORD, totp: codeAt(TOTP_SECRET, nowStep()) });
+  const first = { ...c0, ok: await c0.next('auth.ok') };
   const token = first.ok.token;
   const tabAgain = async () => {
     const c = await connect(PORTS.gracePublic, h);
