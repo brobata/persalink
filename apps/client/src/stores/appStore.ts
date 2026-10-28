@@ -5,7 +5,7 @@
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   SessionInfo, Profile, HealthStatus, ServerMessage, TmuxWindowInfo, Snippet,
 } from '@persalink/shared/protocol';
@@ -18,6 +18,7 @@ import {
 import { getInitialDims } from '../lib/terminalDims';
 import { pageHost, schemesFor } from '../lib/platform';
 import { useLayoutStore } from './layoutStore';
+import { isPublicDoor } from '../lib/door';
 import { promptOpen } from '../lib/linkOpen';
 
 export type ClaudeReplyMessage = Extract<ServerMessage, { type: 'claude.reply' }>;
@@ -770,7 +771,7 @@ export const useAppStore = create<AppState>()(
 
       openFiles: () => {
         const v = get().view;
-        if (v === 'locked' || v === 'connect' || v === 'auth') return;
+        if (v === 'locked' || v === 'connect' || v === 'auth' || isPublicDoor) return;
         set({ view: 'files' });
       },
 
@@ -816,6 +817,9 @@ export const useAppStore = create<AppState>()(
     {
       name: 'persalink-storage',
       version: 1,
+      // Public door (a work/borrowed computer): keep the login only until the
+      // browser closes. Nothing persists on that machine's disk.
+      storage: createJSONStorage(() => (isPublicDoor ? sessionStorage : localStorage)),
       // v0 → v1: lift the scalar serverUrl/authToken into the server registry.
       // useOrigin is true whenever a page host exists because that IS the old
       // behavior — connect() always preferred window.location.host, whatever
@@ -879,6 +883,17 @@ function handleServerMessage(
       break;
 
     case 'auth.ok': {
+      // The server says this is the public door but the page didn't know
+      // (pl_door cookie blocked/cleared, or an offline shell). Never let the
+      // login reach localStorage on that machine: mark the door, wipe, reload.
+      if (msg.door === 'public' && !isPublicDoor) {
+        try {
+          document.cookie = 'pl_door=public; Path=/; Secure; SameSite=Strict';
+          localStorage.removeItem('persalink-storage');
+        } catch { /* storage blocked — nothing persisted either */ }
+        window.location.reload();
+        return;
+      }
       // On a RECONNECT the user is already past auth (in a terminal or on home)
       // — forcing view:'home' yanked them out of their session every time the
       // socket blipped. Only land on home from a pre-auth view (first login).
@@ -905,7 +920,7 @@ function handleServerMessage(
         set({ authToken: msg.token });
         // Save token to device keychain for biometric unlock
         const { deviceName, biometricAvailable } = get();
-        if (biometricAvailable) {
+        if (biometricAvailable && !isPublicDoor) {
           saveCredentials(msg.token, deviceName).catch(() => {});
         }
       }

@@ -1,6 +1,8 @@
 # Public Remote Access (no VPN) — `term.brobata.com`
 
-**Status:** PLANNED, TABLED 2026-09-23 — owner is thinking it over. Nothing built.
+**Status:** BUILT 2026-10-28 — brobata.com on Cloudflare, Access app "SpokeRemote" (team `brobata.cloudflareaccess.com`) on term.brobata.com + files.brobata.com, tunnel `persalink-term` under pm2 (`cloudflared-term`), public door on 127.0.0.1:9878. files.brobata.com → File-Share (:4040), owner request; its own password is the second lock.
+
+> Note: `disableFiles` is friction, not a security boundary — an authenticated public session is still a shell and can read any file. The real boundaries are Access + the PersaLink password + short door-bound logins.
 **Origin:** sketch archplan 2026-09-23 ("access PersaLink from my work computer —
 can't install a VPN, would go to a website and log in").
 **Decided so far:** host it on the **brobata.com** domain behind a secure login.

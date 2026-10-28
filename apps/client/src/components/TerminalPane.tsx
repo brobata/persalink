@@ -20,6 +20,7 @@ import { useVoiceInput } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
+import { isPublicDoor } from '../lib/door';
 import { cleanTerminalCopy } from '@persalink/shared/cleanCopy';
 import { openExternal, promptOpen } from '../lib/linkOpen';
 import { ClaudeReplyPanel } from './ClaudeReplyPanel';
@@ -937,6 +938,7 @@ export function TerminalPane({
             </button>
             <button
               onClick={() => fileInputRef.current?.click()}
+              hidden={isPublicDoor}
               disabled={uploading}
               className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
               title="Upload file"

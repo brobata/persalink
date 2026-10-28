@@ -77,6 +77,7 @@ export function createHttpHandler(
   getServerInfo?: () => ServerInfo,
   validateAuthToken?: (token: string) => boolean,
   getPinnedProfiles?: () => Array<{ id: string; name: string }>,
+  opts: { disableFiles?: boolean } = {},
 ): http.RequestListener {
   const securityHeaders = getSecurityHeaders();
 
@@ -124,6 +125,13 @@ export function createHttpHandler(
         res.writeHead(404);
         res.end('Not Found');
       }
+      return;
+    }
+
+    // Public door with files off: refuse before any auth or body parsing.
+    if (opts.disableFiles && (urlPath === '/api/upload' || urlPath.startsWith('/api/files/'))) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'File access is disabled on this connection' }));
       return;
     }
 

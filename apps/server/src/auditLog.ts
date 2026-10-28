@@ -36,10 +36,18 @@ export type AuditEvent =
   | 'snippet_deleted'
   | 'exec_run'
   | 'file_download'
-  | 'ws_rejected_per_ip_cap';
+  | 'ws_rejected_per_ip_cap'
+  | 'setup_rejected_public'
+  | 'public_ws_rejected'
+  | 'public_http_rejected';
 
 interface AuditFields {
   ip?: string;
+  /** 'tailnet' | 'public' — which listener the event came through. */
+  door?: string;
+  /** Cloudflare Access identity (public door). */
+  email?: string | null;
+  path?: string;
   token_name?: string;
   token_id?: string;
   tokenName?: string;

@@ -249,7 +249,11 @@ export const PROTOCOL_VERSION = 1;
 // promote to schemas the same way.
 export type ServerMessage =
   // Auth
-  | { type: 'auth.ok'; serverName: string; setupMode: boolean; token?: string; protocolVersion?: number }
+  | { type: 'auth.ok'; serverName: string; setupMode: boolean; token?: string; protocolVersion?: number;
+      /** Which listener this connection came through. 'public' = the
+       *  internet-facing door behind Cloudflare Access: keep the token out of
+       *  persistent storage and hide file surfaces when disableFiles. */
+      door?: 'tailnet' | 'public'; disableFiles?: boolean }
   | { type: 'auth.failed'; message: string; retryAfterMs?: number; permanentLock?: boolean }
   | { type: 'auth.required'; setupMode: boolean; protocolVersion?: number }
   // Token management

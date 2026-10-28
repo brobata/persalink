@@ -33,13 +33,54 @@ export interface SecurityConfig {
   tokenIdleDays: number | null;
 }
 
+/**
+ * The "public door": a second, loopback-only listener that a Cloudflare
+ * Tunnel forwards to, behind Cloudflare Access. Every request must carry a
+ * valid Access JWT; logins made through it are short-lived and can't be
+ * used on (or replayed from) the tailnet door. Null/absent = off.
+ */
+export interface PublicListenerConfig {
+  enabled: boolean;
+  /** Always bound to 127.0.0.1. */
+  port: number;
+  accessTeamDomain: string;
+  accessAud: string;
+  allowedEmails: string[];
+  sessionTokenTtlHours: number;
+  /** Upload + file browser refused on this door. */
+  disableFiles: boolean;
+}
+
 export interface ServerConfig {
   passwordHash: PasswordHash | null;
   port: number;
   serverName: string;
   defaultShell: string | null;
   security: SecurityConfig;
+  publicListener?: PublicListenerConfig | null;
   _version: number;
+}
+
+/**
+ * Returns the public-door config if it is enabled AND complete, null if it is
+ * off. Throws on an enabled-but-incomplete block: the door must fail closed,
+ * never come up half-configured.
+ */
+export function resolvePublicListener(config: ServerConfig): PublicListenerConfig | null {
+  const p = config.publicListener;
+  if (!p || !p.enabled) return null;
+  const problems: string[] = [];
+  if (!Number.isInteger(p.port) || p.port < 1 || p.port > 65535 || p.port === config.port) problems.push('port');
+  if (!p.accessTeamDomain || !/^[a-z0-9.-]+$/i.test(p.accessTeamDomain)) problems.push('accessTeamDomain');
+  if (!p.accessAud || !/^[a-f0-9]{32,}$/i.test(p.accessAud)) problems.push('accessAud');
+  if (!Array.isArray(p.allowedEmails) || p.allowedEmails.length === 0
+    || p.allowedEmails.some((e) => typeof e !== 'string' || !e.includes('@'))) problems.push('allowedEmails');
+  if (typeof p.sessionTokenTtlHours !== 'number' || p.sessionTokenTtlHours <= 0 || p.sessionTokenTtlHours > 24) problems.push('sessionTokenTtlHours (1-24)');
+  if (typeof p.disableFiles !== 'boolean') problems.push('disableFiles');
+  if (problems.length) {
+    throw new Error(`publicListener is enabled but invalid: ${problems.join(', ')} — fix ~/.persalink/config.json or set enabled:false`);
+  }
+  return p;
 }
 
 export const CONFIG_DIR = process.env.PERSALINK_CONFIG_DIR || path.join(os.homedir(), '.persalink');

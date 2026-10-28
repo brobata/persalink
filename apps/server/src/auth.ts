@@ -133,6 +133,9 @@ export function hashToken(plaintext: string): string {
 // Token Store (file-backed)
 // ============================================================================
 
+/** Which listener minted a token. Absent on disk = 'tailnet' (pre-door tokens). */
+export type Door = 'tailnet' | 'public';
+
 export interface StoredToken {
   id: string;
   name: string;
@@ -140,6 +143,7 @@ export interface StoredToken {
   createdAt: string;
   lastUsedAt: string;
   expiresAt: string | null;
+  door?: Door;
 }
 
 const CONFIG_DIR = process.env.PERSALINK_CONFIG_DIR || path.join(os.homedir(), '.persalink');
@@ -211,10 +215,16 @@ export class TokenStore {
     throw new Error(`tokens.json had unexpected shape (saved aside as ${aside})`);
   }
 
-  validateToken(plaintext: string): StoredToken | null {
+  /**
+   * A token only works on the door that minted it: a long-lived tailnet token
+   * left on some device can't be replayed through the public door, and a
+   * short public one can't be carried back onto the tailnet.
+   */
+  validateToken(plaintext: string, door: Door = 'tailnet'): StoredToken | null {
     const tokenHash = hashToken(plaintext);
     for (const token of this.tokens) {
       if (token.tokenHash !== tokenHash) continue;
+      if ((token.door ?? 'tailnet') !== door) return null;
       return this.isDead(token, new Date()) ? null : token;
     }
     return null;
@@ -250,8 +260,8 @@ export class TokenStore {
   }
 
   list(): Omit<StoredToken, 'tokenHash'>[] {
-    return this.tokens.map(({ id, name, createdAt, lastUsedAt, expiresAt }) => ({
-      id, name, createdAt, lastUsedAt, expiresAt,
+    return this.tokens.map(({ id, name, createdAt, lastUsedAt, expiresAt, door }) => ({
+      id, name, createdAt, lastUsedAt, expiresAt, door,
     }));
   }
 
@@ -274,6 +284,15 @@ export class TokenStore {
   createAccessToken(name: string, ttlDays?: number | null): { stored: StoredToken; plaintext: string } {
     const MAX_TTL_DAYS = 365;
     const effectiveTtl = ttlDays != null ? Math.min(ttlDays, MAX_TTL_DAYS) : MAX_TTL_DAYS;
+    return this.mint(name, effectiveTtl * DAY_MS, 'tailnet');
+  }
+
+  /** Short-lived login for the public door (hours, not days). */
+  createPublicToken(name: string, ttlHours: number): { stored: StoredToken; plaintext: string } {
+    return this.mint(name, Math.min(ttlHours, 24) * 60 * 60 * 1000, 'public');
+  }
+
+  private mint(name: string, ttlMs: number, door: Door): { stored: StoredToken; plaintext: string } {
     const { plaintext, hash } = generateToken();
     const now = new Date();
     const stored: StoredToken = {
@@ -282,7 +301,8 @@ export class TokenStore {
       tokenHash: hash,
       createdAt: now.toISOString(),
       lastUsedAt: now.toISOString(),
-      expiresAt: new Date(now.getTime() + effectiveTtl * DAY_MS).toISOString(),
+      expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+      ...(door === 'public' ? { door } : {}),
     };
     this.add(stored);
     return { stored, plaintext };

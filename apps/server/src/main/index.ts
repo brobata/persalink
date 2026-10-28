@@ -9,12 +9,13 @@ import * as http from 'http';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { loadConfig, saveConfig, type ServerConfig } from '../config';
+import { loadConfig, saveConfig, resolvePublicListener, type ServerConfig, type PublicListenerConfig } from '../config';
 import { TmuxManager, type TmuxSessionBridge } from '../tmuxManager';
 import { ProfileManager } from '../profileManager';
 import { HealthChecker } from '../healthChecker';
 import { createHttpHandler, type ServerInfo } from '../httpServer';
-import { TokenStore, hashPassword, verifyPassword, validatePassword, needsRehash } from '../auth';
+import { TokenStore, hashPassword, verifyPassword, validatePassword, needsRehash, type Door } from '../auth';
+import { createAccessVerifier, type AccessVerifier, type AccessIdentity } from '../accessJwt';
 import { RateLimiter } from '../rateLimiter';
 import { audit } from '../auditLog';
 import type { ClientMessage, ServerMessage, SessionInfo } from '@persalink/shared/protocol';
@@ -54,6 +55,14 @@ interface ConnectedClient {
    *  leaving tmux at a stale size until the next viewport change. Stashing it
    *  lets the attach flow apply the freshest size once the bridge exists. */
   lastResize: { cols: number; rows: number } | null;
+  /** Listener this socket arrived on (see PublicListenerConfig). */
+  door: Door;
+  /** Cloudflare Access identity — public door only. */
+  accessEmail: string | null;
+  /** Public door: Access session expiry (epoch ms) from the upgrade JWT. */
+  accessExpiresAt: number | null;
+  /** Public door: closes the socket when the Access session or login ends. */
+  expiryTimer: ReturnType<typeof setTimeout> | null;
 }
 
 // SGR mouse wheel-up report: ESC [ < 64 ; col ; row M. This is what the client
@@ -132,6 +141,8 @@ const previewCache = new Map<string, string>();
 const lastClassifiedActivity = new Map<string, number>();
 
 let linkBridge: LinkBridge | null = null;
+/** Non-null when the public door is enabled (see resolvePublicListener). */
+let publicDoor: PublicListenerConfig | null = null;
 
 /** Show a link-open prompt on whoever is viewing the session that asked.
  *  Nobody attached (or the request came from outside a pl- session) → every
@@ -170,7 +181,13 @@ let settingUpPassword = false;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function resolveClientIp(req: http.IncomingMessage): string {
+function resolveClientIp(req: http.IncomingMessage, door: Door = 'tailnet'): string {
+  if (door === 'public') {
+    // Set by Cloudflare at the edge; this listener is loopback-only and
+    // JWT-gated, so the only way in is through the tunnel.
+    const cf = req.headers['cf-connecting-ip'];
+    if (typeof cf === 'string' && cf) return cf;
+  }
   if (config.security.trustProxy) {
     // Assumes exactly ONE trusted proxy hop (tailscale serve). Right-most hop =
     // the address that proxy appended. A second local hop would make this
@@ -305,6 +322,14 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
 
     // Setup mode: first connection sets the password.
     if (!config.passwordHash && !settingUpPassword) {
+      // Never through the public door, whatever allowRemoteSetup says: every
+      // tunnel connection arrives from 127.0.0.1 and would pass the
+      // localhost check below.
+      if (client.door === 'public') {
+        audit('setup_rejected_public', { ip: client.ip, email: client.accessEmail });
+        send(client, { type: 'auth.failed', message: 'This server has no password set. Set it up from the server itself.' });
+        return;
+      }
       // Default policy: only localhost can claim the password. Without this,
       // the first attacker to reach an unconfigured server takes ownership.
       if (!config.security.allowRemoteSetup && !isLocalhostIp(client.ip)) {
@@ -363,7 +388,7 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
       sendRateLimited(client, rateResult);
       return;
     }
-    const stored = tokenStore.validateToken(message.token);
+    const stored = tokenStore.validateToken(message.token, client.door);
     if (!stored) {
       handleFailedAuth(client, 'token', 'Invalid or expired token');
       return;
@@ -371,11 +396,11 @@ async function handleAuth(client: ConnectedClient, message: ClientMessage): Prom
     rateLimiter.recordSuccess(client.ip);
     tokenStore.touch(stored.tokenHash);
     client.tokenName = stored.name;
-    completeAuth(client, stored.name, true);
+    completeAuth(client, stored.name, true, stored.expiresAt);
   }
 }
 
-function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCreate?: boolean): void {
+function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCreate?: boolean, tokenExpiresAt?: string | null): void {
   client.authenticated = true;
   if (client.authTimeout) {
     clearTimeout(client.authTimeout);
@@ -383,15 +408,34 @@ function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCrea
   }
   client.tokenName = tokenName || client.ip;
 
+  const isPublic = client.door === 'public' && publicDoor !== null;
   let token: string | undefined;
   if (!skipTokenCreate) {
     const name = tokenName || client.ip;
-    const { stored, plaintext } = tokenStore.createAccessToken(name, config.security.tokenTtlDays);
+    const { stored, plaintext } = isPublic
+      ? tokenStore.createPublicToken(`${name} (public)`, publicDoor!.sessionTokenTtlHours)
+      : tokenStore.createAccessToken(name, config.security.tokenTtlDays);
     token = plaintext;
-    audit('token_created', { ip: client.ip, name: stored.name, tokenId: stored.id });
+    tokenExpiresAt = stored.expiresAt;
+    audit('token_created', { ip: client.ip, name: stored.name, tokenId: stored.id, door: client.door });
   }
 
-  audit('auth_success', { ip: client.ip, tokenName: client.tokenName });
+  audit('auth_success', { ip: client.ip, tokenName: client.tokenName, door: client.door, email: client.accessEmail });
+
+  // A public socket must not outlive the Access session or its own login —
+  // otherwise a tab left open on a work PC is a shell forever. The client's
+  // "Sign in again" handles the reconnect.
+  if (client.door === 'public') {
+    const ends = [client.accessExpiresAt, tokenExpiresAt ? new Date(tokenExpiresAt).getTime() : null]
+      .filter((t): t is number => typeof t === 'number' && Number.isFinite(t));
+    const deadline = ends.length ? Math.min(...ends) : Date.now();
+    // setTimeout overflows past ~24.8 days; public sessions are hours.
+    const delay = Math.min(Math.max(deadline - Date.now(), 0), 2 ** 31 - 1);
+    client.expiryTimer = setTimeout(() => {
+      send(client, { type: 'auth.failed', message: 'Session expired — sign in again' });
+      client.ws.close(4001, 'Session expired');
+    }, delay);
+  }
 
   send(client, {
     type: 'auth.ok',
@@ -399,6 +443,8 @@ function completeAuth(client: ConnectedClient, tokenName?: string, skipTokenCrea
     setupMode: false,
     token,
     protocolVersion: PROTOCOL_VERSION,
+    door: client.door,
+    disableFiles: isPublic ? publicDoor!.disableFiles : false,
   });
 
   // Send current state
@@ -793,7 +839,10 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
 
     // ---- Token management ----
     case 'token.list': {
-      const tokens = tokenStore.list().map(t => ({
+      // The public door only sees its own logins, never the owner's devices.
+      const tokens = tokenStore.list()
+        .filter((t) => client.door !== 'public' || t.door === 'public')
+        .map(t => ({
         id: t.id, name: t.name, createdAt: t.createdAt,
         lastUsedAt: t.lastUsedAt, expiresAt: t.expiresAt,
       }));
@@ -802,6 +851,11 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     }
 
     case 'token.create': {
+      // Long-lived device tokens are minted from trusted devices only.
+      if (client.door === 'public') {
+        send(client, { type: 'error', message: 'Device tokens can only be created over the private connection', op: 'token.create' });
+        break;
+      }
       const name = (message.name || '').slice(0, 100) || `Token (${client.ip})`;
       const { stored, plaintext } = tokenStore.createAccessToken(name, message.ttlDays);
       send(client, {
@@ -813,6 +867,11 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     }
 
     case 'token.revoke': {
+      const target = tokenStore.list().find((t) => t.id === message.tokenId);
+      if (client.door === 'public' && target?.door !== 'public') {
+        send(client, { type: 'error', message: 'Device logins can only be managed over the private connection', op: 'token.revoke' });
+        break;
+      }
       const revoked = tokenStore.revoke(message.tokenId);
       if (revoked) {
         send(client, { type: 'token.revoked', tokenId: message.tokenId });
@@ -823,6 +882,11 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
 
     // ---- Password management ----
     case 'password.change': {
+      // Changing it logs out every device — never from the internet-facing door.
+      if (client.door === 'public') {
+        send(client, { type: 'error', message: 'The password can only be changed over the private connection', op: 'password.change' });
+        break;
+      }
       if (!config.passwordHash) {
         send(client, { type: 'error', message: 'No password set' });
         break;
@@ -861,6 +925,11 @@ async function handleMessage(client: ConnectedClient, message: ClientMessage): P
     }
 
     case 'push.subscribe': {
+      // Don't register a borrowed/work browser for notifications.
+      if (client.door === 'public') {
+        send(client, { type: 'error', message: 'Notifications are not available on this connection', op: 'push.subscribe' });
+        break;
+      }
       pushManager.subscribe({ ...message.subscription, events: message.events });
       break;
     }
@@ -1009,12 +1078,15 @@ async function attachToSession(
 // WebSocket server
 // ---------------------------------------------------------------------------
 
-function setupWebSocket(server: http.Server): void {
+// Identity verified during the public-door upgrade, read back in 'connection'.
+const accessIdentityByReq = new WeakMap<http.IncomingMessage, AccessIdentity>();
+
+function setupWebSocket(server: http.Server, door: Door = 'tailnet', verifyAccess?: AccessVerifier): void {
   const wss = new WebSocketServer({
     server,
     verifyClient: (info, cb) => {
       const req = info.req;
-      const ip = resolveClientIp(req);
+      const ip = resolveClientIp(req, door);
 
       // Origin allowlist — empty list means same-origin only (the default).
       // Without this, a malicious LAN page can hijack a saved-token session
@@ -1044,12 +1116,27 @@ function setupWebSocket(server: http.Server): void {
         return;
       }
 
+      if (door === 'public') {
+        if (!verifyAccess) { cb(false, 403, 'Forbidden'); return; }
+        const jwt = req.headers['cf-access-jwt-assertion'];
+        verifyAccess(typeof jwt === 'string' ? jwt : undefined).then((result) => {
+          if ('reason' in result) {
+            audit('public_ws_rejected', { ip, reason: result.reason });
+            cb(false, 403, 'Forbidden');
+            return;
+          }
+          accessIdentityByReq.set(req, result.identity);
+          cb(true);
+        }, () => cb(false, 403, 'Forbidden'));
+        return;
+      }
+
       cb(true);
     },
   });
 
   wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
-    const ip = resolveClientIp(req);
+    const ip = resolveClientIp(req, door);
 
     const clientId = crypto.randomUUID();
     const client: ConnectedClient = {
@@ -1063,10 +1150,14 @@ function setupWebSocket(server: http.Server): void {
       attachedSession: null,
       scrolledBack: false,
       lastResize: null,
+      door,
+      accessEmail: accessIdentityByReq.get(req)?.email ?? null,
+      accessExpiresAt: accessIdentityByReq.get(req)?.expiresAt ?? null,
+      expiryTimer: null,
     };
 
     clients.set(clientId, client);
-    audit('ws_connected', { ip, clientId });
+    audit('ws_connected', { ip, clientId, door, email: client.accessEmail });
 
     // Auth timeout: 30 seconds
     client.authTimeout = setTimeout(() => {
@@ -1136,6 +1227,7 @@ function setupWebSocket(server: http.Server): void {
 
     ws.on('close', () => {
       if (client.authTimeout) clearTimeout(client.authTimeout);
+      if (client.expiryTimer) clearTimeout(client.expiryTimer);
       detachClient(client);
       clients.delete(clientId);
       audit('ws_disconnected', { ip, clientId });
@@ -1338,23 +1430,55 @@ async function main(): Promise<void> {
     activeSessions: 0, // Will be populated async
   });
 
-  const validateAuthToken = (token: string): boolean => {
-    const stored = tokenStore.validateToken(token);
+  const tokenValidator = (door: Door) => (token: string): boolean => {
+    const stored = tokenStore.validateToken(token, door);
     // HTTP use (uploads, file browser) counts as activity for idle expiry.
     if (stored) tokenStore.touch(stored.tokenHash);
     return stored !== null;
   };
+  const pinnedProfiles = () => profileManager.list().filter((p) => p.pinned).map((p) => ({ id: p.id, name: p.name }));
 
   const server = http.createServer(
-    createHttpHandler(
-      staticDir,
-      getServerInfo,
-      validateAuthToken,
-      () => profileManager.list().filter((p) => p.pinned).map((p) => ({ id: p.id, name: p.name })),
-    ),
+    createHttpHandler(staticDir, getServerInfo, tokenValidator('tailnet'), pinnedProfiles),
   );
 
   setupWebSocket(server);
+
+  // Public door — throws (refusing to boot) if enabled but misconfigured.
+  publicDoor = resolvePublicListener(config);
+  if (publicDoor) {
+    const door = publicDoor;
+    const verifyAccess = createAccessVerifier({
+      teamDomain: door.accessTeamDomain,
+      aud: door.accessAud,
+      allowedEmails: door.allowedEmails,
+    });
+    const inner = createHttpHandler(staticDir, getServerInfo, tokenValidator('public'), pinnedProfiles, {
+      disableFiles: door.disableFiles,
+    });
+    const publicServer = http.createServer((req, res) => {
+      const jwt = req.headers['cf-access-jwt-assertion'];
+      verifyAccess(typeof jwt === 'string' ? jwt : undefined).then((result) => {
+        if ('reason' in result) {
+          audit('public_http_rejected', { ip: resolveClientIp(req, 'public'), reason: result.reason, path: (req.url || '').split('?')[0] });
+          res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+          res.end('Forbidden');
+          return;
+        }
+        // Readable by the client before it connects, so it can keep this
+        // browser's login in session storage only (see client lib/door.ts).
+        res.setHeader('Set-Cookie', 'pl_door=public; Path=/; Secure; SameSite=Strict');
+        inner(req, res);
+      }, () => {
+        res.writeHead(403);
+        res.end('Forbidden');
+      });
+    });
+    setupWebSocket(publicServer, 'public', verifyAccess);
+    publicServer.listen(door.port, '127.0.0.1', () => {
+      console.log(`[PersaLink] Public door on 127.0.0.1:${door.port} (Cloudflare Access ${door.accessTeamDomain}, ${door.allowedEmails.length} allowed email(s))`);
+    });
+  }
   startWatchdog();
   startSessionMonitor();
 

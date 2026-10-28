@@ -14,6 +14,7 @@ import { ToastStack } from './components/Toast';
 import { UpdatePill } from './components/UpdatePill';
 import { useLayoutStore } from './stores/layoutStore';
 import { stashShare } from './lib/shareTarget';
+import { isPublicDoor } from './lib/door';
 
 // ============================================================================
 // Desktop breakpoint hook
@@ -135,9 +136,9 @@ export function App() {
   const isReconnecting = connectionState === 'reconnecting';
 
   // Pre-auth views are always full-screen
-  if (view === 'locked') return <LockScreen />;
-  if (view === 'connect') return <ConnectScreen />;
-  if (view === 'auth') return <AuthScreen />;
+  if (view === 'locked') return <><LockScreen /><PublicBadge /></>;
+  if (view === 'connect') return <><ConnectScreen /><PublicBadge /></>;
+  if (view === 'auth') return <><AuthScreen /><PublicBadge /></>;
   // Toast lives at the root so it overlays whatever view is rendered.
   // (Pre-auth views above don't need it — server isn't accepting messages yet.)
 
@@ -162,6 +163,7 @@ export function App() {
         {isReconnecting && <ReconnectingOverlay />}
         <ToastStack />
         <UpdatePill />
+        <PublicBadge />
       </div>
     );
   }
@@ -177,6 +179,22 @@ export function App() {
       {isReconnecting && <ReconnectingOverlay />}
       <ToastStack />
       <UpdatePill />
+      <PublicBadge />
+    </div>
+  );
+}
+
+/** Always-visible marker when this page came in through the public door, so
+ *  it's never ambiguous which connection a session is on. */
+function PublicBadge() {
+  if (!isPublicDoor) return null;
+  return (
+    <div
+      className="fixed top-0 left-1/2 -translate-x-1/2 z-[60] pointer-events-none select-none
+                 px-2 py-px rounded-b text-[10px] font-semibold tracking-wide bg-amber-500/90 text-black"
+      title="Connected through the public internet entrance"
+    >
+      PUBLIC
     </div>
   );
 }
@@ -198,12 +216,27 @@ function ReconnectingOverlay() {
       <div className="flex flex-col items-center gap-3 text-zinc-400 px-8 text-center">
         <div className="h-5 w-5 border-2 border-zinc-500 border-t-zinc-200 rounded-full animate-spin" />
         <span className="text-sm">Reconnecting...</span>
-        {showHint && (
+        {showHint && !isPublicDoor && (
           <span className="text-xs text-amber-300/90 max-w-xs">
             Still trying — the app retries automatically. If this device reaches the
             server through Tailscale (or another VPN), check that it&apos;s connected;
             after a reboot it can take a moment to come up.
           </span>
+        )}
+        {showHint && isPublicDoor && (
+          <>
+            <span className="text-xs text-amber-300/90 max-w-xs">
+              Still trying. Your Cloudflare sign-in may have expired (it lasts 12 hours),
+              or this network may be blocking the connection.
+            </span>
+            {/* Full navigation re-runs Cloudflare Access; a socket retry can't. */}
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 text-sm rounded-lg bg-zinc-200 text-zinc-900 active:bg-zinc-300"
+            >
+              Sign in again
+            </button>
+          </>
         )}
       </div>
     </div>

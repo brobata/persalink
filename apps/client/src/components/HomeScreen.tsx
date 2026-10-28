@@ -3,6 +3,7 @@ import { useAppStore } from '../stores/appStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
 import { useLongPress } from '../lib/useLongPress';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
+import { isPublicDoor } from '../lib/door';
 
 // ============================================================================
 // Reorder helpers
@@ -344,6 +345,7 @@ export function HomeScreen() {
             </button>
             <button
               onClick={openFiles}
+              hidden={isPublicDoor}
               className="px-3 py-2 text-sm bg-zinc-800 text-zinc-400 rounded-lg
                          active:bg-zinc-700 transition-colors"
               title="Browse this server's files"

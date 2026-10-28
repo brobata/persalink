@@ -6,10 +6,14 @@
  *   to store. Delivery + display happen in sw.js.
  */
 
+import { isPublicDoor } from './door';
+
 /** Web Push needs a secure context, a service worker, the Push API, and the
  *  Notification API. (iOS only exposes these once the PWA is installed.) */
 export function isPushSupported(): boolean {
   return (
+    // Never subscribe a work/borrowed browser (the server refuses it too).
+    !isPublicDoor &&
     typeof window !== 'undefined' &&
     window.isSecureContext &&
     'serviceWorker' in navigator &&
