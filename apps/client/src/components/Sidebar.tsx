@@ -203,7 +203,8 @@ function ProfileRow({ profile }: { profile: Profile }) {
 // ============================================================================
 
 export function Sidebar() {
-  const { sessions, profiles, serverName, openSettings, openServers, discoverProfiles, createSession, editProfile } = useAppStore();
+  const { sessions, profiles, serverName, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile } = useAppStore();
+  const filesDisabled = useAppStore((s) => s.filesDisabled);
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
   const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
 
@@ -268,6 +269,16 @@ export function Sidebar() {
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+              </svg>
+            </button>
+            <button
+              onClick={openFiles}
+              hidden={filesDisabled}
+              className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
+              title="Files"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
               </svg>
             </button>
             <button

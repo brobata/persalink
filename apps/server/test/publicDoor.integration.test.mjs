@@ -185,6 +185,7 @@ test('files are refused on the public door even with a valid JWT', async () => {
   const h = { 'cf-access-jwt-assertion': await jwt() };
   assert.equal((await get(PORTS.public, '/api/upload', h, 'POST')).statusCode, 403);
   assert.equal((await get(PORTS.public, '/api/files/list?path=~', h)).statusCode, 403);
+  assert.equal((await get(PORTS.public, '/api/files/delete', h, 'POST')).statusCode, 403);
 });
 
 test('public door refuses a WebSocket upgrade without a valid JWT', async () => {

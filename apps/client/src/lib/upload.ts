@@ -12,6 +12,9 @@ import { schemesFor } from './platform';
 interface UploadOpts {
   serverUrl: string;
   authToken: string | null;
+  /** Save into this server folder under the files' own names (Files screen).
+   *  Omitted: the terminal drop folder, with unique names. */
+  dir?: string;
 }
 
 interface UploadResponse {
@@ -27,7 +30,7 @@ interface UploadResponse {
  */
 export async function uploadFiles(
   files: FileList | File[],
-  { serverUrl, authToken }: UploadOpts,
+  { serverUrl, authToken, dir }: UploadOpts,
 ): Promise<string[]> {
   const list = Array.from(files);
   if (list.length === 0) return [];
@@ -38,12 +41,16 @@ export async function uploadFiles(
   const form = new FormData();
   for (const file of list) form.append('file', file);
 
-  const res = await fetch(`${baseUrl}/api/upload`, {
+  const query = dir ? `?dir=${encodeURIComponent(dir)}` : '';
+  const res = await fetch(`${baseUrl}/api/upload${query}`, {
     method: 'POST',
     headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
     body: form,
   });
-  if (!res.ok) throw new Error(`upload failed (${res.status})`);
+  if (!res.ok) {
+    const message = (await res.json().catch(() => null) as { error?: string } | null)?.error;
+    throw new Error(message || `upload failed (${res.status})`);
+  }
 
   const result = (await res.json()) as UploadResponse;
   if (Array.isArray(result.paths)) return result.paths;

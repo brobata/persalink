@@ -3,7 +3,6 @@ import { useAppStore } from '../stores/appStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
 import { useLongPress } from '../lib/useLongPress';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
-import { isPublicDoor } from '../lib/door';
 
 // ============================================================================
 // Reorder helpers
@@ -259,6 +258,7 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
 
 export function HomeScreen() {
   const { sessions, profiles, serverName, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
+  const filesDisabled = useAppStore((s) => s.filesDisabled);
 
   // Recency decides the Live order when Home OPENS, then the order FREEZES
   // for the visit. A live re-sort (activity broadcasts land every ~4s) made
@@ -345,7 +345,7 @@ export function HomeScreen() {
             </button>
             <button
               onClick={openFiles}
-              hidden={isPublicDoor}
+              hidden={filesDisabled}
               className="px-3 py-2 text-sm bg-zinc-800 text-zinc-400 rounded-lg
                          active:bg-zinc-700 transition-colors"
               title="Browse this server's files"

@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import Busboy from 'busboy';
 import { audit } from './auditLog';
+import { CONFIG_DIR } from './config';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -170,6 +171,11 @@ export function createHttpHandler(
     }
     if (urlPath === '/api/files/download' && req.method === 'GET') {
       handleFileDownload(req, res, validateAuthToken);
+      return;
+    }
+    if ((urlPath === '/api/files/mkdir' || urlPath === '/api/files/rename' || urlPath === '/api/files/delete')
+        && req.method === 'POST') {
+      handleFileChange(urlPath.slice('/api/files/'.length) as FileChange, req, res, validateAuthToken);
       return;
     }
 
@@ -373,6 +379,113 @@ function handleFileDownload(
   stream.pipe(res);
 }
 
+/** A single path segment: no separators, not `.`/`..`, no control chars. */
+function isPlainName(name: unknown): name is string {
+  return typeof name === 'string' && name.length > 0 && Buffer.byteLength(name) <= 255
+    && name !== '.' && name !== '..' && !/[/\\\x00-\x1f]/.test(name);
+}
+
+const TRASH_DIR = path.join(CONFIG_DIR, 'trash');
+
+/** True if anything (even a broken symlink) already has this path. */
+function pathTaken(p: string): boolean {
+  try { fs.lstatSync(p); return true; } catch { return false; }
+}
+const TRASH_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Drop trash older than 30 days. Best effort — a failure just waits for next time. */
+function purgeTrash(now: number): void {
+  let names: string[];
+  try { names = fs.readdirSync(TRASH_DIR); } catch { return; }
+  for (const name of names) {
+    const stamp = Number(name.split('-', 1)[0]);
+    if (Number.isFinite(stamp) && now - stamp > TRASH_KEEP_MS) {
+      fs.rm(path.join(TRASH_DIR, name), { recursive: true, force: true }, () => {});
+    }
+  }
+}
+
+type FileChange = 'mkdir' | 'rename' | 'delete';
+
+/**
+ * New folder, rename, and delete for the Files screen. Same scope as the
+ * terminal (this user's permissions). Delete moves the item into
+ * ~/.persalink/trash (kept 30 days) so a mis-tap on a phone is recoverable.
+ */
+function handleFileChange(
+  action: FileChange,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  validateAuthToken?: (token: string) => boolean,
+): void {
+  if (!checkBearer(req, res, validateAuthToken)) return;
+  const reply = (status: number, body: object) => {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(body));
+  };
+  readJsonBody(req, 8192).then((body) => {
+    const b = (body ?? {}) as { path?: unknown; name?: unknown };
+    const target = typeof b.path === 'string' ? resolveBrowsePath(b.path) : null;
+    if (!target) { reply(400, { error: 'Path must be absolute (or ~)' }); return; }
+    const home = os.homedir();
+    try {
+      if (action === 'mkdir') {
+        if (!isPlainName(b.name)) { reply(400, { error: 'Folder names cannot contain /' }); return; }
+        const dir = path.join(target, b.name);
+        fs.mkdirSync(dir);
+        audit('file_mkdir', { name: dir });
+        reply(200, { path: dir });
+        return;
+      }
+      // rename + delete act on an existing item; never the root, home, or the
+      // server's own config folder (losing config.json = setup mode, no password)
+      if (target === '/' || target === home
+          || isPathWithin(CONFIG_DIR, target) || isPathWithin(target, CONFIG_DIR)) {
+        reply(400, { error: 'That folder cannot be changed from here' });
+        return;
+      }
+      fs.lstatSync(target); // ENOENT → 404 below
+      if (action === 'rename') {
+        if (!isPlainName(b.name)) { reply(400, { error: 'Names cannot contain /' }); return; }
+        const dest = path.join(path.dirname(target), b.name);
+        if (dest === target) { reply(200, { path: dest }); return; }
+        // renameSync silently replaces an existing file — refuse instead
+        if (pathTaken(dest)) { reply(409, { error: `${b.name} already exists` }); return; }
+        fs.renameSync(target, dest);
+        audit('file_rename', { name: target, path: dest });
+        reply(200, { path: dest });
+        return;
+      }
+      const now = Date.now();
+      fs.mkdirSync(TRASH_DIR, { recursive: true, mode: 0o700 });
+      let trashed = path.join(TRASH_DIR, `${now}-${path.basename(target)}`);
+      // renameSync would replace an earlier trashed item with the same name
+      for (let n = 1; pathTaken(trashed); n++) trashed = path.join(TRASH_DIR, `${now}-${n}-${path.basename(target)}`);
+      fs.renameSync(target, trashed);
+      audit('file_delete', { name: target, path: trashed });
+      purgeTrash(now);
+      reply(200, { trash: trashed.replace(home, '~') });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') reply(404, { error: 'Not found' });
+      else if (code === 'EEXIST') reply(409, { error: 'That name is already taken' });
+      else if (code === 'EACCES' || code === 'EPERM') reply(403, { error: 'Permission denied' });
+      else if (code === 'EXDEV') reply(400, { error: 'That is on another drive — delete it from the terminal' });
+      else reply(500, { error: 'Could not change that file' });
+    }
+  });
+}
+
+/** `name`, or `name (1)`, `name (2)`… — the first one not already in `dir`. */
+function freeName(dir: string, name: string, taken: Set<string>): string {
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length) || 'file';
+  for (let n = 0; ; n++) {
+    const candidate = n === 0 ? name : `${stem} (${n})${ext}`;
+    if (!taken.has(candidate) && !pathTaken(path.join(dir, candidate))) return candidate;
+  }
+}
+
 function handleUpload(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -393,14 +506,28 @@ function handleUpload(
     return;
   }
 
-  const uploadDir = path.join(os.homedir(), 'shared', 'persalink-uploads');
-  try {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  } catch (err) {
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Could not create upload directory' }));
+  // ?dir= → the Files screen uploading into the folder on screen, keeping the
+  // file's own name. Without it: the terminal's paste-a-path drop folder.
+  const dirParam = new URL(req.url || '/', 'http://x').searchParams.get('dir');
+  const intoFolder = dirParam !== null;
+  const uploadDir = intoFolder ? resolveBrowsePath(dirParam) : path.join(os.homedir(), 'shared', 'persalink-uploads');
+  if (!uploadDir) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Path must be absolute (or ~)' }));
     return;
   }
+  try {
+    if (intoFolder) {
+      if (!fs.statSync(uploadDir).isDirectory()) throw new Error('not a folder');
+    } else {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+  } catch (err) {
+    res.writeHead(intoFolder ? 404 : 500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: intoFolder ? 'Folder not found' : 'Could not create upload directory' }));
+    return;
+  }
+  const claimed = new Set<string>(); // names given out in this request
 
   let bb: ReturnType<typeof Busboy>;
   try {
@@ -418,6 +545,7 @@ function handleUpload(
   // Per-request counter so files arriving in the same millisecond don't collide.
   let seq = 0;
   let tooLarge = false;
+  let writeFailed: string | null = null; // why a file could not be saved, for the reply
   let responded = false;
 
   const fail = (status: number, error: string) => {
@@ -434,10 +562,17 @@ function handleUpload(
     // A form field with no filename (or busboy's files-limit reached) — skip it.
     if (!filename) { stream.resume(); return; }
 
-    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const ext = path.extname(safeName);
-    const base = path.basename(safeName, ext) || 'file';
-    const finalName = `${base}_${Date.now()}_${seq++}${ext}`;
+    let finalName: string;
+    if (intoFolder) {
+      const own = path.basename(filename.replace(/\\/g, '/'));
+      finalName = freeName(uploadDir, isPlainName(own) ? own : 'file', claimed);
+      claimed.add(finalName);
+    } else {
+      const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const ext = path.extname(safeName);
+      const base = path.basename(safeName, ext) || 'file';
+      finalName = `${base}_${Date.now()}_${seq++}${ext}`;
+    }
     const filePath = path.join(uploadDir, finalName);
 
     let truncated = false;
@@ -445,10 +580,19 @@ function handleUpload(
     stream.on('data', (d: Buffer) => { size += d.length; });
     stream.on('limit', () => { truncated = true; tooLarge = true; });
 
-    const writeStream = fs.createWriteStream(filePath);
+    // 'wx': never overwrite — freeName checked, this closes the race
+    const writeStream = fs.createWriteStream(filePath, { flags: 'wx' });
+    let opened = false;
+    writeStream.on('open', () => { opened = true; });
     pending.push(new Promise<UploadedFile | null>((resolve) => {
-      const cleanupAndFail = () => { fs.unlink(filePath, () => {}); resolve(null); };
-      writeStream.on('error', cleanupAndFail);
+      // Only remove what this request created — with 'wx' a failed open means
+      // the name belongs to someone else's file.
+      const cleanupAndFail = () => { if (opened) fs.unlink(filePath, () => {}); stream.resume(); resolve(null); };
+      writeStream.on('error', (err: NodeJS.ErrnoException) => {
+        writeFailed = err.code === 'EEXIST' ? `${finalName} appeared while uploading — try again`
+          : err.code === 'EACCES' ? 'Permission denied in that folder' : 'Could not save the file';
+        cleanupAndFail();
+      });
       stream.on('error', cleanupAndFail);
       writeStream.on('close', () => {
         // Over-limit file is partial garbage — discard it rather than hand back
@@ -473,8 +617,8 @@ function handleUpload(
     if (responded) return;
 
     if (files.length === 0) {
-      res.writeHead(tooLarge ? 413 : 400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: tooLarge ? 'File too large (max 50MB per file)' : 'No file found in upload' }));
+      res.writeHead(tooLarge ? 413 : writeFailed ? 500 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: tooLarge ? 'File too large (max 50MB per file)' : writeFailed ?? 'No file found in upload' }));
       return;
     }
 

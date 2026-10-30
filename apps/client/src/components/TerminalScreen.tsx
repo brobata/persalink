@@ -19,7 +19,6 @@ import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
-import { isPublicDoor } from '../lib/door';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // Soft-keyboard helper: keys absent from mobile keyboards but essential
@@ -523,6 +522,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     attachSession, connectionState, requestLinks, sessionLinks, clearSessionLinks,
     snippets, claudeReply, requestClaudeReply, clearClaudeReply,
   } = useAppStore();
+  const filesDisabled = useAppStore((s) => s.filesDisabled);
   // Text-box composer (FAB → Message): write, edit, dictate, then send once.
   const [composerOpen, setComposerOpen] = useState(false);
 
@@ -2025,7 +2025,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          hidden={isPublicDoor}
+          hidden={filesDisabled}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
           title="Upload file"
         >

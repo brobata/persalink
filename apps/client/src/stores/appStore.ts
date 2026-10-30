@@ -73,6 +73,8 @@ interface AppState {
   secondFactor: { push: boolean; totp: boolean; codeOnly?: boolean } | null;
   /** Public door: waiting on the phone; the number to match. */
   approvalNumber: string | null;
+  /** This connection may not browse/upload files (server's disableFiles). */
+  filesDisabled: boolean;
 
   // Biometric
   biometricAvailable: boolean;
@@ -314,6 +316,8 @@ export const useAppStore = create<AppState>()(
       authError: null,
       secondFactor: null,
       approvalNumber: null,
+      // Until auth.ok says otherwise, assume the outside door keeps files off.
+      filesDisabled: isPublicDoor,
       biometricAvailable: false,
       biometricLocked: false,
       deviceName: '',
@@ -810,7 +814,7 @@ export const useAppStore = create<AppState>()(
 
       openFiles: () => {
         const v = get().view;
-        if (v === 'locked' || v === 'connect' || v === 'auth' || isPublicDoor) return;
+        if (v === 'locked' || v === 'connect' || v === 'auth' || get().filesDisabled) return;
         set({ view: 'files' });
       },
 
@@ -944,6 +948,7 @@ function handleServerMessage(
         view: preAuthViews.includes(currentView) ? 'home' : currentView,
         authError: null,
         approvalNumber: null,
+        filesDisabled: !!msg.disableFiles,
         // Arm the auto-reattach handshake. If the persisted session still
         // exists in the upcoming sessions.list, we'll attach to it.
         pendingAutoAttach: s.lastActiveSessionId,

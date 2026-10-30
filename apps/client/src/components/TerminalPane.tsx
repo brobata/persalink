@@ -20,7 +20,6 @@ import { useVoiceInput } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
-import { isPublicDoor } from '../lib/door';
 import { cleanTerminalCopy } from '@persalink/shared/cleanCopy';
 import { openExternal, promptOpen } from '../lib/linkOpen';
 import { ClaudeReplyPanel } from './ClaudeReplyPanel';
@@ -103,6 +102,7 @@ export function TerminalPane({
   const [connState, setConnState] = useState<'connecting' | 'ready' | 'reconnecting' | 'disconnected'>('connecting');
 
   const [uploading, setUploading] = useState(false);
+  const filesDisabled = useAppStore((s) => s.filesDisabled);
   // Harvested links — non-null shows the in-pane panel (server rejoins
   // tmux-wrapped URLs via capture-pane -J; see LinkSheet in TerminalScreen).
   const [paneLinks, setPaneLinks] = useState<string[] | null>(null);
@@ -938,7 +938,7 @@ export function TerminalPane({
             </button>
             <button
               onClick={() => fileInputRef.current?.click()}
-              hidden={isPublicDoor}
+              hidden={filesDisabled}
               disabled={uploading}
               className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
               title="Upload file"
