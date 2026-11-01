@@ -7,7 +7,7 @@ import { HomeScreen } from './components/HomeScreen';
 import { TerminalScreen } from './components/TerminalScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { ProfileEditor } from './components/ProfileEditor';
-import { FilesScreen } from './components/FilesScreen';
+import { FilesScreen } from './components/files/FilesScreen';
 import { Sidebar } from './components/Sidebar';
 import { GridLayout } from './components/GridLayout';
 import { ToastStack } from './components/Toast';

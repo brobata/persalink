@@ -230,6 +230,13 @@ export class TokenStore {
     return null;
   }
 
+  /** Hash of a live token by id on `door` (signed file links check this). */
+  liveHashById(id: string, door: Door): string | null {
+    const token = this.tokens.find((t) => t.id === id);
+    if (!token || (token.door ?? 'tailnet') !== door || this.isDead(token, new Date())) return null;
+    return token.tokenHash;
+  }
+
   touch(tokenHash: string): void {
     const token = this.tokens.find((t) => t.tokenHash === tokenHash);
     if (!token) return;

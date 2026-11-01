@@ -1716,10 +1716,20 @@ async function main(): Promise<void> {
     if (stored) tokenStore.touch(stored.tokenHash);
     return stored !== null;
   };
+  const fileAuth = (door: Door) => ({
+    resolveToken: (token: string) => {
+      const stored = tokenStore.validateToken(token, door);
+      if (!stored) return null;
+      tokenStore.touch(stored.tokenHash);
+      return { id: stored.id, hash: stored.tokenHash };
+    },
+    liveTokenHash: (id: string) => tokenStore.liveHashById(id, door),
+  });
   const pinnedProfiles = () => profileManager.list().filter((p) => p.pinned).map((p) => ({ id: p.id, name: p.name }));
 
   const server = http.createServer(
     createHttpHandler(staticDir, getServerInfo, tokenValidator('tailnet'), pinnedProfiles, {
+      fileAuth: fileAuth('tailnet'),
       onApproval: (id, secret, decision) => approvals.answer(id, secret, decision),
     }),
   );
@@ -1743,6 +1753,8 @@ async function main(): Promise<void> {
     });
     const inner = createHttpHandler(staticDir, getServerInfo, tokenValidator('public'), pinnedProfiles, {
       disableFiles: door.disableFiles,
+      fileAuth: fileAuth('public'),
+      cacheFiles: false,
     });
     const publicServer = http.createServer((req, res) => {
       const jwt = req.headers['cf-access-jwt-assertion'];

@@ -15,6 +15,7 @@ import * as path from 'node:path';
 const require = createRequire(import.meta.url);
 const TOKEN = 'good-token';
 let home, server, base;
+let live = true; // flips to simulate a signed-out login
 
 before(async () => {
   home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pl-files-')));
@@ -22,7 +23,11 @@ before(async () => {
   process.env.PERSALINK_CONFIG_DIR = path.join(home, '.persalink');
   fs.mkdirSync(path.join(home, 'shared'));
   const { createHttpHandler } = require('../dist/apps/server/src/httpServer.js');
-  server = http.createServer(createHttpHandler(home, undefined, (t) => t === TOKEN));
+  const fileAuth = {
+    resolveToken: (t) => (t === TOKEN && live ? { id: 'tid-1', hash: 'hash-1' } : null),
+    liveTokenHash: (id) => (id === 'tid-1' && live ? 'hash-1' : null),
+  };
+  server = http.createServer(createHttpHandler(home, undefined, (t) => t === TOKEN, undefined, { fileAuth }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -35,6 +40,18 @@ function post(action, body, token = TOKEN) {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function listing(dir) {
+  const res = await fetch(`${base}/api/files/list?path=${encodeURIComponent(dir)}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  assert.equal(res.status, 200);
+  return res.json();
+}
+
+function signed(route, link, extra) {
+  const q = new URLSearchParams({ dir: link.dir, tid: link.tid, exp: String(link.exp), sig: link.sig });
+  for (const [k, v] of extra) q.append(k, v);
+  return `${base}/api/files/${route}?${q}`;
 }
 
 function upload(dir, files) {
@@ -133,4 +150,129 @@ test('upload without a folder still goes to the terminal drop folder', async () 
   assert.equal(res.status, 200);
   const { paths } = await res.json();
   assert.match(paths[0], /^~\/shared\/persalink-uploads\/shot_\d+_0\.png$/);
+});
+
+test('signed links stream files with ranges, and die with the login', async () => {
+  fs.mkdirSync(path.join(home, 'shared', 'media'));
+  fs.writeFileSync(path.join(home, 'shared', 'media', 'clip.mp4'), '0123456789');
+  fs.writeFileSync(path.join(home, 'shared', 'media', 'page.html'), '<script>alert(1)</script>');
+  const { link, entries } = await listing('~/shared/media');
+  assert.deepEqual(entries.map((e) => e.name).sort(), ['clip.mp4', 'page.html']);
+
+  const whole = await fetch(signed('raw', link, [['name', 'clip.mp4']]));
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get('content-type'), 'video/mp4');
+  assert.equal(await whole.text(), '0123456789');
+
+  const part = await fetch(signed('raw', link, [['name', 'clip.mp4']]), { headers: { Range: 'bytes=2-4' } });
+  assert.equal(part.status, 206);
+  assert.equal(part.headers.get('content-range'), 'bytes 2-4/10');
+  assert.equal(await part.text(), '234');
+
+  // A page in the folder never runs as the app: plain text, sandboxed.
+  const page = await fetch(signed('raw', link, [['name', 'page.html']]));
+  assert.match(page.headers.get('content-type'), /^text\/plain/);
+  assert.match(page.headers.get('content-security-policy'), /sandbox/);
+
+  // The link reaches only its own folder, can't be edited, and dies at sign-out.
+  assert.equal((await fetch(signed('raw', link, [['name', '../a.txt']]))).status, 400);
+  assert.equal((await fetch(signed('raw', { ...link, dir: path.join(home, 'shared') }, [['name', 'c.txt']]))).status, 403);
+  assert.equal((await fetch(signed('raw', { ...link, exp: link.exp + 1 }, [['name', 'clip.mp4']]))).status, 403);
+  live = false;
+  try {
+    assert.equal((await fetch(signed('raw', link, [['name', 'clip.mp4']]))).status, 403);
+  } finally {
+    live = true;
+  }
+});
+
+test('zip downloads several items', async () => {
+  const { link } = await listing('~/shared/media');
+  const res = await fetch(signed('zip', link, [['n', 'clip.mp4'], ['n', 'page.html']]));
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-disposition'), /media\.zip/);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  assert.equal(bytes.subarray(0, 2).toString(), 'PK');
+  assert.ok(bytes.includes(Buffer.from('clip.mp4')));
+  assert.equal((await fetch(signed('zip', link, [['n', '-x']]))).status, 404);
+});
+
+test('copy and move never overwrite and refuse a folder into itself', async () => {
+  fs.mkdirSync(path.join(home, 'shared', 'dest'));
+  fs.writeFileSync(path.join(home, 'shared', 'dest', 'clip.mp4'), 'already here');
+  let res = await post('copy', { paths: ['~/shared/media/clip.mp4'], to: '~/shared/dest' });
+  let body = await res.json();
+  assert.equal(body.done[0].renamed, true);
+  assert.equal(fs.readFileSync(path.join(home, 'shared', 'dest', 'clip.mp4'), 'utf8'), 'already here');
+  assert.equal(fs.readFileSync(path.join(home, 'shared', 'dest', 'clip (1).mp4'), 'utf8'), '0123456789');
+
+  res = await post('move', { paths: ['~/shared/media/page.html', '~/shared/media'], to: '~/shared/media' });
+  body = await res.json();
+  assert.equal(body.failed[0].error, 'cannot go inside itself');
+  res = await post('move', { paths: ['~/shared/media/page.html'], to: '~/shared/dest' });
+  assert.equal(res.status, 200);
+  assert.ok(fs.existsSync(path.join(home, 'shared', 'dest', 'page.html')));
+  assert.equal(fs.existsSync(path.join(home, 'shared', 'media', 'page.html')), false);
+
+  // Nothing new goes into the config folder, and it can't be moved out.
+  assert.equal((await post('copy', { paths: ['~/shared/dest/page.html'], to: '~/.persalink' })).status, 400);
+  body = await (await post('move', { paths: ['~/.persalink/config.json'], to: '~/shared' })).json();
+  assert.equal(body.failed[0].error, 'cannot be moved from here');
+});
+
+test('save refuses to clobber a file that changed since it was opened', async () => {
+  assert.equal((await post('newfile', { path: '~/shared', name: 'notes.txt' })).status, 200);
+  assert.equal((await post('newfile', { path: '~/shared', name: 'notes.txt' })).status, 409);
+  const file = path.join(home, 'shared', 'notes.txt');
+  fs.utimesSync(file, new Date('2020-01-01'), new Date('2020-01-01')); // so the save visibly moves it
+  const mtime = Math.floor(fs.statSync(file).mtimeMs);
+  let res = await post('save', { path: '~/shared/notes.txt', content: 'v1', mtime });
+  assert.equal(res.status, 200);
+  assert.notEqual((await res.json()).mtime, mtime);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v1');
+  res = await post('save', { path: '~/shared/notes.txt', content: 'stale', mtime });
+  assert.equal(res.status, 409);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v1');
+  assert.equal((await post('save', { path: '~/.persalink/config.json', content: '{}' })).status, 400);
+  assert.deepEqual(fs.readdirSync(path.join(home, 'shared')).filter((n) => n.includes('.persalink-')), []);
+});
+
+test('a malformed request path is refused without taking the server down', async () => {
+  const status = await new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: server.address().port, path: '//' }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject);
+  });
+  assert.ok(status < 500);
+  assert.equal((await fetch(`${base}/api/files/list?path=~`, { headers: { Authorization: `Bearer ${TOKEN}` } })).status, 200);
+});
+
+test('a non-ASCII signature is refused, not thrown', async () => {
+  const { link } = await listing('~/shared');
+  const res = await fetch(signed('raw', { ...link, sig: 'é'.repeat(link.sig.length) }, [['name', 'c.txt']]));
+  assert.equal(res.status, 403);
+});
+
+test('a cancelled upload leaves nothing behind', async () => {
+  const boundary = 'xBOUNDARYx';
+  const head = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="half.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+  await new Promise((resolve) => {
+    const req = http.request({
+      host: '127.0.0.1', port: server.address().port, method: 'POST',
+      path: `/api/upload?dir=${encodeURIComponent('~/shared')}`,
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': 10_000_000 },
+    });
+    req.on('error', () => resolve());
+    req.write(head);
+    req.write(Buffer.alloc(200_000, 1), () => setTimeout(() => { req.destroy(); resolve(); }, 100));
+  });
+  for (let i = 0; i < 50 && fs.existsSync(path.join(home, 'shared', 'half.bin')); i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(fs.existsSync(path.join(home, 'shared', 'half.bin')), false);
+});
+
+test('saving through a symlink edits the real file and keeps the link', async () => {
+  fs.writeFileSync(path.join(home, 'real.txt'), 'old');
+  fs.symlinkSync(path.join(home, 'real.txt'), path.join(home, 'shared', 'linked.txt'));
+  const res = await post('save', { path: '~/shared/linked.txt', content: 'new' });
+  assert.equal(res.status, 200);
+  assert.ok(fs.lstatSync(path.join(home, 'shared', 'linked.txt')).isSymbolicLink());
+  assert.equal(fs.readFileSync(path.join(home, 'real.txt'), 'utf8'), 'new');
 });
