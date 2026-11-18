@@ -31,7 +31,12 @@ import { WaitPill } from './ui/WaitPill';
 import { ConnectionReadout } from './ui/ConnectionReadout';
 import { ReconnectBanner } from './ui/Reconnect';
 import { countStates, groupSessions, needsSentence, sessionTitle, stateKey } from '../lib/sessionState';
-import { Check, ChevronLeft, ChevronRight, Copy, Pencil, Plus } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Copy, Ellipsis, Keyboard, Pencil, Plus, Search, SlidersHorizontal, TextSearch } from 'lucide-react';
+import { PANE_COMMAND_EVENT, PHONE_TERMINAL, type PaneCommandDetail } from '../lib/paneCommands';
+import { chipLabel, promptOnScreen } from '../lib/claudePrompt';
+import { useGlobalShortcuts } from './ShortcutsPanel';
+import { MoreSheet, type MenuItem } from './ui/MoreSheet';
+import { useUiStore } from '../stores/uiStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // Arrow-key joystick (lives on the FAB — the terminal long-press belongs to
@@ -391,6 +396,8 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const restartEnded = useAppStore((s) => s.restartEnded);
   const dismissEnded = useAppStore((s) => s.dismissEnded);
   const openNextWaiting = useAppStore((s) => s.openNextWaiting);
+  const openPalette = useUiStore((s) => s.openPalette);
+  const openShortcuts = useUiStore((s) => s.openShortcuts);
   const ended = endedSession && endedSession.id === attachedSession?.id ? endedSession : null;
   // attachedSession is the snapshot taken at attach; state lives in the list.
   const liveAttached = sessions.find((s) => s.id === attachedSession?.id) ?? attachedSession;
@@ -1743,6 +1750,57 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     };
   }, [attachedSession?.id]);
 
+  // The palette and the keyboard reach this terminal through pane commands
+  // (lib/paneCommands), addressed to PHONE_TERMINAL.
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const { paneId, command, data } = (e as CustomEvent<PaneCommandDetail>).detail;
+      if (paneId !== PHONE_TERMINAL) return;
+      const app = useAppStore.getState();
+      if (!app.attachedSession || app.endedSession) return;
+      switch (command) {
+        case 'composer': setComposerOpen(true); break;
+        case 'links': requestLinks(); break;
+        case 'claude': requestClaudeReply(); break;
+        case 'upload': if (filesDisabled) return; fileInputRef.current?.click(); break;
+        case 'snippets': setShowSnippets(true); break;
+        case 'find': setShowSearch(true); break;
+        case 'terminal-settings': setShowStyleSheet(true); break;
+        case 'insert':
+          if (!data) return;
+          sendInput(data);
+          terminalRef.current?.focus();
+          break;
+        case 'answer': {
+          const option = data && terminalRef.current ? promptOnScreen(terminalRef.current)?.options.find((o) => o.key === data) : undefined;
+          if (!option) return;
+          sendInput(option.key);
+          app.pushNotification('info', `Answered: ${chipLabel(option)}`);
+          terminalRef.current?.focus();
+          break;
+        }
+        default: return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener(PANE_COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(PANE_COMMAND_EVENT, onCommand);
+  }, [requestLinks, requestClaudeReply, sendInput, filesDisabled]);
+
+  // A hardware keyboard (the Titan) gets the invisible Alt set and digit
+  // answers; nothing is drawn for it.
+  useGlobalShortcuts({ variant: 'phone', enabled: hwKeyboard });
+
+  // More: the terminal's less frequent tools, and the one place the phone
+  // lists its keyboard shortcuts.
+  const [showMore, setShowMore] = useState(false);
+  const moreItems: MenuItem[] = [
+    { id: 'palette', icon: <Search />, label: 'Search everything', run: () => openPalette() },
+    { id: 'find', icon: <TextSearch />, label: 'Find in output', run: () => setShowSearch(true) },
+    { id: 'tsettings', icon: <SlidersHorizontal />, label: 'Terminal settings', run: () => setShowStyleSheet(true) },
+    { id: 'shortcuts', icon: <Keyboard />, label: 'Keyboard shortcuts', sub: 'for a phone with keys', run: () => openShortcuts() },
+  ];
+
   // A session that ended drops the soft keyboard: there is nothing to type into.
   useEffect(() => {
     if (isEnded) terminalRef.current?.blur();
@@ -1811,26 +1869,13 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           className="hidden"
         />
         <button
-          onPointerDown={(e) => { e.preventDefault(); setShowSearch(true); }}
-          className={`shrink-0 px-2 py-2 transition-colors ${showSearch ? 'text-zinc-200' : 'text-zinc-500 active:text-zinc-300'}`}
-          title="Find in output"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <circle cx="11" cy="11" r="7" />
-            <path strokeLinecap="round" d="M21 21l-4.3-4.3" />
-          </svg>
-        </button>
-        <button
-          onPointerDown={(e) => { e.preventDefault(); setShowStyleSheet(true); }}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => openPalette()}
           className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Terminal appearance — theme, font, size"
+          title="Search sessions and commands"
+          aria-label="Search sessions and commands"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 110-18 9 8 0 019 8 4.5 4.5 0 01-4.5 4.5h-1.6a1.9 1.9 0 00-1.4 3.2c.3.3.5.7.5 1.1a1.2 1.2 0 01-1 1.2z" />
-            <circle cx="7.5" cy="11.5" r=".8" fill="currentColor" />
-            <circle cx="11" cy="7.5" r=".8" fill="currentColor" />
-            <circle cx="15.5" cy="9" r=".8" fill="currentColor" />
-          </svg>
+          <Search className="w-4 h-4" strokeWidth={2} />
         </button>
         <button
           onPointerDown={(e) => { e.preventDefault(); requestClaudeReply(); }}
@@ -1901,6 +1946,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
             </svg>
           )}
+        </button>
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => setShowMore(true)}
+          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
+          title="More"
+          aria-label="More"
+        >
+          <Ellipsis className="w-4 h-4" strokeWidth={2} />
         </button>
       </div>
 
@@ -2271,6 +2325,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
       {/* Terminal appearance sheet — live theme/font/size changes */}
       {showStyleSheet && <TerminalSettings variant="sheet" onClose={() => setShowStyleSheet(false)} />}
+      {showMore && attachedSession && (
+        <MoreSheet title={sessionTitle(attachedSession)} items={moreItems} onClose={() => setShowMore(false)} />
+      )}
 
       {/* Snippet library — insert, run detached, or fan out across servers */}
       {showSnippets && <SnippetSheet onClose={() => setShowSnippets(false)} sendInput={sendInput} />}

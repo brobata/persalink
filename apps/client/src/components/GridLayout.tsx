@@ -5,7 +5,7 @@
  *   a session picker popup when the user clicks to fill an empty pane.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
 import { useLayoutStore, type Layout } from '../stores/layoutStore';
 import { TerminalPane } from './TerminalPane';
@@ -13,7 +13,10 @@ import { TerminalSettings } from './TerminalSettings';
 import { SessionRow } from './ui/SessionRow';
 import { ProfileTile } from './ui/ProfileTile';
 import { WaitPill } from './ui/WaitPill';
-import { ShortcutsPanel, useDesktopShortcuts } from './ShortcutsPanel';
+import { useDesktopShortcuts } from './ShortcutsPanel';
+import { Kbd } from './ui/Kbd';
+import { useUiStore } from '../stores/uiStore';
+import { Search } from 'lucide-react';
 import { orderSessions } from '../lib/sessionOrder';
 import { remoteSnapshot, remoteCreateSession, resolveEntryHost } from '../lib/remoteServer';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
@@ -250,9 +253,10 @@ export function GridLayout() {
 
   const [pickerPaneId, setPickerPaneId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const toggleShortcuts = useCallback(() => setShowShortcuts((v) => !v), []);
-  useDesktopShortcuts({ onPickSession: setPickerPaneId, onToggleHelp: toggleShortcuts });
+  const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
+  const openShortcuts = useUiStore((s) => s.openShortcuts);
+  const openPalette = useUiStore((s) => s.openPalette);
+  useDesktopShortcuts({ onPickSession: setPickerPaneId });
 
   // Resolve a pane's connection target from its bound server. Legacy panes
   // (serverId null) follow the active server, same as before phase 2.
@@ -269,28 +273,33 @@ export function GridLayout() {
       {/* Top bar with layout switcher */}
       <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-900 relative">
         <LayoutSwitcher />
-        <div className="flex-1" />
+        <div className="flex-1 min-w-0 flex justify-center">
+          {/* The palette, described, with its chord: the one search on desktop. */}
+          <button type="button" className="pl-paltrig" onClick={() => openPalette()} title="Search and commands (Ctrl+Shift+K)">
+            <Search className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+            <span className="grow">Jump to a session or run a command</span>
+            <Kbd keys="Ctrl+Shift+K" />
+          </button>
+        </div>
         <WaitPill
           variant="desktop"
           sessions={sessions}
           currentId={panes.find((p) => p.id === focusedPaneId)?.sessionId ?? null}
           onJump={() => openNextWaiting()}
         />
-        <div className="relative">
-          <button
-            onClick={toggleShortcuts}
-            className={`p-1.5 rounded transition-colors ${
-              showShortcuts ? 'text-zinc-100 bg-zinc-800' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-            }`}
-            title="Keyboard shortcuts (Ctrl+Shift+/)"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="6" width="20" height="12" rx="2" />
-              <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
-            </svg>
-          </button>
-          {showShortcuts && <ShortcutsPanel onClose={() => setShowShortcuts(false)} />}
-        </div>
+        <button
+          onClick={openShortcuts}
+          className={`p-1.5 rounded transition-colors ${
+            shortcutsOpen ? 'text-zinc-100 bg-zinc-800' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+          }`}
+          title="Keyboard shortcuts (Ctrl+Shift+/)"
+          aria-label="Keyboard shortcuts"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="6" width="20" height="12" rx="2" />
+            <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
+          </svg>
+        </button>
         <div className="relative">
           <button
             onClick={() => setShowSettings((v) => !v)}

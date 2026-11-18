@@ -26,6 +26,7 @@ import { ClaudeReplyPanel } from './ClaudeReplyPanel';
 import { Composer, wrapForPaste } from './Composer';
 import type { ClaudeReplyState } from '../stores/appStore';
 import { PANE_COMMAND_EVENT, type PaneCommandDetail } from '../lib/paneCommands';
+import { chipLabel, promptOnScreen } from '../lib/claudePrompt';
 
 interface TerminalPaneProps {
   paneId: string;
@@ -194,15 +195,26 @@ export function TerminalPane({
   // Keyboard shortcuts addressed to this pane (see lib/paneCommands).
   useEffect(() => {
     const onCommand = (e: Event) => {
-      const { paneId: target, command } = (e as CustomEvent<PaneCommandDetail>).detail;
+      const { paneId: target, command, data } = (e as CustomEvent<PaneCommandDetail>).detail;
       if (target !== paneId || !sessionIdRef.current) return;
       if (command === 'composer') setComposerOpen((open) => !open);
       else if (command === 'links') toggleLinks();
       else if (command === 'claude') toggleClaudeReply();
+      else if (command === 'upload') fileInputRef.current?.click();
+      else if (command === 'insert' && data) { sendInput(data); termRef.current?.focus(); }
+      else if (command === 'answer' && data) {
+        // Only a numbered prompt on screen takes a digit; anything else is
+        // left alone (the key was not meant for a shell).
+        const option = termRef.current ? promptOnScreen(termRef.current)?.options.find((o) => o.key === data) : undefined;
+        if (!option) return;
+        sendInput(option.key);
+        useAppStore.getState().pushNotification('info', `Answered: ${chipLabel(option)}`);
+      } else return;
+      e.preventDefault();
     };
     window.addEventListener(PANE_COMMAND_EVENT, onCommand);
     return () => window.removeEventListener(PANE_COMMAND_EVENT, onCommand);
-  }, [paneId, toggleLinks, toggleClaudeReply]);
+  }, [paneId, toggleLinks, toggleClaudeReply, sendInput]);
 
   // A closed composer hands typing back to the terminal.
   useEffect(() => {

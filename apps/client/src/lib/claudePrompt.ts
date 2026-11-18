@@ -77,3 +77,31 @@ export function chipLabel(o: PromptOption): string {
   if (isRedirectOption(o)) return 'No, explain';
   return o.label;
 }
+
+/** The part of an xterm Terminal the prompt reader needs (no DOM). */
+export interface BufferLike {
+  buffer: {
+    active: {
+      length: number;
+      baseY: number;
+      cursorY: number;
+      getLine(i: number): { translateToString(trimRight?: boolean): string } | undefined;
+    };
+  };
+}
+
+/**
+ * The numbered prompt on a terminal's screen right now, or null. Reads the
+ * rows up to the cursor's row plus a few below it (Claude draws hints under
+ * the options), so old scrollback never counts.
+ */
+export function promptOnScreen(term: BufferLike, lookback = 16): ClaudePrompt | null {
+  const b = term.buffer.active;
+  const end = Math.min(b.length, b.baseY + b.cursorY + 4);
+  const lines: string[] = [];
+  for (let i = Math.max(0, end - lookback - 4); i < end; i++) {
+    lines.push(b.getLine(i)?.translateToString(true) ?? '');
+  }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return parseClaudePrompt(lines, lookback);
+}

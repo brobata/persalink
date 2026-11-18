@@ -9,7 +9,8 @@ import { SessionRow } from './ui/SessionRow';
 import { StateGlyph } from './ui/StateGlyph';
 import { ProfileTile } from './ui/ProfileTile';
 import { IconButton } from './ui/IconButton';
-import { Pencil, X } from 'lucide-react';
+import { Pencil, Search, X } from 'lucide-react';
+import { useUiStore } from '../stores/uiStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // ============================================================================
@@ -255,7 +256,10 @@ export function HomeScreen() {
               </svg>
             </button>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <IconButton label="Search sessions and commands" onClick={() => useUiStore.getState().openPalette()}>
+              <Search className="w-[18px] h-[18px]" strokeWidth={1.75} />
+            </IconButton>
             <button
               onClick={() => setReordering(!reordering)}
               className={`px-4 py-2 text-sm rounded-lg transition-colors ${

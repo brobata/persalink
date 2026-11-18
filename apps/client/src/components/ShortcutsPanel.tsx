@@ -1,40 +1,41 @@
 /**
- * @file Desktop keyboard shortcuts
- * @description Window-level shortcuts for the desktop grid, Windows Terminal
- *   style, plus the panel that lists them (and offers install-as-app). Caught
- *   in the capture phase so xterm never forwards them to the program; pane
- *   actions are routed to the focused pane via lib/paneCommands.
+ * @file Keyboard shortcuts
+ * @description The window-level key hooks and the one Keyboard shortcuts
+ *   sheet that lists them. Keys are caught in the capture phase so xterm
+ *   never forwards a shortcut to the program.
+ *   - useGlobalShortcuts: works on every screen. Desktop: palette, next
+ *     waiting, Files, Settings, the shortcuts sheet, and digit answers when
+ *     focus is outside the terminal. Phone with a hardware keyboard (the
+ *     Titan): the invisible Alt set (lib/keymap) and the same digit answers.
+ *   - useDesktopShortcuts: the desktop grid's pane keys (composer, copy from
+ *     Claude, links, session cycling, the pane picker).
+ *   Pane actions go to the current terminal through lib/paneCommands.
  */
 
 import { useEffect } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { useLayoutStore } from '../stores/layoutStore';
-import { sendPaneCommand } from '../lib/paneCommands';
+import { useUiStore } from '../stores/uiStore';
+import { currentTerminal, sendPaneCommand, terminalHasFocus } from '../lib/paneCommands';
+import { answerDigit, desktopAction, phoneAction, DESKTOP_KEYS, PHONE_KEYS, type KeyAction, type KeyRow } from '../lib/keymap';
+import { orderSessions } from '../lib/sessionOrder';
+import { deviceKind } from '../lib/device';
 import { isInstalledApp, promptInstall, useCanInstall } from '../lib/installPrompt';
-
-const SHORTCUTS: Array<[string, string]> = [
-  ['Ctrl+click', 'Open a link'],
-  ['Ctrl+C', 'Copy selection, cleaned of indents and wraps (no selection: interrupt)'],
-  ['Ctrl+Shift+C', 'Copy selection exactly as shown'],
-  ['Ctrl+V', 'Paste'],
-  ['Shift+drag', 'Select text inside Claude and other mouse apps'],
-  ['Ctrl+Shift+M', 'Write a message in a text box'],
-  ['Ctrl+Shift+K', 'Copy from Claude: last reply and its code blocks'],
-  ['Ctrl+Shift+L', 'Recent links'],
-  ['Ctrl+Alt+J', 'Next session waiting for you'],
-  ['Ctrl+Alt+→ / ←', 'Next / previous session in this pane'],
-  ['Ctrl+Tab / Ctrl+Shift+Tab', 'Same, when installed as an app'],
-  ['Ctrl+Alt+1…9', 'Jump to session 1–9'],
-  ['Ctrl+Alt+T', 'Open or start a session in this pane'],
-  ['Ctrl+Shift+/', 'Show this list'],
-];
+import { Sheet } from './ui/Sheet';
+import { Kbd } from './ui/Kbd';
 
 /** Text fields other than xterm's own input keep their keys. */
 function isForeignTextField(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.classList.contains('xterm-helper-textarea')) return false;
   if (target.dataset.plComposer !== undefined) return false;
-  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable;
+}
+
+/** Any place text is typed, xterm's input and the composer included. */
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable;
 }
 
 /** Put session `pick(list, current)` into the focused pane. Sessions already
@@ -60,23 +61,87 @@ function cycle(dir: 1 | -1): void {
   });
 }
 
-export function useDesktopShortcuts({ onPickSession, onToggleHelp }: {
-  onPickSession: (paneId: string) => void;
-  onToggleHelp: () => void;
-}): void {
+/** Phone: the previous / next session in attention order (the order every
+ *  list shows), wrapping at the ends. */
+function stepPhoneSession(dir: 1 | -1): void {
+  const { sessions, attachedSession, attachSession } = useAppStore.getState();
+  const list = orderSessions(sessions);
+  if (list.length === 0) return;
+  const i = attachedSession ? list.findIndex((s) => s.id === attachedSession.id) : -1;
+  const next = i < 0 ? list[dir > 0 ? 0 : list.length - 1] : list[(i + dir + list.length) % list.length];
+  if (next && next.id !== attachedSession?.id) attachSession(next.id);
+}
+
+/** Run one keyboard action. Shared by both variants of the global hook. */
+export function runKeyAction(action: KeyAction): void {
+  const app = useAppStore.getState();
+  const ui = useUiStore.getState();
+  switch (action) {
+    case 'palette': ui.togglePalette(); return;
+    case 'shortcuts': ui.shortcutsOpen ? ui.closeShortcuts() : ui.openShortcuts(); return;
+    case 'next-waiting':
+      if (!app.openNextWaiting()) app.pushNotification('info', 'Nothing else needs you');
+      return;
+    case 'files':
+      if (app.filesDisabled) app.pushNotification('info', 'Files are turned off for this connection');
+      else app.openFiles();
+      return;
+    case 'settings': app.openSettings(); return;
+    case 'home': if (app.view !== 'home') app.goBack(); return;
+    case 'prev-session': stepPhoneSession(-1); return;
+    case 'next-session': stepPhoneSession(1); return;
+    case 'composer': sendPaneCommand(currentTerminal(), 'composer'); return;
+    case 'copy-claude': sendPaneCommand(currentTerminal(), 'claude'); return;
+    case 'links': sendPaneCommand(currentTerminal(), 'links'); return;
+    case 'upload': sendPaneCommand(currentTerminal(), 'upload'); return;
+  }
+}
+
+/**
+ * Window-level keys for every screen. `variant` picks the map; `enabled`
+ * false mounts nothing (the phone map is only for a hardware keyboard).
+ */
+export function useGlobalShortcuts({ variant, enabled = true }: { variant: 'desktop' | 'phone'; enabled?: boolean }): void {
+  useEffect(() => {
+    if (!enabled) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      const ui = useUiStore.getState();
+      const action = variant === 'desktop' ? desktopAction(e, terminalHasFocus(e.target)) : phoneAction(e);
+      const done = () => { e.preventDefault(); e.stopPropagation(); };
+      // The palette chord toggles from anywhere, the palette's own field included.
+      if (action === 'palette') { done(); runKeyAction('palette'); return; }
+      if (ui.paletteOpen) return; // the palette owns every other key while open
+      if (isForeignTextField(e.target)) return;
+      if (action) { done(); runKeyAction(action); return; }
+      // Digit answers: only when the terminal itself does not have the key
+      // (there, the digit already reaches the agent as typed).
+      // Never from any text field either (the composer included: a digit
+      // typed into a message is part of the message).
+      const digit = answerDigit(e);
+      if (digit && !e.repeat && !terminalHasFocus(e.target) && !isTextEntry(e.target)) {
+        if (sendPaneCommand(currentTerminal(), 'answer', digit)) done();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [variant, enabled]);
+}
+
+/** The desktop grid's pane keys. */
+export function useDesktopShortcuts({ onPickSession }: { onPickSession: (paneId: string) => void }): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isForeignTextField(e.target)) return;
+      if (useUiStore.getState().paletteOpen) return;
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       const pane = useLayoutStore.getState().focusedPaneId;
       let handled = true;
       if (mod && e.shiftKey && !e.altKey && key === 'm') sendPaneCommand(pane, 'composer');
-      else if (mod && e.shiftKey && !e.altKey && key === 'k') sendPaneCommand(pane, 'claude');
+      else if (mod && e.shiftKey && !e.altKey && key === 'y') sendPaneCommand(pane, 'claude');
       else if (mod && e.shiftKey && !e.altKey && key === 'l') sendPaneCommand(pane, 'links');
       else if (e.ctrlKey && e.altKey && !e.shiftKey && key === 't') onPickSession(pane);
-      else if (e.ctrlKey && e.altKey && !e.shiftKey && key === 'j') useAppStore.getState().openNextWaiting();
-      else if (mod && e.shiftKey && !e.altKey && (e.code === 'Slash' || key === '?')) onToggleHelp();
       // Browser tabs reserve Ctrl+Tab (and Ctrl+PgUp/PgDn, Ctrl+Shift+T), so
       // every session shortcut also has a Ctrl+Alt form that works in a tab.
       else if (e.ctrlKey && !e.altKey && e.key === 'Tab') cycle(e.shiftKey ? -1 : 1);
@@ -94,46 +159,55 @@ export function useDesktopShortcuts({ onPickSession, onToggleHelp }: {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onPickSession, onToggleHelp]);
+  }, [onPickSession]);
 }
 
-export function ShortcutsPanel({ onClose }: { onClose: () => void }) {
-  const canInstall = useCanInstall();
-  const installed = isInstalledApp();
+function KeyList({ title, rows }: { title: string; rows: readonly KeyRow[] }) {
   return (
-    <div
-      className="absolute right-0 top-full mt-1 z-50 w-[22rem] max-w-[calc(100vw-2rem)] bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="flex items-center justify-between px-3 pt-2 pb-1.5 border-b border-zinc-800">
-        <span className="text-[11px] font-semibold text-zinc-400">Keyboard shortcuts</span>
-        <button onClick={onClose} className="px-1.5 text-zinc-600 hover:text-zinc-300 text-xs">×</button>
-      </div>
-      <dl className="px-3 py-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-[11px]">
-        {SHORTCUTS.map(([keys, what]) => (
-          <div key={keys} className="contents">
-            <dt className="font-mono text-zinc-300 whitespace-nowrap">{keys}</dt>
-            <dd className="text-zinc-500">{what}</dd>
+    <section className="px-2 pb-3">
+      <h3 className="pt-2 pb-1.5 text-meta font-semibold text-fg-3">{title}</h3>
+      <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-body text-fg-2">
+        {rows.map((r) => (
+          <div key={r.keys} className="contents">
+            <dt className="min-w-0">{r.action}</dt>
+            <dd className="text-right whitespace-nowrap"><Kbd keys={r.keys} /></dd>
           </div>
         ))}
       </dl>
-      <div className="px-3 py-2 border-t border-zinc-800 text-[11px] text-zinc-500">
-        {installed ? (
-          <span>Running as an installed app — tab shortcuts go to PersaLink.</span>
-        ) : canInstall ? (
-          <div className="flex items-center justify-between gap-2">
-            <span>In a browser tab, Chrome keeps Ctrl+Tab for itself. Install for a real app window.</span>
-            <button
-              onClick={() => { void promptInstall(); }}
-              className="shrink-0 px-2.5 py-1 rounded bg-accent text-accent-ink font-semibold hover:bg-accent-hi"
-            >
-              Install
-            </button>
-          </div>
-        ) : (
-          <span>In a browser tab, Chrome keeps Ctrl+Tab for itself — use Ctrl+Alt+→/←, or install PersaLink from the browser menu (Cast, save and share → Install page as app).</span>
-        )}
-      </div>
-    </div>
+    </section>
+  );
+}
+
+/** The one list of keys. On a phone this is the only place keys are drawn. */
+export function KeyboardShortcutsSheet({ onClose }: { onClose: () => void }) {
+  const canInstall = useCanInstall();
+  const installed = isInstalledApp();
+  const phone = deviceKind() === 'phone';
+  const phoneList = <KeyList key="p" title="Phone with a keyboard" rows={PHONE_KEYS} />;
+  const deskList = <KeyList key="d" title="Desktop" rows={DESKTOP_KEYS} />;
+  return (
+    <Sheet title="Keyboard shortcuts" sub="Every action is also a tap or a click" onClose={onClose} tall={phone}>
+      {phone ? [phoneList, deskList] : [deskList, phoneList]}
+      {!phone && (
+        <div className="mx-2 mt-1 pt-3 border-t border-line text-meta text-fg-3">
+          {installed ? (
+            <span>Running as an installed app, so tab shortcuts go to PersaLink.</span>
+          ) : canInstall ? (
+            <div className="flex items-center justify-between gap-3">
+              <span>In a browser tab, Chrome keeps Ctrl+Tab for itself. Install for a real app window.</span>
+              <button
+                type="button"
+                onClick={() => { void promptInstall(); }}
+                className="shrink-0 h-8 px-3 rounded-[6px] bg-accent text-accent-ink font-semibold hover:bg-accent-hi"
+              >
+                Install
+              </button>
+            </div>
+          ) : (
+            <span>In a browser tab, Chrome keeps Ctrl+Tab for itself. Use Ctrl+Alt+→ / ←, or install PersaLink from the browser menu.</span>
+          )}
+        </div>
+      )}
+    </Sheet>
   );
 }

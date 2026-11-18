@@ -18,6 +18,10 @@ import { useLayoutStore } from './stores/layoutStore';
 import { stashShare } from './lib/shareTarget';
 import { isPublicDoor } from './lib/door';
 import { DESKTOP_MQ } from './lib/platform';
+import { CommandPalette } from './components/CommandPalette';
+import { QuickActionResult } from './components/QuickActionResult';
+import { KeyboardShortcutsSheet, useGlobalShortcuts } from './components/ShortcutsPanel';
+import { useUiStore } from './stores/uiStore';
 
 // ============================================================================
 // Desktop breakpoint hook
@@ -46,6 +50,12 @@ export function App() {
   const view = useAppStore((s) => s.view);
   const initBiometric = useAppStore((s) => s.initBiometric);
   const isDesktop = useIsDesktop();
+  const signedIn = view !== 'locked' && view !== 'connect' && view !== 'auth';
+  // Window-level keys. Desktop: everywhere once signed in. Phone: only with a
+  // hardware keyboard; the terminal mounts its own (it detects the keyboard
+  // live), every other phone screen goes by the remembered detection.
+  useGlobalShortcuts({ variant: 'desktop', enabled: isDesktop && signedIn });
+  useGlobalShortcuts({ variant: 'phone', enabled: !isDesktop && signedIn && view !== 'terminal' && hardwareKeyboardSeen() });
 
   // Auto-connect on app open if we have saved credentials
   useEffect(() => {
@@ -139,7 +149,12 @@ export function App() {
 
     const onPopState = () => {
       const currentView = useAppStore.getState().view;
-      if (currentView === 'profile-editor' || currentView === 'settings' || currentView === 'files' || currentView === 'terminal') {
+      // System back closes the palette or the shortcuts list first.
+      const ui = useUiStore.getState();
+      if (ui.paletteOpen || ui.shortcutsOpen) {
+        if (ui.paletteOpen) ui.closePalette();
+        else ui.closeShortcuts();
+      } else if (currentView === 'profile-editor' || currentView === 'settings' || currentView === 'files' || currentView === 'terminal') {
         useAppStore.getState().goBack();
       }
       pushState();
@@ -177,6 +192,7 @@ export function App() {
         </div>
         <ReconnectLine />
         <ReconnectBanner />
+        <WindowSurfaces />
         <ToastStack />
         <UpdatePill />
         <PublicBadge />
@@ -196,10 +212,31 @@ export function App() {
           title, and a banner only after 8s (docked inside the terminal). */}
       <ReconnectLine />
       {view !== 'terminal' && <ReconnectBanner />}
+      <WindowSurfaces />
       <ToastStack />
       <UpdatePill />
       <PublicBadge />
     </div>
+  );
+}
+
+/** A phone keyboard was seen on this device before (TerminalScreen records
+ *  the first physical keypress). */
+function hardwareKeyboardSeen(): boolean {
+  try { return localStorage.getItem('persalink-hw-keyboard') === 'true'; } catch { return false; }
+}
+
+/** Surfaces any screen can open, mounted once: the command palette, the
+ *  Keyboard shortcuts sheet and a palette-run quick action's result. */
+function WindowSurfaces() {
+  const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
+  const closeShortcuts = useUiStore((s) => s.closeShortcuts);
+  return (
+    <>
+      <CommandPalette />
+      {shortcutsOpen && <KeyboardShortcutsSheet onClose={closeShortcuts} />}
+      <QuickActionResult />
+    </>
   );
 }
 

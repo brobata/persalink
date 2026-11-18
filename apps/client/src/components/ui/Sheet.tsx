@@ -17,6 +17,7 @@ import {
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { IconButton } from './IconButton';
+import { useUiStore } from '../../stores/uiStore';
 
 const EXIT_MS = 180;
 const DISMISS_PX = 80;
@@ -72,6 +73,9 @@ export function Sheet({
   // Esc closes; Tab stays inside the sheet.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The command palette can open over a sheet; while it is up, its keys
+      // (Esc, Tab) are its own.
+      if (useUiStore.getState().paletteOpen) return;
       if (e.key === 'Escape') {
         e.stopPropagation();
         close();
