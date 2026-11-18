@@ -7,6 +7,12 @@
  */
 
 import { isPublicDoor } from './door';
+import { APP_BASE } from './platform';
+
+/** The preview build at /beta/ registers no service worker, so
+ *  `serviceWorker.ready` would hand it the live app's worker and its push
+ *  subscription. Push belongs to the live app only. */
+export const pushIsLiveAppOnly = APP_BASE !== '/';
 
 /** Web Push needs a secure context, a service worker, the Push API, and the
  *  Notification API. (iOS only exposes these once the PWA is installed.) */
@@ -14,6 +20,7 @@ export function isPushSupported(): boolean {
   return (
     // Never subscribe a work/borrowed browser (the server refuses it too).
     !isPublicDoor &&
+    !pushIsLiveAppOnly &&
     typeof window !== 'undefined' &&
     window.isSecureContext &&
     'serviceWorker' in navigator &&

@@ -152,6 +152,14 @@ export function TerminalPane({
   const fitRef = useRef<FitAddon | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
+  // A collapsed pane (a right panel is open) has a 0px terminal box; fitting
+  // it would shrink its tmux window to one row for every attached client.
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
+  // Set when an attach landed while collapsed: the next fit sends its size.
+  const owesResizeRef = useRef(false);
+  // The attached session, for handlers registered once (digit answers).
+  const attachedRef = useRef<SessionInfo | null>(null);
   const pendingRef = useRef<Array<{ data: string; sessionId: string }>>([]);
   const authedRef = useRef(false);
   const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -230,8 +238,11 @@ export function TerminalPane({
       else if (command === 'upload') fileInputRef.current?.click();
       else if (command === 'insert' && data) { sendInput(data); termRef.current?.focus(); }
       else if (command === 'answer' && data) {
-        // Only a numbered prompt on screen takes a digit; anything else is
-        // left alone (the key was not meant for a shell).
+        // Only an agent that is waiting, with a numbered prompt on screen,
+        // takes a digit; anything else is left alone (a numbered list in a
+        // finished reply is not a question, and the key was not meant for a shell).
+        const att = attachedRef.current;
+        if (!att || stateKey(att) !== 'waiting') return;
         const option = termRef.current ? promptOnScreen(termRef.current)?.options.find((o) => o.key === data) : undefined;
         if (!option) return;
         answerRef.current(option);
@@ -381,8 +392,15 @@ export function TerminalPane({
               // the tmux session was sized by a prior client, the screen
               // paints at the wrong dimensions and content wraps into the
               // top-left corner of the pane.
-              try { fitRef.current?.fit(); } catch { /* detached */ }
-              client.send({ type: 'session.resize', cols: term.cols, rows: term.rows });
+              // A collapsed pane skips this: its 0px box would fit to one
+              // row. It sends its real size when it expands (doFit).
+              const box = containerRef.current;
+              if (!collapsedRef.current && box && box.clientHeight >= 1 && box.clientWidth >= 1) {
+                try { fitRef.current?.fit(); } catch { /* detached */ }
+                client.send({ type: 'session.resize', cols: term.cols, rows: term.rows });
+              } else {
+                owesResizeRef.current = true;
+              }
               // Repaint after the attach burst settles. Panes reuse ONE
               // terminal across session switches (reset → scrollback prefill
               // → tmux redraw), and the WebGL renderer sometimes leaves a
@@ -805,14 +823,18 @@ export function TerminalPane({
     let lastCols = 0;
     let lastRows = 0;
     const doFit = () => {
+      // Never fit a collapsed or unlaid-out pane: FitAddon floors at one row
+      // and the resize reaches tmux. The ResizeObserver refits on expand.
+      const box = containerRef.current;
+      if (collapsedRef.current || !box || box.clientHeight < 1 || box.clientWidth < 1) return;
       try { fit.fit(); } catch { /* may fail if detached */ }
       // Whole rows only: the leftover sliver goes above the terminal, so
       // the prompt sits on the bottom edge and no row is ever cut.
-      const box = containerRef.current;
       const screen = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
       if (box && screen) box.style.setProperty('--pl-row-inset', `${rowInset(box.clientHeight, screen.offsetHeight)}px`);
       useUiStore.getState().setPaneDims(paneId, term.cols, term.rows);
-      if (term.cols !== lastCols || term.rows !== lastRows) {
+      if (term.cols !== lastCols || term.rows !== lastRows || owesResizeRef.current) {
+        owesResizeRef.current = false;
         lastCols = term.cols;
         lastRows = term.rows;
         sendResize(term.cols, term.rows);
@@ -910,6 +932,7 @@ export function TerminalPane({
     }
     setRenamingSession(false);
   };
+  attachedRef.current = attachedSession;
   const k = attachedSession ? stateKey(attachedSession) : null;
   const nameNow = attachedSession ? sessionTitle(attachedSession) : null;
 

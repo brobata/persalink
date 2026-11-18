@@ -52,7 +52,7 @@ function WorkspaceTab({ ws, on, label, waiting, canClose }: {
       className={`pl-tab${on ? ' on' : ''}`}
       title={`${label}. Double-click to rename.`}
       onClick={() => { useAppStore.getState().closeOverlay(); useLayoutStore.getState().switchWorkspace(ws.id); }}
-      onKeyDown={(e) => { if (e.key === 'Enter' && !editing) useLayoutStore.getState().switchWorkspace(ws.id); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' && !editing) { useAppStore.getState().closeOverlay(); useLayoutStore.getState().switchWorkspace(ws.id); } }}
       onDoubleClick={() => { setDraft(ws.name ?? label); setEditing(true); setTimeout(() => inputRef.current?.select(), 0); }}
     >
       {editing ? (

@@ -62,6 +62,10 @@ test('cold open falls back to the stale last session, then to Home', () => {
   assert.equal(opensFirst([quiet], 'gone', NOW, NOW), null);
 });
 
+test('cold open respects leaving for Home even when an agent waits', () => {
+  assert.equal(opensFirst([quiet, waitOld], null, null, NOW), null);
+});
+
 test('wait age reads short', () => {
   const at = (sec: number) => s('x', 'waiting', NOW / 1000 - sec);
   assert.equal(waitAge(at(10), NOW), 'now');

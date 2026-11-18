@@ -12,8 +12,9 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { persistName } from '../lib/platform';
 import {
-  calmOpen, clearWhere, dedupePanes, dropWhere, newWorkspaceId, reshape,
+  clearWhere, dedupePanes, dropWhere, newWorkspaceId, reshape,
   type Layout, type PaneSlot, type Workspace,
 } from '../lib/workspaces';
 
@@ -199,7 +200,7 @@ export const useLayoutStore = create<LayoutState>()(
       },
     }),
     {
-      name: 'persalink-layout',
+      name: persistName('persalink-layout'),
       partialize: (state) => ({
         layout: state.layout,
         panes: state.panes,
@@ -212,18 +213,19 @@ export const useLayoutStore = create<LayoutState>()(
       // could leave duplicate sessionIds across panes. Two panes attached to
       // the same tmux session both receive output and confuse the user (one
       // looks doubled). Keep the first occurrence; clear the rest. A layout
-      // saved before workspaces existed becomes the first workspace; a saved
-      // four-pane grid reopens as a split of two (lib/workspaces calmOpen).
+      // saved before workspaces existed becomes the first workspace. The
+      // layout you chose (a four-pane grid too) and the tab order reopen as
+      // saved.
       onRehydrateStorage: () => (state) => {
         if (!state?.panes) return;
         const panes = dedupePanes(state.panes);
         const focusedPaneId = panes.some((p) => p.id === state.focusedPaneId) ? state.focusedPaneId : panes[0]?.id ?? 'pane-0';
         const activeId = state.activeWorkspaceId || FIRST.id;
         const named = (state.workspaces ?? []).find((w) => w.id === activeId)?.name ?? null;
-        const cur = calmOpen({ id: activeId, name: named, layout: state.layout, panes, focusedPaneId, stash: state.stash ?? [] });
-        const others = (state.workspaces ?? []).filter((w) => w.id !== activeId)
-          .map((w) => ({ ...w, panes: dedupePanes(w.panes ?? []), stash: w.stash ?? [] }));
-        const workspaces = [...(state.workspaces ?? []).filter((w) => w.id === activeId).map(() => cur), ...others];
+        const cur: Workspace = { id: activeId, name: named, layout: state.layout, panes, focusedPaneId, stash: state.stash ?? [] };
+        const workspaces = (state.workspaces ?? []).map((w) => (w.id === activeId
+          ? cur
+          : { ...w, panes: dedupePanes(w.panes ?? []), stash: w.stash ?? [] }));
         if (!workspaces.some((w) => w.id === activeId)) workspaces.unshift(cur);
         Object.assign(state, load(cur), {
           workspaces,

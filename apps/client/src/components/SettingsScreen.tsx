@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { StateGlyph } from './ui/StateGlyph';
 import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore } from '../stores/terminalStyleStore';
-import { isPushSupported, notificationPermission } from '../lib/push';
+import { isPushSupported, notificationPermission, pushIsLiveAppOnly } from '../lib/push';
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -118,7 +118,11 @@ export function SettingsScreen() {
         {/* Notifications */}
         <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
           <h2 className="text-sm font-semibold text-zinc-400">Notifications</h2>
-          {!pushSupported ? (
+          {pushIsLiveAppOnly ? (
+            <p className="text-xs text-zinc-500">
+              Notifications come from the live app. Turn them on or off there.
+            </p>
+          ) : !pushSupported ? (
             <p className="text-xs text-zinc-500">
               Not available here. Web Push needs HTTPS, and on iOS the app must be added to your home screen.
             </p>

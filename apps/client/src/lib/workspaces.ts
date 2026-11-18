@@ -2,9 +2,8 @@
  * @file Desktop workspaces and pane layouts
  * @description Pure rules behind the desktop pane grid (stores/layoutStore):
  *   how many panes a layout shows, how panes are kept aside (stashed) when a
- *   layout shrinks so growing it again brings them back, how a saved 2x2
- *   grid reopens as a calm split of two, and what a workspace tab is called
- *   when nobody named it. No DOM, no store: testable under node --test.
+ *   layout shrinks so growing it again brings them back, and what a
+ *   workspace tab is called when nobody named it. No DOM, no store: testable under node --test.
  */
 
 export type Layout = 'single' | 'split-h' | 'split-v' | '2x2';
@@ -53,20 +52,6 @@ export function reshape(layout: Layout, panes: readonly PaneSlot[], stash: reado
   }
   const kept = pool.slice(count).filter((p) => p.sessionId && !used.has(p.id));
   return { panes: shown, stash: kept };
-}
-
-/**
- * A saved four-pane grid reopens as a split of two: the focused pane, then
- * the next pane that shows something. The other two wait in the stash, so
- * switching back to four panes restores them.
- */
-export function calmOpen(ws: Workspace): Workspace {
-  if (ws.layout !== '2x2') return ws;
-  const focused = ws.panes.find((p) => p.id === ws.focusedPaneId) ?? ws.panes[0];
-  const rest = ws.panes.filter((p) => p !== focused);
-  const order = [focused, ...rest.filter((p) => p.sessionId), ...rest.filter((p) => !p.sessionId)].filter(Boolean) as PaneSlot[];
-  const { panes, stash } = reshape('split-h', order, ws.stash);
-  return { ...ws, layout: 'split-h', panes, stash, focusedPaneId: panes[0].id };
 }
 
 /** Clear panes holding a session the matcher calls dead. Returns the same

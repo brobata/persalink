@@ -70,11 +70,11 @@ export const RECENT_FOCUS_MS = 10 * 60 * 1000;
 
 /**
  * The one "which session opens first" rule for a cold open (app launch,
- * sign-in, unlock). The last session you looked at wins when it is waiting
- * or you were on it under ten minutes ago; otherwise the agent that has
- * waited longest; otherwise the last session if it is still alive; otherwise
- * nothing (stay on Home). A session you left by going back to Home is not
- * remembered (lastId is null), so that choice is respected too.
+ * sign-in, unlock). With no last session (you left for Home, or never opened
+ * one) nothing opens: Home stays up, so a keyboard never lands on a prompt
+ * you did not choose. Otherwise the last session wins when it is waiting or
+ * you were on it under ten minutes ago; then the agent that has waited
+ * longest; then the last session if it is still alive; otherwise Home.
  */
 export function opensFirst(
   sessions: readonly SessionInfo[],
@@ -82,7 +82,8 @@ export function opensFirst(
   lastAt: number | null,
   now = Date.now(),
 ): SessionInfo | null {
-  const last = lastId ? sessions.find((s) => s.id === lastId) ?? null : null;
+  if (!lastId) return null;
+  const last = sessions.find((s) => s.id === lastId) ?? null;
   if (last && (needsYou(last) || (lastAt !== null && now - lastAt < RECENT_FOCUS_MS))) return last;
   return waitingSessions(sessions)[0] ?? last ?? null;
 }

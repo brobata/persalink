@@ -47,6 +47,13 @@ export const APP_BASE: string = (() => {
   return base.endsWith('/') ? base : `${base}/`;
 })();
 
+/** The saved-state key for a store. The preview build at /beta/ shares the
+ *  live app's origin, so it keeps its own copy (`name:beta`): opening the
+ *  preview must never rewrite the live app's layout, login or style. */
+export function persistName(name: string): string {
+  return APP_BASE === '/' ? name : `${name}:beta`;
+}
+
 /** Width at which the client switches to the desktop sidebar + grid layout. */
 export const DESKTOP_MQ = '(min-width: 768px)';
 

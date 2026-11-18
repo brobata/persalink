@@ -20,7 +20,7 @@ import { pageHost, schemesFor } from '../lib/platform';
 import { useLayoutStore } from './layoutStore';
 import { isPublicDoor } from '../lib/door';
 import { promptOpen } from '../lib/linkOpen';
-import { APP_BASE, isDesktopViewport } from '../lib/platform';
+import { APP_BASE, isDesktopViewport, persistName } from '../lib/platform';
 import { nextWaiting, opensFirst } from '../lib/sessionOrder';
 import { answeredBook } from '../lib/answered';
 
@@ -945,7 +945,7 @@ export const useAppStore = create<AppState>()(
       },
     }),
     {
-      name: 'persalink-storage',
+      name: persistName('persalink-storage'),
       version: 1,
       // Public door (a work/borrowed computer): keep the login only until the
       // browser closes. Nothing persists on that machine's disk.
@@ -1041,7 +1041,7 @@ function handleServerMessage(
       if (msg.door === 'public' && !isPublicDoor) {
         try {
           document.cookie = 'pl_door=public; Path=/; Secure; SameSite=Strict';
-          localStorage.removeItem('persalink-storage');
+          localStorage.removeItem(persistName('persalink-storage'));
         } catch { /* storage blocked — nothing persisted either */ }
         window.location.reload();
         return;
@@ -1060,7 +1060,7 @@ function handleServerMessage(
         approvalNumber: null,
         filesDisabled: !!msg.disableFiles,
         // A first sign-in picks where to land through opensFirst() (the
-        // waiting agent beats a stale last session). A reconnect re-attaches
+        // waiting agent beats a stale last session; no last session = Home). A reconnect re-attaches
         // the session already on screen — never jump mid-work.
         pendingColdOpen: coldOpen,
         pendingAutoAttach: coldOpen ? null : s.lastActiveSessionId,

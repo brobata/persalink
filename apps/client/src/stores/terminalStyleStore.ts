@@ -7,6 +7,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { persistName } from '../lib/platform';
 
 export interface XtermTheme {
   background: string;
@@ -347,7 +348,7 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       }),
     }),
     {
-      name: 'persalink-terminal-style',
+      name: persistName('persalink-terminal-style'),
       // Sanitize any stale keys (e.g. 'hack' from older versions) on load.
       onRehydrateStorage: () => (state) => {
         if (!state) return;

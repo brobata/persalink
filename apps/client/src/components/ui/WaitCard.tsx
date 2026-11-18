@@ -10,7 +10,8 @@
  *   Send rule: on desktop a click sends at once and the status bar says so.
  *   On touch a tap is held for 3s first ("Sending 'Yes' in 3s · Undo", with
  *   a draining line), because a pocket tap on a list is the real mis-tap
- *   risk; nothing is typed until it lands. Either way the screen is read
+ *   risk; nothing is typed until it lands, and the hold lives outside the
+ *   card (lib/heldAnswers) so leaving the screen does not drop it. Either way the screen is read
  *   again right before typing, and nothing is sent if the question changed.
  */
 
@@ -21,6 +22,7 @@ import { AnswerChips } from './AnswerChips';
 import { StateGlyph } from './StateGlyph';
 import { chipLabel, type PromptOption } from '../../lib/claudePrompt';
 import { peekKey } from '../../lib/inlineAnswer';
+import { cancelHeld, holdAnswer, useHeldAnswer } from '../../lib/heldAnswers';
 import { sendInlineAnswer, useWaitingPrompt } from '../../lib/useInlineAnswer';
 import { waitAge } from '../../lib/sessionOrder';
 import { previewLine, sessionTitle, stateKey, stateWord } from '../../lib/sessionState';
@@ -50,21 +52,30 @@ export function WaitCard({ session: s, variant, accent, onOpen, onReply, onSent,
   const touch = variant === 'touch';
   const key = peekKey(s);
 
-  // Held answer (touch): what, and when it lands.
-  const [held, setHeld] = useState<{ o: PromptOption; until: number } | null>(null);
+  // Held answer (touch): what, and when it lands. Kept outside the card
+  // (lib/heldAnswers) so leaving the screen does not drop it.
+  const heldAnswer = useHeldAnswer(s.id);
+  const held = heldAnswer ? { o: heldAnswer.option, until: heldAnswer.until } : null;
   const [left, setLeft] = useState(0);
   // Typed, until the session's screen moves on.
   const [sent, setSent] = useState<{ label: string; key: string; at: number } | null>(null);
   const [, setTick] = useState(0);
   const [busy, setBusy] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const tick = useRef<ReturnType<typeof setInterval> | null>(null);
   const live = useRef(true);
   useEffect(() => () => {
     live.current = false;
     if (timer.current) clearTimeout(timer.current);
-    if (tick.current) clearInterval(tick.current);
   }, []);
+  // The countdown while an answer is held (also after this card remounts).
+  const heldUntil = heldAnswer?.until ?? null;
+  useEffect(() => {
+    if (heldUntil === null) return;
+    const update = () => setLeft(Math.max(0, heldUntil - Date.now()));
+    update();
+    const id = setInterval(update, 250);
+    return () => clearInterval(id);
+  }, [heldUntil]);
 
   const commit = useCallback(async (o: PromptOption) => {
     if (!prompt) return;
@@ -87,26 +98,13 @@ export function WaitCard({ session: s, variant, accent, onOpen, onReply, onSent,
   const answer = (o: PromptOption) => {
     if (busy || held) return;
     if (!touch) { void commit(o); return; }
-    const until = Date.now() + GRACE_MS;
-    setHeld({ o, until });
     setLeft(GRACE_MS);
-    tick.current = setInterval(() => setLeft(Math.max(0, until - Date.now())), 250);
-    timer.current = setTimeout(() => {
-      if (tick.current) clearInterval(tick.current);
-      tick.current = null;
-      timer.current = null;
-      setHeld(null);
-      void commit(o);
-    }, GRACE_MS);
+    // commit reports through onSent / onNotSent before it touches this
+    // card, so the result still shows if the card is gone by then.
+    holdAnswer(s.id, o, GRACE_MS, () => { void commit(o); });
   };
 
-  const undo = () => {
-    if (timer.current) clearTimeout(timer.current);
-    if (tick.current) clearInterval(tick.current);
-    timer.current = null;
-    tick.current = null;
-    setHeld(null);
-  };
+  const undo = () => cancelHeld(s.id);
 
   const showSent = !!sent && (sent.key === key || Date.now() - sent.at < SENT_HOLD_MS);
   const question = prompt?.question || previewLine(s, k) || (k === 'error' ? 'Stopped on an error' : 'Waiting for you');

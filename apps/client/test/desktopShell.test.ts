@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  calmOpen, clearWhere, dedupePanes, dropWhere, newWorkspaceId, paneCountFor, reshape, workspaceLabel,
+  clearWhere, dedupePanes, dropWhere, newWorkspaceId, paneCountFor, reshape, workspaceLabel,
   type PaneSlot, type Workspace,
 } from '../src/lib/workspaces.ts';
 import { goesToStatusBar, sentSentence, waitingTail } from '../src/lib/statusLine.ts';
@@ -38,20 +38,6 @@ test('reshape: pane counts per layout', () => {
   assert.equal(paneCountFor('split-v'), 2);
   assert.equal(paneCountFor('2x2'), 4);
   assert.equal(reshape('single', []).panes.length, 1);
-});
-
-test('calmOpen: a saved 2x2 reopens as a split of the focused pane and the next one in use', () => {
-  const ws: Workspace = {
-    id: 'ws-1', name: null, layout: '2x2', focusedPaneId: 'pane-2', stash: [],
-    panes: [slot('pane-0'), slot('pane-1', 'b'), slot('pane-2', 'c'), slot('pane-3', 'd')],
-  };
-  const calm = calmOpen(ws);
-  assert.equal(calm.layout, 'split-h');
-  assert.deepEqual(calm.panes.map((p) => p.sessionId), ['c', 'b']);
-  assert.equal(calm.focusedPaneId, 'pane-2');
-  assert.deepEqual(calm.stash.map((p) => p.sessionId), ['d'], 'the fourth waits in the stash');
-  const split: Workspace = { ...ws, layout: 'split-h' };
-  assert.equal(calmOpen(split), split, 'other layouts open as saved');
 });
 
 test('clearWhere / dropWhere: unchanged arrays come back as the same array', () => {
