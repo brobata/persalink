@@ -1731,6 +1731,7 @@ async function main(): Promise<void> {
     createHttpHandler(staticDir, getServerInfo, tokenValidator('tailnet'), pinnedProfiles, {
       fileAuth: fileAuth('tailnet'),
       onApproval: (id, secret, decision) => approvals.answer(id, secret, decision),
+      betaDir: path.join(process.cwd(), 'apps', 'client', 'dist-beta'),
     }),
   );
 

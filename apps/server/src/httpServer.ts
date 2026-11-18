@@ -77,6 +77,10 @@ export function createHttpHandler(
     cacheFiles?: boolean;
     /** Phone's answer to a sign-in approval (tailnet door only). */
     onApproval?: (id: string, secret: string, decision: 'approve' | 'deny') => boolean;
+    /** A preview client (built with base /beta/) served at /beta/ next to the
+     *  real one, so a redesign can be tried on the same origin, signed in,
+     *  without replacing the client the owner depends on (tailnet door only). */
+    betaDir?: string;
   } = {},
 ): http.RequestListener {
   const securityHeaders = getSecurityHeaders();
@@ -177,16 +181,29 @@ export function createHttpHandler(
       return;
     }
 
+    // /beta/... → the preview client, with its own SPA fallback
+    let rootDir = staticDir;
+    let relPath = urlPath;
+    if (opts.betaDir && (urlPath === '/beta' || urlPath.startsWith('/beta/'))) {
+      if (urlPath === '/beta') {
+        res.writeHead(302, { Location: '/beta/' });
+        res.end();
+        return;
+      }
+      rootDir = opts.betaDir;
+      relPath = urlPath.slice('/beta'.length);
+    }
+
     // Static file serving — skip if static dir doesn't exist
-    if (!fs.existsSync(staticDir)) {
+    if (!fs.existsSync(rootDir)) {
       res.writeHead(404);
       res.end('Client not built yet. Run: cd apps/client && npm run build');
       return;
     }
 
-    let filePath = path.join(staticDir, urlPath);
+    let filePath = path.join(rootDir, relPath);
     const resolved = path.resolve(filePath);
-    const resolvedStaticDir = path.resolve(staticDir);
+    const resolvedStaticDir = path.resolve(rootDir);
     if (!isPathWithin(resolvedStaticDir, resolved)) {
       res.writeHead(403);
       res.end('Forbidden');
@@ -200,7 +217,7 @@ export function createHttpHandler(
         return;
       }
       // SPA fallback
-      const indexPath = path.join(staticDir, 'index.html');
+      const indexPath = path.join(rootDir, 'index.html');
       fs.stat(indexPath, (indexErr) => {
         if (!indexErr) {
           serveFile(indexPath, req, res, true);

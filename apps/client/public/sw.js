@@ -64,6 +64,8 @@ self.addEventListener('fetch', (event) => {
   let url;
   try { url = new URL(req.url); } catch { return; }
   if (url.origin !== self.location.origin) return; // same-origin only
+  // The /beta/ preview client is never cached, and must not replace the shell
+  if (url.pathname === '/beta' || url.pathname.startsWith('/beta/')) return;
 
   if (ASSET_RE.test(url.pathname)) {
     event.respondWith(cacheFirst(req));
