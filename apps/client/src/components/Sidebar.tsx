@@ -9,6 +9,7 @@ import { useAppStore } from '../stores/appStore';
 import { useLayoutStore } from '../stores/layoutStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 import { useLongPress } from '../lib/useLongPress';
+import { useAttentionOrder } from '../lib/sessionOrder';
 
 // ============================================================================
 // Session Pill (compact, for sidebar)
@@ -16,6 +17,7 @@ import { useLongPress } from '../lib/useLongPress';
 
 function SessionPill({ session }: { session: SessionInfo }) {
   const killSession = useAppStore(s => s.killSession);
+  const closeOverlay = useAppStore(s => s.closeOverlay);
   const panes = useLayoutStore(s => s.panes);
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
   const assignSession = useLayoutStore(s => s.assignSession);
@@ -35,7 +37,9 @@ function SessionPill({ session }: { session: SessionInfo }) {
         : 'bg-emerald-950/30 border-emerald-700/60 hover:bg-emerald-950/50'
     }`}>
       <button
-        onClick={() => assignSession(focusedPaneId, session.id)}
+        // A session click always lands on the grid: close Settings, Files or
+        // the profile editor if one is covering it, else the click looks dead.
+        onClick={() => { assignSession(focusedPaneId, session.id); closeOverlay(); }}
         className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 text-left"
         title={
           isInFocusedPane ? `In focused pane (${paneNumber})`
@@ -127,15 +131,19 @@ function ProfileRow({ profile }: { profile: Profile }) {
   // Shift/Alt-click OR long-press forces a new instance even if one already
   // exists. Plain click attaches the first existing session (default
   // ergonomic). Mirrors the mobile profile card's tap / hold contract.
+  // Either way the grid comes back to the front (closeOverlay is a no-op when
+  // nothing covers it).
   const handleNewInstance = useCallback(() => {
     markPendingAssign(focusedPaneId);
     createSession(profile.id);
+    useAppStore.getState().closeOverlay();
   }, [markPendingAssign, focusedPaneId, createSession, profile.id]);
   const handleClick = useCallback((e: React.MouseEvent) => {
     const forceNew = e.shiftKey || e.altKey;
     const existing = liveSessions[0];
     if (existing && !forceNew) {
       useLayoutStore.getState().assignSession(focusedPaneId, existing.id);
+      useAppStore.getState().closeOverlay();
       return;
     }
     handleNewInstance();
@@ -207,6 +215,7 @@ export function Sidebar() {
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
   const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
+  const orderedSessions = useAttentionOrder(sessions);
 
   const groupedProfiles = useMemo(() => {
     const groups = new Map<string, Profile[]>();
@@ -305,7 +314,7 @@ export function Sidebar() {
               Live ({sessions.length})
             </h2>
             <div className="space-y-1">
-              {sessions.map((session) => (
+              {orderedSessions.map((session) => (
                 <SessionPill key={session.id} session={session} />
               ))}
             </div>
@@ -344,7 +353,7 @@ export function Sidebar() {
       {/* Bottom actions */}
       <div className="shrink-0 px-2 py-2 border-t border-zinc-800 space-y-1">
         <button
-          onClick={() => { markPendingAssign(focusedPaneId); createSession(); }}
+          onClick={() => { markPendingAssign(focusedPaneId); createSession(); useAppStore.getState().closeOverlay(); }}
           className="w-full py-1.5 text-xs text-zinc-600 hover:text-zinc-400
                      border border-dashed border-zinc-800 hover:border-zinc-700
                      rounded-lg transition-colors"

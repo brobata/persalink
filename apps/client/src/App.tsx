@@ -15,13 +15,13 @@ import { UpdatePill } from './components/UpdatePill';
 import { useLayoutStore } from './stores/layoutStore';
 import { stashShare } from './lib/shareTarget';
 import { isPublicDoor } from './lib/door';
+import { DESKTOP_MQ } from './lib/platform';
 
 // ============================================================================
 // Desktop breakpoint hook
 // ============================================================================
 
-const MQ = '(min-width: 768px)';
-const mqList = typeof window !== 'undefined' ? window.matchMedia(MQ) : null;
+const mqList = typeof window !== 'undefined' ? window.matchMedia(DESKTOP_MQ) : null;
 
 function subscribeDesktop(cb: () => void) {
   mqList?.addEventListener('change', cb);
@@ -56,7 +56,9 @@ export function App() {
       const params = new URLSearchParams(window.location.search);
       const target = params.get('session');
       if (target) {
-        useAppStore.setState({ lastActiveSessionId: target });
+        // Stamped as just-focused so the cold-open rule (opensFirst) honours
+        // the tapped notification over any other waiting agent.
+        useAppStore.setState({ lastActiveSessionId: target, lastActiveAt: Date.now() });
         window.history.replaceState({}, '', window.location.pathname);
       }
       // PWA shortcut deep link: long-press app icon → pinned profile.
@@ -97,6 +99,21 @@ export function App() {
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
   }, []);
 
+  // Remember when the session on screen was last looked at, so a cold open
+  // within ten minutes returns to it (opensFirst). Stamped as the page hides —
+  // the moment the user leaves it.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== 'hidden') return;
+      const { view, attachedSession, endedSession } = useAppStore.getState();
+      if (view === 'terminal' && attachedSession && !endedSession) {
+        useAppStore.setState({ lastActiveAt: Date.now() });
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
   // Route newly-created sessions into the pane that asked for them
   useEffect(() => {
     let known = new Set<string>(useAppStore.getState().sessions.map(s => s.id));
@@ -121,7 +138,7 @@ export function App() {
 
     const onPopState = () => {
       const currentView = useAppStore.getState().view;
-      if (currentView === 'profile-editor' || currentView === 'settings' || currentView === 'terminal') {
+      if (currentView === 'profile-editor' || currentView === 'settings' || currentView === 'files' || currentView === 'terminal') {
         useAppStore.getState().goBack();
       }
       pushState();

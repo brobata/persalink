@@ -19,6 +19,8 @@ import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
+import { nextWaiting, useAttentionOrder, waitAge } from '../lib/sessionOrder';
+import { ExitedTombstone } from './ExitedTombstone';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // Soft-keyboard helper: keys absent from mobile keyboards but essential
@@ -434,6 +436,7 @@ function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
   onNew: () => void;
   onClose: () => void;
 }) {
+  const ordered = useAttentionOrder(sessions);
   return (
     <div className="fixed inset-0 z-50" onClick={onClose}>
       {/* Dropdown anchored just under the top bar, where the trigger lives —
@@ -451,7 +454,7 @@ function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
           {sessions.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-zinc-600">No live sessions</div>
           )}
-          {sessions.map((s) => (
+          {ordered.map((s) => (
             <SwitcherRow key={s.id} s={s} active={s.id === currentId} onPick={onPick} onClose={onClose} />
           ))}
         </div>
@@ -523,6 +526,17 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     snippets, claudeReply, requestClaudeReply, clearClaudeReply,
   } = useAppStore();
   const filesDisabled = useAppStore((s) => s.filesDisabled);
+  const endedSession = useAppStore((s) => s.endedSession);
+  const restartEnded = useAppStore((s) => s.restartEnded);
+  const dismissEnded = useAppStore((s) => s.dismissEnded);
+  const openNextWaiting = useAppStore((s) => s.openNextWaiting);
+  // The agent that has waited longest, other than this one: the header pill.
+  const waitingNext = useMemo(
+    () => nextWaiting(sessions, attachedSession?.id ?? null),
+    [sessions, attachedSession?.id],
+  );
+  const ended = endedSession && endedSession.id === attachedSession?.id ? endedSession : null;
+  const isEnded = !!ended;
   // Text-box composer (FAB → Message): write, edit, dictate, then send once.
   const [composerOpen, setComposerOpen] = useState(false);
 
@@ -1875,6 +1889,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     };
   }, [attachedSession?.id]);
 
+  // A session that ended drops the soft keyboard: there is nothing to type into.
+  useEffect(() => {
+    if (isEnded) terminalRef.current?.blur();
+  }, [isEnded]);
+
   return (
     <div className="flex flex-col h-full min-w-0 bg-[#09090b]">
       {/* Top bar — fixed height prevents scrollbar jitter from resizing the terminal */}
@@ -2101,6 +2120,8 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       <div
         className="flex-1 min-h-0 relative"
         onClick={() => {
+          // Ended: nothing to type into, so don't raise the keyboard.
+          if (useAppStore.getState().endedSession) return;
           const r = readerRef.current;
           if (r?.active) {
             // A tap on the text page with nothing selected closes it; with a
@@ -2111,7 +2132,29 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           terminalRef.current?.focus();
         }}
       >
-        <div ref={termRef} className="absolute inset-0 overflow-hidden" />
+        <div
+          ref={termRef}
+          className={`absolute inset-0 overflow-hidden transition-opacity duration-200 ${ended ? 'opacity-50' : ''}`}
+        />
+        {ended && <ExitedTombstone ended={ended} onRestart={restartEnded} onDismiss={dismissEnded} />}
+        {/* Next waiting — the agent that has waited longest for you, one tap
+            away. Floats at the top edge (old scrollback, never the prompt rows
+            at the bottom) because today's top bar has no room left; the phone
+            header redesign gives it a home there. Amber = waiting for you. */}
+        {!sidebarVisible && waitingNext && (
+          <button
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={(e) => { e.stopPropagation(); openNextWaiting(); }}
+            className="absolute top-2 right-2 z-20 flex items-center gap-1.5 h-8 max-w-[60%] pl-2.5 pr-3 rounded-full
+                       border border-amber-400/40 bg-zinc-950/90 text-[12px] text-amber-200 shadow-lg
+                       active:bg-zinc-900 motion-safe:animate-[pl-rise_160ms_ease-out]"
+            aria-label={`Open ${waitingNext.name || waitingNext.profileName}, waiting ${waitAge(waitingNext)}`}
+          >
+            <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400" />
+            <span className="truncate">{waitingNext.name || waitingNext.profileName}</span>
+            <span className="shrink-0 tabular-nums text-amber-300/70">{waitAge(waitingNext)}</span>
+          </button>
+        )}
         {/* Input-debug overlay — raw events, newest at the bottom */}
         {inputDebug && (
           <div className="absolute left-2 top-2 z-40 pointer-events-none rounded-lg bg-black/80 px-2.5 py-2 font-mono text-[10px] leading-4 text-emerald-300 max-w-[75vw] break-words">

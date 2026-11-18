@@ -21,6 +21,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ['Ctrl+Shift+M', 'Write a message in a text box'],
   ['Ctrl+Shift+K', 'Copy from Claude: last reply and its code blocks'],
   ['Ctrl+Shift+L', 'Recent links'],
+  ['Ctrl+Alt+J', 'Next session waiting for you'],
   ['Ctrl+Alt+→ / ←', 'Next / previous session in this pane'],
   ['Ctrl+Tab / Ctrl+Shift+Tab', 'Same, when installed as an app'],
   ['Ctrl+Alt+1…9', 'Jump to session 1–9'],
@@ -74,6 +75,7 @@ export function useDesktopShortcuts({ onPickSession, onToggleHelp }: {
       else if (mod && e.shiftKey && !e.altKey && key === 'k') sendPaneCommand(pane, 'claude');
       else if (mod && e.shiftKey && !e.altKey && key === 'l') sendPaneCommand(pane, 'links');
       else if (e.ctrlKey && e.altKey && !e.shiftKey && key === 't') onPickSession(pane);
+      else if (e.ctrlKey && e.altKey && !e.shiftKey && key === 'j') useAppStore.getState().openNextWaiting();
       else if (mod && e.shiftKey && !e.altKey && (e.code === 'Slash' || key === '?')) onToggleHelp();
       // Browser tabs reserve Ctrl+Tab (and Ctrl+PgUp/PgDn, Ctrl+Shift+T), so
       // every session shortcut also has a Ctrl+Alt form that works in a tab.

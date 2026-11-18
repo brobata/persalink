@@ -4,6 +4,7 @@ import { App } from './App';
 import './styles/index.css';
 // Must run before the browser fires beforeinstallprompt (once, early).
 import './lib/installPrompt';
+import { APP_BASE } from './lib/platform';
 
 // Self-hosted terminal fonts — variable where available so a single file
 // covers all weights the TerminalSettings UI exposes (300-600).
@@ -70,8 +71,10 @@ if (!redirectToSecureOrigin()) {
 
   // Service worker registration — needed for PWA install prompts. Only
   // registers in secure contexts (https or localhost); the browser blocks
-  // SW registration on insecure HTTP origins anyway.
-  if ('serviceWorker' in navigator && window.isSecureContext) {
+  // SW registration on insecure HTTP origins anyway. Only the live client at
+  // the origin root registers: a preview build (/beta/) must never replace
+  // the root worker that serves the real app and its push notifications.
+  if ('serviceWorker' in navigator && window.isSecureContext && APP_BASE === '/') {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').catch((err) => {
         console.warn('[PersaLink] SW registration failed:', err);

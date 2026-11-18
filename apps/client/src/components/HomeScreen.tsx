@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
 import { useLongPress } from '../lib/useLongPress';
+import { useAttentionOrder } from '../lib/sessionOrder';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // ============================================================================
@@ -260,23 +261,10 @@ export function HomeScreen() {
   const { sessions, profiles, serverName, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
   const filesDisabled = useAppStore((s) => s.filesDisabled);
 
-  // Recency decides the Live order when Home OPENS, then the order FREEZES
-  // for the visit. A live re-sort (activity broadcasts land every ~4s) made
-  // rows dance under the user's finger mid-tap — a kill confirm once moved
-  // and a different session ate the tap. New sessions surface on top.
-  const [frozenOrder] = useState(() => new Map(
-    [...useAppStore.getState().sessions]
-      .sort((a, b) => (b.activityAt ?? 0) - (a.activityAt ?? 0))
-      .map((s, i) => [s.id, i] as const)
-  ));
-  const orderedSessions = useMemo(() => [...sessions].sort((a, b) => {
-    const ia = frozenOrder.get(a.id);
-    const ib = frozenOrder.get(b.id);
-    if (ia === undefined && ib === undefined) return (b.activityAt ?? 0) - (a.activityAt ?? 0);
-    if (ia === undefined) return -1;
-    if (ib === undefined) return 1;
-    return ia - ib;
-  }), [sessions, frozenOrder]);
+  // Attention order (waiting first, longest wait on top), held still while a
+  // finger is down and briefly after: a live re-sort once moved a row under
+  // a mid-tap kill confirm and a different session ate the tap.
+  const orderedSessions = useAttentionOrder(sessions);
   const [reordering, setReordering] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);

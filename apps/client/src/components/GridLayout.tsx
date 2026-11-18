@@ -11,6 +11,7 @@ import { useLayoutStore, type Layout } from '../stores/layoutStore';
 import { TerminalPane } from './TerminalPane';
 import { TerminalSettings } from './TerminalSettings';
 import { ShortcutsPanel, useDesktopShortcuts } from './ShortcutsPanel';
+import { orderSessions } from '../lib/sessionOrder';
 import { remoteSnapshot, remoteCreateSession, resolveEntryHost } from '../lib/remoteServer';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
@@ -153,7 +154,7 @@ function SessionPicker({
                 Live sessions
               </div>
               <div className="space-y-1">
-                {sessions.map((s: SessionInfo) => {
+                {orderSessions(sessions).map((s: SessionInfo) => {
                   const inUse = usedKeys.has(`${pickServerId ?? ''}:${s.id}`);
                   return (
                     <button

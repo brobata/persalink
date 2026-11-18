@@ -20,6 +20,8 @@ import { pageHost, schemesFor } from '../lib/platform';
 import { useLayoutStore } from './layoutStore';
 import { isPublicDoor } from '../lib/door';
 import { promptOpen } from '../lib/linkOpen';
+import { APP_BASE, isDesktopViewport } from '../lib/platform';
+import { nextWaiting, opensFirst } from '../lib/sessionOrder';
 
 export type ClaudeReplyMessage = Extract<ServerMessage, { type: 'claude.reply' }>;
 export type ClaudeReplyState = ClaudeReplyMessage | 'loading';
@@ -45,6 +47,16 @@ export interface ServerEntry {
   authToken: string | null;
   serverName: string | null;
   lastConnectedAt: number | null;
+}
+
+/** The session you were viewing when it ended. The terminal stays on it,
+ *  showing a tombstone (Restart / Dismiss), instead of jumping to another
+ *  session you might then type into by mistake. */
+export interface EndedSession {
+  id: string;
+  name: string;
+  profileId?: string;
+  endedAt: number;
 }
 
 export interface SessionTab {
@@ -103,7 +115,15 @@ interface AppState {
   // the transient handshake: set on auth, consumed once sessions.list
   // confirms the session still exists.
   lastActiveSessionId: string | null;
+  /** When lastActiveSessionId was last on screen (ms). opensFirst() keeps it
+   *  on a cold open only while this is recent. Persisted with it. */
+  lastActiveAt: number | null;
   pendingAutoAttach: string | null;
+  /** Armed by a first sign-in (not a reconnect): the next sessions.list
+   *  picks where to land through opensFirst(). One-shot. */
+  pendingColdOpen: boolean;
+  /** Non-null while the terminal shows an Exited tombstone. */
+  endedSession: EndedSession | null;
   /** Profile deep link (/?profile=<id> — PWA shortcuts). Consumed one-shot on
    *  the first post-auth sessions.list: attach the profile's live session or
    *  create one. */
@@ -172,6 +192,14 @@ interface AppState {
   attachSession: (sessionId: string, cols?: number, rows?: number) => void;
   detachSession: () => void;
   killSession: (sessionId: string) => void;
+  /** Open the session that has waited longest for you (skipping the one on
+   *  screen). Phone: attach it. Desktop: focus its pane, or put it in the
+   *  focused pane. Returns the session id, or null when nobody waits. */
+  openNextWaiting: () => string | null;
+  /** Tombstone: start a fresh session from the ended one's profile. */
+  restartEnded: () => void;
+  /** Tombstone: leave it and go Home. */
+  dismissEnded: () => void;
   renameSession: (sessionId: string, name: string) => void;
   sendInput: (data: string) => void;
   exitScroll: () => void;
@@ -245,7 +273,9 @@ let onLoggedOut: (() => void) | null = null;
 // has no version.json, offline, old server) just means no pill.
 async function checkForUpdate(): Promise<void> {
   try {
-    const res = await fetch('/version.json', { cache: 'no-store' });
+    // Base-aware: the preview build lives at /beta/ and must compare against
+    // its own version.json, not the live client's at the origin root.
+    const res = await fetch(`${APP_BASE}version.json`, { cache: 'no-store' });
     if (!res.ok) return;
     const { build } = await res.json() as { build?: string };
     if (build && typeof __BUILD_ID__ !== 'undefined' && build !== __BUILD_ID__) {
@@ -344,7 +374,10 @@ export const useAppStore = create<AppState>()(
       execResults: {},
       notifications: [],
       lastActiveSessionId: null,
+      lastActiveAt: null,
       pendingAutoAttach: null,
+      pendingColdOpen: false,
+      endedSession: null,
       pendingProfileLaunch: null,
       vapidPublicKey: null,
       notificationsEnabled: false,
@@ -397,7 +430,8 @@ export const useAppStore = create<AppState>()(
             connectionState: 'disconnected', view: 'connect',
             sessions: [], profiles: [], healthStatuses: [], discoveredProfiles: [],
             attachedSession: null, windows: [], activeTabId: null, switchingToId: null,
-            lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null, claudeReply: null,
+            lastActiveSessionId: null, pendingAutoAttach: null, pendingColdOpen: false, endedSession: null,
+            sessionLinks: null, claudeReply: null,
           });
         }
       },
@@ -423,7 +457,8 @@ export const useAppStore = create<AppState>()(
           // Everything below is per-server state from the previous server.
           sessions: [], profiles: [], healthStatuses: [], discoveredProfiles: [],
           attachedSession: null, windows: [], activeTabId: null, switchingToId: null,
-          lastActiveSessionId: null, pendingAutoAttach: null, sessionLinks: null, claudeReply: null,
+          lastActiveSessionId: null, pendingAutoAttach: null, pendingColdOpen: false, endedSession: null,
+          sessionLinks: null, claudeReply: null,
           authError: null, view: 'connect',
         });
         get().connect();
@@ -559,7 +594,7 @@ export const useAppStore = create<AppState>()(
 
       detachSession: () => {
         wsClient?.send({ type: 'session.detach' });
-        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null, switchingToId: null, sessionLinks: null, claudeReply: null });
+        set({ attachedSession: null, view: 'home', windows: [], initialScrollback: null, activeTabId: null, lastActiveSessionId: null, switchingToId: null, sessionLinks: null, claudeReply: null, endedSession: null });
       },
 
       killSession: (sessionId) => {
@@ -572,7 +607,7 @@ export const useAppStore = create<AppState>()(
         guardKilled(sessionId);
         useLayoutStore.getState().clearSession(sessionId, get().activeServerId);
         if (get().attachedSession?.id === sessionId) {
-          set({ attachedSession: null, view: 'home', windows: [], activeTabId: null, switchingToId: null });
+          set({ attachedSession: null, view: 'home', windows: [], activeTabId: null, switchingToId: null, endedSession: null });
         }
         set(s => ({
           sessions: s.sessions.filter(x => x.id !== sessionId),
@@ -587,7 +622,45 @@ export const useAppStore = create<AppState>()(
       },
 
       sendInput: (data) => {
+        // Keys typed at a tombstone go nowhere — never into another session.
+        if (get().endedSession) return;
         wsClient?.send({ type: 'session.input', data });
+      },
+
+      openNextWaiting: () => {
+        const { sessions, attachedSession, activeServerId } = get();
+        if (isDesktopViewport()) {
+          const layout = useLayoutStore.getState();
+          const onActive = (serverId: string | null) => !serverId || serverId === activeServerId;
+          const focused = layout.panes.find((p) => p.id === layout.focusedPaneId);
+          const current = focused && onActive(focused.serverId) ? focused.sessionId : null;
+          const next = nextWaiting(sessions, current);
+          if (!next) return null;
+          const shown = layout.panes.find((p) => p.sessionId === next.id && onActive(p.serverId));
+          if (shown) layout.setFocusedPane(shown.id);
+          else layout.assignSession(layout.focusedPaneId, next.id, activeServerId);
+          get().closeOverlay();
+          return next.id;
+        }
+        const next = nextWaiting(sessions, attachedSession?.id ?? null);
+        if (!next) return null;
+        get().attachSession(next.id);
+        return next.id;
+      },
+
+      restartEnded: () => {
+        const ended = get().endedSession;
+        if (!ended) return;
+        // The server auto-attaches a created session; session.attached then
+        // clears the tombstone. A deleted profile falls back to a plain shell
+        // server-side.
+        const { cols, rows } = getInitialDims();
+        set({ switchingToId: null });
+        wsClient?.send({ type: 'session.create', profileId: ended.profileId, cols, rows });
+      },
+
+      dismissEnded: () => {
+        get().detachSession();
       },
 
       // Drop the pane out of tmux copy-mode (scrollback) back to the live
@@ -721,7 +794,7 @@ export const useAppStore = create<AppState>()(
         wsClient?.send({ type: 'session.kill', sessionId });
         guardKilled(sessionId);
         useLayoutStore.getState().clearSession(sessionId, get().activeServerId);
-        set({ sessions: sessions.filter(x => x.id !== sessionId) });
+        set({ sessions: sessions.filter(x => x.id !== sessionId), endedSession: null });
         if (activeTabId === sessionId) {
           const remaining = sessions.filter(s => s.id !== sessionId);
           if (remaining.length > 0) {
@@ -894,6 +967,7 @@ export const useAppStore = create<AppState>()(
         authToken: state.authToken,
         deviceName: state.deviceName,
         lastActiveSessionId: state.lastActiveSessionId,
+        lastActiveAt: state.lastActiveAt,
         notificationsEnabled: state.notificationsEnabled,
         pushEndpoint: state.pushEndpoint,
         pushEvents: state.pushEvents,
@@ -907,6 +981,27 @@ if (typeof window !== 'undefined') window.__plStore = useAppStore;
 // ============================================================================
 // Message Handler
 // ============================================================================
+
+/** Put the terminal into its Exited tombstone for `session`: stay on screen,
+ *  stop sending keys, and forget it as the auto-reattach target. */
+function markEnded(
+  session: SessionInfo,
+  set: (partial: Partial<AppState> | ((state: AppState) => Partial<AppState>)) => void,
+  known: SessionInfo[] = [],
+): void {
+  // attachedSession is a snapshot from attach time; the list carries renames.
+  const latest = known.find((k) => k.id === session.id) ?? session;
+  set((s) => ({
+    endedSession: {
+      id: session.id,
+      name: latest.name || latest.profileName || session.id,
+      profileId: latest.profileId,
+      endedAt: Date.now(),
+    },
+    switchingToId: null,
+    lastActiveSessionId: s.lastActiveSessionId === session.id ? null : s.lastActiveSessionId,
+  }));
+}
 
 function handleServerMessage(
   msg: ServerMessage,
@@ -942,16 +1037,19 @@ function handleServerMessage(
       // socket blipped. Only land on home from a pre-auth view (first login).
       const preAuthViews = ['connect', 'auth', 'locked'];
       const currentView = get().view;
+      const coldOpen = preAuthViews.includes(currentView);
       set((s) => ({
         connectionState: 'authenticated',
         serverName: msg.serverName,
-        view: preAuthViews.includes(currentView) ? 'home' : currentView,
+        view: coldOpen ? 'home' : currentView,
         authError: null,
         approvalNumber: null,
         filesDisabled: !!msg.disableFiles,
-        // Arm the auto-reattach handshake. If the persisted session still
-        // exists in the upcoming sessions.list, we'll attach to it.
-        pendingAutoAttach: s.lastActiveSessionId,
+        // A first sign-in picks where to land through opensFirst() (the
+        // waiting agent beats a stale last session). A reconnect re-attaches
+        // the session already on screen — never jump mid-work.
+        pendingColdOpen: coldOpen,
+        pendingAutoAttach: coldOpen ? null : s.lastActiveSessionId,
         // Reflect the successful auth onto the active registry entry.
         servers: s.servers.map((e) => e.id === s.activeServerId
           ? { ...e, serverName: msg.serverName, lastConnectedAt: Date.now(), ...(msg.token ? { authToken: msg.token } : {}) }
@@ -989,6 +1087,7 @@ function handleServerMessage(
       // Drop sessions the user just killed — a stale snapshot from an
       // interleaved server handler can still list them (see recentlyKilled).
       const live = filterKilled(msg.sessions);
+      const previous = get().sessions;
       set({ sessions: live });
       // Authoritative reconcile: drop any persisted desktop pane assignment
       // whose session is no longer live. Without this, killed sessions (or a
@@ -997,21 +1096,29 @@ function handleServerMessage(
       // Consume the auto-reattach handshake if it's armed and the target
       // session is still alive. One-shot: clear pendingAutoAttach so we
       // never re-attach on subsequent broadcasts.
-      const { pendingAutoAttach } = get();
-      if (pendingAutoAttach) {
-        const stillAlive = live.some((s) => s.id === pendingAutoAttach);
-        set({ pendingAutoAttach: null });
-        if (stillAlive) get().attachSession(pendingAutoAttach);
-      }
-      // Profile deep link (PWA shortcut): attach the profile's live session
-      // if one exists, otherwise start one. One-shot, and it outranks the
-      // last-active handshake (an explicit shortcut tap is explicit intent).
-      const { pendingProfileLaunch } = get();
+      const { pendingAutoAttach, pendingColdOpen, pendingProfileLaunch } = get();
       if (pendingProfileLaunch) {
-        set({ pendingProfileLaunch: null, pendingAutoAttach: null });
+        // Profile deep link (PWA shortcut): attach the profile's live session
+        // if one exists, otherwise start one. One-shot, and it outranks the
+        // other handshakes (an explicit shortcut tap is explicit intent).
+        set({ pendingProfileLaunch: null, pendingAutoAttach: null, pendingColdOpen: false });
         const existing = live.find((s) => s.profileId === pendingProfileLaunch);
         if (existing) get().attachSession(existing.id);
         else get().createSession(pendingProfileLaunch);
+      } else if (pendingColdOpen) {
+        set({ pendingColdOpen: false, pendingAutoAttach: null });
+        const { lastActiveSessionId, lastActiveAt } = get();
+        // Desktop restores its saved panes, so the main socket only re-attaches
+        // what it had (unchanged behaviour). The phone shows one session: the
+        // opensFirst() rule picks it.
+        const target = isDesktopViewport()
+          ? live.find((s) => s.id === lastActiveSessionId) ?? null
+          : opensFirst(live, lastActiveSessionId, lastActiveAt);
+        if (target) get().attachSession(target.id);
+      } else if (pendingAutoAttach) {
+        const stillAlive = live.some((s) => s.id === pendingAutoAttach);
+        set({ pendingAutoAttach: null });
+        if (stillAlive) get().attachSession(pendingAutoAttach);
       }
       // Dead-session reconciliation (mobile has no pane-reconcile to lean on
       // like desktop does). If we're still showing a session that has vanished
@@ -1020,15 +1127,9 @@ function handleServerMessage(
       // wedging on the dead session's last frame with keystrokes going nowhere.
       // Skip while a switch is in flight (switchingToId): the target may not be
       // in this snapshot yet, and session.attached will resolve it.
-      const { attachedSession: att, switchingToId } = get();
-      if (att && !switchingToId && !live.some((s) => s.id === att.id)) {
-        if (live.length > 0) {
-          const switchTo = live[live.length - 1];
-          get().attachSession(switchTo.id);
-          set({ activeTabId: switchTo.id });
-        } else {
-          set({ attachedSession: null, view: 'home', windows: [], activeTabId: null });
-        }
+      const { attachedSession: att, switchingToId, endedSession } = get();
+      if (att && !switchingToId && endedSession?.id !== att.id && !live.some((s) => s.id === att.id)) {
+        markEnded(att, set, previous);
       }
       break;
     }
@@ -1066,6 +1167,8 @@ function handleServerMessage(
         switchingToId: null,  // switch complete
         showTabPicker: false,
         lastActiveSessionId: msg.session.id,
+        lastActiveAt: Date.now(),
+        endedSession: null,
       });
       break;
     }
@@ -1078,27 +1181,27 @@ function handleServerMessage(
       break;
 
     case 'session.ended': {
-      const { sessions: currentSessions } = get();
-      const remaining = currentSessions.filter(s => s.id !== msg.sessionId);
-      if (get().attachedSession?.id === msg.sessionId) {
-        if (remaining.length > 0) {
-          const switchTo = remaining[remaining.length - 1];
-          get().attachSession(switchTo.id);
-          set({ activeTabId: switchTo.id });
-        } else {
-          set({ attachedSession: null, view: 'home', windows: [], activeTabId: null });
-        }
-      }
+      // Stay on the ended session behind a tombstone. Jumping to another one
+      // (the old behaviour) let you type into an agent you never chose.
+      const { attachedSession: att, switchingToId } = get();
+      if (att?.id === msg.sessionId && !switchingToId) markEnded(att, set, get().sessions);
       wsClient?.send({ type: 'sessions.list' });
       break;
     }
 
-    case 'session.detached':
+    case 'session.detached': {
       // If we're mid-switch, ignore — the upcoming session.attached will take over
       if (get().switchingToId) break;
-      // Not switching — go home
-      set({ attachedSession: null, view: 'home', windows: [], activeTabId: null });
+      // Our own detach/kill already cleared attachedSession. Still holding one
+      // here means the session was killed from another device: tombstone it.
+      const { attachedSession: att, view } = get();
+      if (att && view === 'terminal') {
+        markEnded(att, set, get().sessions);
+        break;
+      }
+      set({ attachedSession: null, view: 'home', windows: [], activeTabId: null, endedSession: null });
       break;
+    }
 
     case 'session.scrollback':
       window.dispatchEvent(new CustomEvent('persalink:scrollback', { detail: msg.data }));

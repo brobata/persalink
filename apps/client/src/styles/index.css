@@ -58,3 +58,10 @@ body {
 .pl-fab-item {
   animation: pl-fab-in 120ms ease-out both;
 }
+
+/* Panels that arrive from the bottom edge (the Exited tombstone). Used through
+   Tailwind's motion-safe: variant, so reduced motion shows it without moving. */
+@keyframes pl-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}

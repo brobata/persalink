@@ -37,3 +37,20 @@ export function schemesFor(tls: boolean | undefined): { ws: string; http: string
     && window.location.protocol === 'https:';
   return pageTls ? { ws: 'wss://', http: 'https://' } : { ws: 'ws://', http: 'http://' };
 }
+
+/** The path this client is served under: '/' for the live app, '/beta/' for
+ *  the preview build (vite `base`). Static files that ship with the client
+ *  (version.json, sw.js) resolve against it; the API, WebSocket and
+ *  /api/files stay at the origin root. Always ends in '/'. */
+export const APP_BASE: string = (() => {
+  const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL || '/';
+  return base.endsWith('/') ? base : `${base}/`;
+})();
+
+/** Width at which the client switches to the desktop sidebar + grid layout. */
+export const DESKTOP_MQ = '(min-width: 768px)';
+
+/** True when the desktop layout is showing (same breakpoint as App.tsx). */
+export function isDesktopViewport(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.(DESKTOP_MQ).matches;
+}
