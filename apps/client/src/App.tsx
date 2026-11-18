@@ -13,6 +13,7 @@ import { GridLayout } from './components/GridLayout';
 import { ToastStack } from './components/Toast';
 import { UpdatePill } from './components/UpdatePill';
 import { PublicChip } from './components/ui/ConnectionReadout';
+import { ReconnectLine, ReconnectBanner } from './components/ui/Reconnect';
 import { useLayoutStore } from './stores/layoutStore';
 import { stashShare } from './lib/shareTarget';
 import { isPublicDoor } from './lib/door';
@@ -43,7 +44,6 @@ function useIsDesktop() {
 
 export function App() {
   const view = useAppStore((s) => s.view);
-  const connectionState = useAppStore((s) => s.connectionState);
   const initBiometric = useAppStore((s) => s.initBiometric);
   const isDesktop = useIsDesktop();
 
@@ -150,9 +150,6 @@ export function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Reconnecting overlay — shown on top of current view
-  const isReconnecting = connectionState === 'reconnecting';
-
   // Pre-auth views are always full-screen
   if (view === 'locked') return <><LockScreen /><PublicBadge /></>;
   if (view === 'connect') return <><ConnectScreen /><PublicBadge /></>;
@@ -178,7 +175,8 @@ export function App() {
             <GridLayout />
           )}
         </div>
-        {isReconnecting && <ReconnectingOverlay />}
+        <ReconnectLine />
+        <ReconnectBanner />
         <ToastStack />
         <UpdatePill />
         <PublicBadge />
@@ -194,7 +192,10 @@ export function App() {
       {view === 'settings' && <SettingsScreen />}
       {view === 'profile-editor' && <ProfileEditor />}
       {view === 'files' && <FilesScreen />}
-      {isReconnecting && <ReconnectingOverlay />}
+      {/* A dropped link reconnects in place: a line, "reconnecting" in the
+          title, and a banner only after 8s (docked inside the terminal). */}
+      <ReconnectLine />
+      {view !== 'terminal' && <ReconnectBanner />}
       <ToastStack />
       <UpdatePill />
       <PublicBadge />
@@ -229,50 +230,6 @@ function PublicBadge() {
       >
         {leaving ? 'Signing out…' : 'Sign out'}
       </button>
-    </div>
-  );
-}
-
-function ReconnectingOverlay() {
-  // A warm reconnect lands in <1s. If we're still spinning after this long,
-  // the server almost certainly isn't reachable — on this deployment that
-  // means the Tailscale tunnel is down (phone VPN killed in the background,
-  // desktop fresh-boot before tailscaled is up). Say so instead of letting
-  // the user force-close the app to "fix" it.
-  const HINT_AFTER_MS = 8_000;
-  const [showHint, setShowHint] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setShowHint(true), HINT_AFTER_MS);
-    return () => clearTimeout(t);
-  }, []);
-  return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="flex flex-col items-center gap-3 text-zinc-400 px-8 text-center">
-        <div className="h-5 w-5 border-2 border-zinc-500 border-t-zinc-200 rounded-full animate-spin" />
-        <span className="text-sm">Reconnecting...</span>
-        {showHint && !isPublicDoor && (
-          <span className="text-xs text-fg-2 max-w-xs">
-            Still trying — the app retries automatically. If this device reaches the
-            server through Tailscale (or another VPN), check that it&apos;s connected;
-            after a reboot it can take a moment to come up.
-          </span>
-        )}
-        {showHint && isPublicDoor && (
-          <>
-            <span className="text-xs text-fg-2 max-w-xs">
-              Still trying. Your Cloudflare sign-in may have expired (it lasts 12 hours),
-              or this network may be blocking the connection.
-            </span>
-            {/* Full navigation re-runs Cloudflare Access; a socket retry can't. */}
-            <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-accent text-accent-ink active:bg-accent-lo"
-            >
-              Sign in again
-            </button>
-          </>
-        )}
-      </div>
     </div>
   );
 }

@@ -29,6 +29,7 @@ import { ProfileTile } from './ui/ProfileTile';
 import { IconButton } from './ui/IconButton';
 import { WaitPill } from './ui/WaitPill';
 import { ConnectionReadout } from './ui/ConnectionReadout';
+import { ReconnectBanner } from './ui/Reconnect';
 import { countStates, groupSessions, needsSentence, sessionTitle, stateKey } from '../lib/sessionState';
 import { Check, ChevronLeft, ChevronRight, Copy, Pencil, Plus } from 'lucide-react';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
@@ -1773,10 +1774,19 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             className="flex items-center gap-1.5 flex-1 min-w-0 px-1.5 py-1 active:bg-bg-3 rounded-[6px] transition-colors"
           >
             {liveAttached && (
-              <StateGlyph state={isEnded ? 'exited' : stateKey(liveAttached)} live label={isEnded ? 'Ended' : undefined} />
+              <StateGlyph
+                state={isEnded ? 'exited' : stateKey(liveAttached, { offline: !online })}
+                live
+                label={isEnded ? 'Ended' : undefined}
+              />
             )}
-            <span className="truncate text-body font-medium text-fg-1">
-              {attachedSession ? sessionTitle(attachedSession) : ''}
+            {/* Line 1 the name; while the link is down, line 2 says
+                "reconnecting" (the glyph beside it already carries the dot). */}
+            <span className="flex flex-col items-start min-w-0">
+              <span className="max-w-full truncate text-body font-medium text-fg-1">
+                {attachedSession ? sessionTitle(attachedSession) : ''}
+              </span>
+              {!online && <ConnectionReadout dot={false} className="max-w-full leading-[14px]" />}
             </span>
           </button>
         )}
@@ -1788,8 +1798,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           </div>
         )}
 
-        {/* Connection health — only shown when not fully connected. */}
-        {!online && <ConnectionReadout className="shrink-0 px-1" />}
+        {/* Connection health — only shown when not fully connected. On the
+            phone it rides in the title (line 2) instead. */}
+        {sidebarVisible && !online && <ConnectionReadout className="shrink-0 px-1" />}
 
         {/* Upload */}
         <input
@@ -2059,6 +2070,8 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             same single-tap stop as the old dedicated button. Every control
             preventDefaults pointer/mouse down so the terminal keeps focus
             (the focus-steal that once killed desktop Ctrl+C). */}
+        {/* A long link drop: the inline banner, docked over the bottom rows. */}
+        {!sidebarVisible && <ReconnectBanner docked />}
         {fabOpen && (
           <div className="fixed inset-0 z-10" onClick={() => setFabOpen(false)} />
         )}

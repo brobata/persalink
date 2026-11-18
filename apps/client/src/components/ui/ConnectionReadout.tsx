@@ -12,16 +12,19 @@ import { useAppStore } from '../../stores/appStore';
 import { isPublicDoor } from '../../lib/door';
 import { readout } from '../../lib/readout';
 
-export function ConnectionReadout({ server, className = '' }: {
+export function ConnectionReadout({ server, dot = true, className = '' }: {
   /** Also name the server ("x570d4u · 18 ms"). */
   server?: boolean;
+  /** Draw the dot; off where a state glyph beside it already says it. */
+  dot?: boolean;
   className?: string;
 }) {
   const state = useAppStore((s) => s.connectionState);
   const rttMs = useAppStore((s) => s.rttMs);
   const serverName = useAppStore((s) => s.serverName);
   const r = readout(state, rttMs);
-  const dot = r.kind === 'ok'
+  const showDot = dot;
+  const dotClass = r.kind === 'ok'
     ? 'bg-accent'
     : r.kind === 'slow'
       ? 'shadow-[inset_0_0_0_1.5px_var(--color-accent)]'
@@ -32,7 +35,7 @@ export function ConnectionReadout({ server, className = '' }: {
       className={`inline-flex items-center gap-1.5 min-w-0 whitespace-nowrap text-micro font-mono tnum ${tone} ${className}`}
       title={[serverName, r.text, isPublicDoor ? 'through the public door' : ''].filter(Boolean).join(' · ')}
     >
-      <i className={`shrink-0 w-1.5 h-1.5 rounded-full ${dot}`} aria-hidden />
+      {showDot && <i className={`shrink-0 w-1.5 h-1.5 rounded-full ${dotClass}`} aria-hidden />}
       {server && serverName && <span className="truncate text-fg-2">{serverName}</span>}
       {server && serverName && <span className="text-fg-4" aria-hidden>·</span>}
       <span>{r.text}</span>

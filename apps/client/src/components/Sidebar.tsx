@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
+import { ConnectionReadout } from './ui/ConnectionReadout';
 import { useAppStore } from '../stores/appStore';
 import { useLayoutStore } from '../stores/layoutStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
@@ -150,7 +151,7 @@ function ProfileRow({ profile }: { profile: Profile }) {
 // ============================================================================
 
 export function Sidebar() {
-  const { sessions, profiles, serverName, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile } = useAppStore();
+  const { sessions, profiles, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile } = useAppStore();
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
   const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
@@ -186,8 +187,8 @@ export function Sidebar() {
             className="flex items-center gap-1 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
             title="Switch server"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-            {serverName || 'Connected'}
+            {/* Server + round trip; says "reconnecting" while the link is down. */}
+            <ConnectionReadout server />
             <svg className="w-2.5 h-2.5 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
             </svg>

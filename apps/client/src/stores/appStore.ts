@@ -184,6 +184,8 @@ interface AppState {
   selectServer: (id: string) => void;
   openServers: () => void;
   connect: () => void;
+  /** Retry the dropped link now, skipping the backoff wait (Retry now). */
+  reconnectNow: () => void;
   disconnect: () => void;
   /** End this browser's PersaLink login: revoke it on the server and wipe
    *  local state. Leaves the Cloudflare Access sign-in alone. */
@@ -520,12 +522,16 @@ export const useAppStore = create<AppState>()(
             if (state === 'disconnected') {
               set({ view: 'connect', attachedSession: null });
             }
-            // reconnecting — keep current view, just update state
-            // the UI will show a reconnecting overlay
+            // reconnecting: keep the current view and just update state.
+            // The UI reconnects in place (components/ui/Reconnect.tsx).
           },
         });
 
         wsClient.connect();
+      },
+
+      reconnectNow: () => {
+        wsClient?.forceReconnect();
       },
 
       disconnect: () => {

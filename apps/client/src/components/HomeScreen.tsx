@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ConnectionReadout } from './ui/ConnectionReadout';
 import { useAppStore } from '../stores/appStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
 import { useLongPress } from '../lib/useLongPress';
@@ -200,7 +201,7 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
 // ============================================================================
 
 export function HomeScreen() {
-  const { sessions, profiles, serverName, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
+  const { sessions, profiles, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
   const filesDisabled = useAppStore((s) => s.filesDisabled);
 
   // Attention order (waiting first, longest wait on top), held still while a
@@ -247,8 +248,8 @@ export function HomeScreen() {
               className="flex items-center gap-1.5 text-xs text-zinc-500 active:text-zinc-300 transition-colors"
               title="Switch server"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-              {serverName || 'Connected'}
+              {/* Server + round trip; says "reconnecting" while the link is down. */}
+              <ConnectionReadout server />
               <svg className="w-3 h-3 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
               </svg>

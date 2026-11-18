@@ -420,6 +420,80 @@ html.pl-square .pl-wpill { height: 28px; }
 
 }
 
+
+/* ---------------------------------------------------- reconnect in place */
+/* A dropped link never covers the screen: a 2px accent line along the top
+   (fills toward 88% over the quiet ESCALATE_MS window, then sweeps), and
+   only after that an inline banner with the terminal dimmed, never blurred. */
+.pl-reline {
+  position: fixed;
+  top: env(safe-area-inset-top, 0px);
+  left: 0;
+  height: 2px;
+  width: 0;
+  z-index: 70;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--color-accent);
+  box-shadow: 0 0 8px rgba(61, 220, 151, 0.5);
+}
+.pl-reline[data-phase="down"] {
+  opacity: 1;
+  width: 88%;
+  transition: width 8000ms cubic-bezier(0.1, 0.7, 0.2, 1), opacity var(--d-pop) var(--ease-out);
+}
+.pl-reline[data-phase="down"][data-escalated] {
+  width: 100%;
+  opacity: 0.85;
+  background: linear-gradient(90deg, transparent 0%, var(--color-accent) 40%, var(--color-accent) 60%, transparent 100%) 0 0 / 40% 100% no-repeat;
+  box-shadow: none;
+  animation: pl-reline-sweep 1600ms var(--ease-out) infinite;
+  transition: none;
+}
+.pl-reline[data-phase="done"] {
+  opacity: 0;
+  width: 100%;
+  transition: width var(--d-move) var(--ease-out), opacity var(--d-sheet) var(--ease-out) var(--d-move);
+}
+@keyframes pl-reline-sweep {
+  from { background-position: -70% 0; }
+  to { background-position: 170% 0; }
+}
+
+.pl-rebanner {
+  position: fixed;
+  left: 50%;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(448px, calc(100vw - 16px));
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-line-2);
+  box-shadow: var(--e-2-shadow);
+  animation: pl-rebanner-in var(--d-move) var(--ease-out) both;
+}
+/* Inside the phone terminal: docked at its bottom edge, clear of the
+   quick-actions button, never over the top rows being read. */
+.pl-rebanner.docked {
+  position: absolute;
+  left: 8px;
+  right: 64px;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  width: auto;
+  transform: none;
+  animation-name: pl-rebanner-in-docked;
+}
+.pl-rebanner .pl-chip:disabled { opacity: 0.5; cursor: default; }
+@keyframes pl-rebanner-in { from { opacity: 0; transform: translateX(-50%) translateY(6px); } }
+@keyframes pl-rebanner-in-docked { from { opacity: 0; transform: translateY(6px); } }
+html[data-linkdown] .xterm { opacity: 0.5; transition: opacity var(--d-move) var(--ease-out); }
+.xterm { transition: opacity var(--d-move) var(--ease-out); }
+
 /* ----------------------------------------------------- reduced motion */
 /* Opacity only, short, no loops: transforms stop, rings and arcs hold still. */
 @media (prefers-reduced-motion: reduce) {
@@ -434,4 +508,8 @@ html.pl-square .pl-wpill { height: 28px; }
   .pl-scrim, .pl-sheet { animation: pl-fade 120ms linear both !important; }
   .pl-sheet.closing, html.pl-desktop .pl-sheet.closing { transform: none; opacity: 0; transition: opacity 90ms linear !important; }
   html.pl-desktop .pl-sheet { transform: translateX(-50%); }
+  /* The line holds still: a static bar, no fill and no sweep. */
+  .pl-reline[data-phase="down"] { width: 100%; opacity: 0.7; }
+  .pl-reline[data-phase="down"][data-escalated] { animation: none !important; background: var(--color-accent); }
+  .pl-rebanner, .pl-rebanner.docked { animation: pl-fade 120ms linear both !important; }
 }
