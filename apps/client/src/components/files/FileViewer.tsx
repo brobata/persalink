@@ -139,7 +139,7 @@ export function FileViewer({ conn, dir, link, readOnly, items, index, onIndex, o
             <button
               onClick={() => void save()}
               disabled={!dirty || saving}
-              className="ml-1 flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-zinc-900 bg-zinc-100 rounded-lg disabled:opacity-40"
+              className="ml-1 flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-accent-ink bg-accent rounded-lg disabled:opacity-40"
               title="Save (Ctrl+S)"
             >
               <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save'}
@@ -229,7 +229,7 @@ export function FileViewer({ conn, dir, link, readOnly, items, index, onIndex, o
             <div className="text-xs text-zinc-500">{fmtSize(entry.size)}</div>
             <div className="flex gap-2">
               {kind === 'pdf' && (
-                <button onClick={() => openExternal(src)} className="flex items-center gap-1.5 px-4 py-2 text-sm text-zinc-900 bg-zinc-100 rounded-lg font-medium">
+                <button onClick={() => openExternal(src)} className="flex items-center gap-1.5 px-4 py-2 text-sm text-accent-ink bg-accent rounded-lg font-medium">
                   <ExternalLink className="w-4 h-4" /> Open
                 </button>
               )}

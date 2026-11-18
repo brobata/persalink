@@ -77,6 +77,8 @@ interface AppState {
   // Connection (mirrors of the active ServerEntry + live socket state)
   serverUrl: string;
   connectionState: ConnectionState;
+  /** Last ping round trip on the active socket, ms; null until measured. */
+  rttMs: number | null;
   serverName: string | null;
   setupMode: boolean;
   authToken: string | null;
@@ -340,6 +342,7 @@ export const useAppStore = create<AppState>()(
       activeServerId: null,
       serverUrl: inferDefaultServerUrl(),
       connectionState: 'disconnected',
+      rttMs: null,
       serverName: null,
       setupMode: false,
       authToken: null,
@@ -498,9 +501,13 @@ export const useAppStore = create<AppState>()(
             if (gen !== wsGeneration) return; // superseded socket — drop
             handleServerMessage(msg, set, get);
           },
+          onRtt: (ms) => {
+            if (gen !== wsGeneration) return;
+            set({ rttMs: ms });
+          },
           onStateChange: (state, closeCode) => {
             if (gen !== wsGeneration) return;
-            set({ connectionState: state });
+            set(state === 'connected' || state === 'authenticated' ? { connectionState: state } : { connectionState: state, rttMs: null });
             // Public door: login timed out (4000) or idle sign-out (4003).
             // Go straight back to a fresh sign-in, keeping the reason the
             // server sent, instead of the server list (which means nothing

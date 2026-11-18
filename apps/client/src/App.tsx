@@ -12,6 +12,7 @@ import { Sidebar } from './components/Sidebar';
 import { GridLayout } from './components/GridLayout';
 import { ToastStack } from './components/Toast';
 import { UpdatePill } from './components/UpdatePill';
+import { PublicChip } from './components/ui/ConnectionReadout';
 import { useLayoutStore } from './stores/layoutStore';
 import { stashShare } from './lib/shareTarget';
 import { isPublicDoor } from './lib/door';
@@ -214,15 +215,17 @@ function PublicBadge() {
   };
   return (
     <div
-      className="fixed top-0 left-1/2 -translate-x-1/2 z-[60] flex items-center select-none
-                 rounded-b text-[10px] font-semibold tracking-wide bg-amber-500/90 text-black overflow-hidden"
-      title="Connected through the public internet entrance"
+      className="fixed top-0 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-1 select-none
+                 h-6 pl-0.5 pr-0.5 rounded-b-[6px] bg-bg-1/95 border border-t-0 border-line-2"
+      style={{ top: 'env(safe-area-inset-top)' }}
     >
-      <span className="px-2 py-px">PUBLIC</span>
+      <PublicChip className="border-0" />
+      <span className="w-px h-3 bg-line-2" aria-hidden />
       <button
+        type="button"
         onClick={onSignOut}
         disabled={leaving}
-        className="px-2 py-px border-l border-black/20 hover:bg-amber-400 active:bg-amber-300 disabled:opacity-60"
+        className="h-5 px-1.5 rounded-[4px] text-micro font-medium text-fg-2 hover:text-fg-1 active:bg-bg-3 disabled:text-fg-4"
       >
         {leaving ? 'Signing out…' : 'Sign out'}
       </button>
@@ -248,7 +251,7 @@ function ReconnectingOverlay() {
         <div className="h-5 w-5 border-2 border-zinc-500 border-t-zinc-200 rounded-full animate-spin" />
         <span className="text-sm">Reconnecting...</span>
         {showHint && !isPublicDoor && (
-          <span className="text-xs text-amber-300/90 max-w-xs">
+          <span className="text-xs text-fg-2 max-w-xs">
             Still trying — the app retries automatically. If this device reaches the
             server through Tailscale (or another VPN), check that it&apos;s connected;
             after a reboot it can take a moment to come up.
@@ -256,14 +259,14 @@ function ReconnectingOverlay() {
         )}
         {showHint && isPublicDoor && (
           <>
-            <span className="text-xs text-amber-300/90 max-w-xs">
+            <span className="text-xs text-fg-2 max-w-xs">
               Still trying. Your Cloudflare sign-in may have expired (it lasts 12 hours),
               or this network may be blocking the connection.
             </span>
             {/* Full navigation re-runs Cloudflare Access; a socket retry can't. */}
             <button
               onClick={() => window.location.reload()}
-              className="px-4 py-2 text-sm rounded-lg bg-zinc-200 text-zinc-900 active:bg-zinc-300"
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-accent text-accent-ink active:bg-accent-lo"
             >
               Sign in again
             </button>

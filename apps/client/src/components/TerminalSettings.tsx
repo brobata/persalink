@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef } from 'react';
+import { Sheet } from './ui/Sheet';
 import {
   useTerminalStyleStore, FONT_FAMILIES, THEMES, HISTORY_OPTIONS,
   type FontFamilyChoice, type FontWeightChoice, type ThemeName, type HistoryOnAttach,
@@ -23,6 +24,8 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // The sheet variant gets dismiss and Esc from the shared Sheet.
+    if (variant === 'sheet') return;
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
@@ -35,33 +38,23 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
       document.removeEventListener('mousedown', onClick);
       document.removeEventListener('keydown', onKey);
     };
-  }, [onClose]);
+  }, [onClose, variant]);
 
-  return (
-    <div
-      ref={ref}
-      className={variant === 'sheet'
-        ? 'fixed inset-x-0 bottom-0 z-50 max-h-[75vh] overflow-y-auto bg-zinc-900 border-t border-zinc-700 rounded-t-2xl shadow-2xl p-4 pb-[max(16px,env(safe-area-inset-bottom))] space-y-3'
-        : 'absolute top-full right-0 mt-1 z-50 w-[300px] bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl p-3 space-y-3'}
+  const reset = (
+    <button
+      type="button"
+      onClick={() => style.reset()}
+      className="shrink-0 h-8 px-2.5 rounded-[6px] text-meta text-fg-2 hover:text-fg-1 active:bg-bg-3"
+      title="Reset to defaults"
     >
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-zinc-200">Terminal appearance</span>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => style.reset()}
-            className="text-[10px] text-zinc-500 hover:text-zinc-300"
-            title="Reset to defaults"
-          >
-            reset
-          </button>
-          {variant === 'sheet' && (
-            <button onClick={onClose} className="text-xs text-zinc-500 active:text-zinc-300">Close</button>
-          )}
-        </div>
-      </div>
+      Reset
+    </button>
+  );
 
+  const controls = (
+    <>
       <div className="space-y-1.5">
-        <label className="text-[10px] uppercase tracking-wider text-zinc-500">Font</label>
+        <label className="text-meta font-semibold text-fg-2">Font</label>
         <select
           value={style.fontFamily}
           onChange={(e) => style.setFontFamily(e.target.value as FontFamilyChoice)}
@@ -77,7 +70,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
 
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500">Weight</label>
+          <label className="text-meta font-semibold text-fg-2">Weight</label>
           <select
             value={style.fontWeight}
             onChange={(e) => style.setFontWeight(e.target.value as FontWeightChoice)}
@@ -90,7 +83,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
           </select>
         </div>
         <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500">Size</label>
+          <label className="text-meta font-semibold text-fg-2">Size</label>
           <div className="flex items-center gap-2">
             <input
               type="range"
@@ -107,7 +100,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-[10px] uppercase tracking-wider text-zinc-500">History on attach</label>
+        <label className="text-meta font-semibold text-fg-2">History on attach</label>
         <select
           value={style.historyOnAttach}
           onChange={(e) => style.setHistoryOnAttach(Number(e.target.value) as HistoryOnAttach)}
@@ -119,7 +112,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
             </option>
           ))}
         </select>
-        <p className="text-[10px] text-zinc-600 leading-snug">
+        <p className="text-[11px] text-zinc-600 leading-snug">
           Lines of tmux history pulled when reattaching to a session.
           Higher = more context after a refresh; 0 = fastest (live output only).
         </p>
@@ -127,8 +120,8 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500">Color theme</label>
-          <span className="text-[10px] text-zinc-400">{THEMES[style.theme]?.label}</span>
+          <label className="text-meta font-semibold text-fg-2">Color theme</label>
+          <span className="text-[11px] text-zinc-400">{THEMES[style.theme]?.label}</span>
         </div>
         {/* Swatch grid — bg chip + accent dots per theme, name on hover/press.
             Scales to the full theme pack where a select + strip couldn't. */}
@@ -160,7 +153,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
       <div className="flex items-center justify-between pt-1">
         <div>
           <label htmlFor="double-tap-tab" className="text-xs text-zinc-300">Double-tap sends Tab</label>
-          <p className="text-[10px] text-zinc-600 leading-snug">Completion shortcut. Turn off if Tab misfires in your TUIs.</p>
+          <p className="text-[11px] text-zinc-600 leading-snug">Completion shortcut. Turn off if Tab misfires in your TUIs.</p>
         </div>
         <input
           id="double-tap-tab"
@@ -174,7 +167,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
       <div className="flex items-center justify-between pt-1">
         <div>
           <label htmlFor="hw-ime-compat" className="text-xs text-zinc-300">Keyboard-app compatibility</label>
-          <p className="text-[10px] text-zinc-600 leading-snug">
+          <p className="text-[11px] text-zinc-600 leading-snug">
             On physical-keyboard phones (Titan + Physiboard etc.), let the keyboard app
             handle Alt symbol layers and auto-caps like in other apps. Turn off for raw
             terminal keys (Alt acts as Meta/Esc prefix).
@@ -192,7 +185,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
       <div className="flex items-center justify-between pt-1">
         <div>
           <label htmlFor="input-debug" className="text-xs text-zinc-300">Input debug overlay</label>
-          <p className="text-[10px] text-zinc-600 leading-snug">Show raw key/wheel/touch events in the terminal — for diagnosing exotic keyboards.</p>
+          <p className="text-[11px] text-zinc-600 leading-snug">Show raw key/wheel/touch events in the terminal — for diagnosing exotic keyboards.</p>
         </div>
         <input
           id="input-debug"
@@ -202,6 +195,27 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
           className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0 ml-3"
         />
       </div>
+    </>
+  );
+
+  if (variant === 'sheet') {
+    return (
+      <Sheet title="Terminal appearance" sub="Changes apply live" onClose={onClose} headExtra={reset}>
+        <div className="px-2 pb-2 space-y-3">{controls}</div>
+      </Sheet>
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      className="absolute top-full right-0 mt-1 z-50 w-[300px] bg-bg-2 border border-line-2 rounded-[10px] shadow-(--e-2-shadow) p-3 space-y-3 motion-safe:animate-pop"
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-meta font-semibold text-fg-1">Terminal appearance</span>
+        {reset}
+      </div>
+      {controls}
     </div>
   );
 }

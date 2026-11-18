@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { StateGlyph } from './ui/StateGlyph';
 import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore } from '../stores/terminalStyleStore';
 import { isPushSupported, notificationPermission } from '../lib/push';
@@ -37,7 +38,7 @@ function LogViewer() {
           placeholder="Filter lines…"
           className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
         />
-        <span className="shrink-0 text-[10px] text-zinc-600">{lines.length} lines{logView.truncated ? ' · tail' : ''}</span>
+        <span className="shrink-0 text-[11px] text-zinc-600">{lines.length} lines{logView.truncated ? ' · tail' : ''}</span>
       </div>
       <pre className="flex-1 overflow-auto p-4 text-[12px] leading-relaxed font-mono text-zinc-200 whitespace-pre-wrap break-words">
         {lines.join('\n')}
@@ -154,14 +155,17 @@ export function SettingsScreen() {
                       end, which is constant noise for interactive use. */}
                   <div className="space-y-2 pt-1">
                     {([
-                      { key: 'finished', label: '✅ Session finished', hint: 'Every time a session settles back at the prompt — noisy if you run interactive sessions.' },
-                      { key: 'waiting', label: '⏳ Needs your input', hint: 'A session is blocked on a prompt or permission dialog.' },
-                      { key: 'error', label: '❌ Error', hint: 'A session hit a clear failure.' },
-                    ] as const).map(({ key, label, hint }) => (
+                      { key: 'finished', glyph: 'done', label: 'Session finished', hint: 'Every time a session settles back at the prompt — noisy if you run interactive sessions.' },
+                      { key: 'waiting', glyph: 'waiting', label: 'Needs your input', hint: 'A session is blocked on a prompt or permission dialog.' },
+                      { key: 'error', glyph: 'error', label: 'Error', hint: 'A session hit a clear failure.' },
+                    ] as const).map(({ key, glyph, label, hint }) => (
                       <div key={key} className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <label htmlFor={`push-ev-${key}`} className="text-xs text-zinc-300">{label}</label>
-                          <p className="text-[10px] text-zinc-600 leading-snug">{hint}</p>
+                          <label htmlFor={`push-ev-${key}`} className="flex items-center gap-2 text-xs text-zinc-300">
+                            <StateGlyph state={glyph} />
+                            {label}
+                          </label>
+                          <p className="text-[11px] text-zinc-600 leading-snug">{hint}</p>
                         </div>
                         <input
                           id={`push-ev-${key}`}
@@ -203,8 +207,8 @@ export function SettingsScreen() {
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-zinc-800/60 active:bg-zinc-700 transition-colors text-left"
                 >
                   <span className="flex-1 min-w-0 text-xs font-mono text-zinc-200 truncate">{log.name}</span>
-                  <span className="shrink-0 text-[10px] text-zinc-500">{fmtSize(log.size)}</span>
-                  <span className="shrink-0 text-[10px] text-zinc-600">{new Date(log.mtime).toLocaleDateString()}</span>
+                  <span className="shrink-0 text-[11px] text-zinc-500">{fmtSize(log.size)}</span>
+                  <span className="shrink-0 text-[11px] text-zinc-600">{new Date(log.mtime).toLocaleDateString()}</span>
                 </button>
               ))}
             </div>
@@ -218,7 +222,7 @@ export function SettingsScreen() {
           <div className="flex items-center justify-between">
             <div>
               <label htmlFor="settings-input-debug" className="text-xs text-zinc-300">Input debug overlay</label>
-              <p className="text-[10px] text-zinc-600 leading-snug">
+              <p className="text-[11px] text-zinc-600 leading-snug">
                 Show raw key/wheel/touch events in the corner of the terminal — for
                 diagnosing exotic keyboards (e.g. Titan keyboard-swipe scrolling).
               </p>
@@ -234,7 +238,7 @@ export function SettingsScreen() {
           <div className="flex items-center justify-between">
             <div>
               <span className="text-xs text-zinc-300">Scroll speed</span>
-              <p className="text-[10px] text-zinc-600 leading-snug">
+              <p className="text-[11px] text-zinc-600 leading-snug">
                 Multiplies touch scrolling. Raise it if keyboard-swipe scroll
                 (Titan Scroll assistant) barely moves — its swipes are tiny.
               </p>
@@ -246,7 +250,7 @@ export function SettingsScreen() {
                   onClick={() => setScrollGain(g)}
                   className={`w-8 h-8 rounded-md text-xs font-mono transition-colors ${
                     scrollGain === g
-                      ? 'bg-emerald-600 text-white'
+                      ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/40'
                       : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
                   }`}
                 >
@@ -255,7 +259,7 @@ export function SettingsScreen() {
               ))}
             </div>
           </div>
-          <p className="text-[10px] text-zinc-600 leading-snug">
+          <p className="text-[11px] text-zinc-600 leading-snug">
             Fonts, themes and gestures are in the session view — tap the palette icon
             in a session&apos;s top bar.
           </p>

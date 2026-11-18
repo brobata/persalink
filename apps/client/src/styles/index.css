@@ -1,5 +1,190 @@
+/*
+ * PersaLink design tokens and shared component styles.
+ *
+ * One token layer for the whole client (AUDIT_AND_MANIFESTO.md, "Token, type,
+ * spacing and motion spec"). Dark only. Rules that every surface follows:
+ *  - One accent (#3ddc97): live, focus, the one primary action, working.
+ *  - Amber (--st-waiting) means only "waiting for you", one signal per agent.
+ *  - Red (--danger) means only error or destructive.
+ *  - Nothing loops except a waiting ring and a focused working arc, and both
+ *    stop under prefers-reduced-motion.
+ * Tokens live in @theme so Tailwind generates utilities (bg-bg-1, text-fg-2,
+ * border-line-2, text-accent-hi, bg-st-waiting-soft, text-body, ...). Plain
+ * aliases (--bg-1, --fg-2, ...) sit on :root for hand-written CSS.
+ */
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
+
+@theme {
+  /* surfaces */
+  --color-bg-0: #09090b;
+  --color-bg-term: #0b0b0e;
+  --color-bg-1: #111114;
+  --color-bg-2: #18181c;
+  --color-bg-3: #222228;
+  --color-bg-4: #2c2c33;
+  --color-line: rgba(255, 255, 255, 0.06);
+  --color-line-2: rgba(255, 255, 255, 0.10);
+  --color-line-3: rgba(255, 255, 255, 0.16);
+  /* text */
+  --color-fg-1: #ececef;
+  --color-fg-2: #a9a9b4;
+  --color-fg-3: #7e7e8a;
+  --color-fg-4: #56565f;
+  /* the one accent */
+  --color-accent: #3ddc97;
+  --color-accent-hi: #6ee7b3;
+  --color-accent-lo: #22b277;
+  --color-accent-ink: #03140c;
+  --color-accent-soft: rgba(61, 220, 151, 0.12);
+  --color-danger: #f2555a;
+  --color-danger-soft: rgba(242, 85, 90, 0.12);
+  /* session state vocabulary */
+  --color-st-waiting: #f5b544;
+  --color-st-waiting-soft: rgba(245, 181, 68, 0.14);
+  --color-st-working: #3ddc97;
+  --color-st-idle: #a9a9b4;
+  --color-st-error: #f2555a;
+  --color-st-exited: #56565f;
+  --color-st-disconnected: #7d8aa3;
+
+  /*
+   * Legacy palette aliases. Screens not yet rebuilt still say zinc / emerald /
+   * sky / amber / red; these map every such class onto the tokens above, so
+   * the whole app is on one palette and one accent today (sky and green were
+   * second and third accents; yellow was a fourth warning hue). New code uses
+   * the token names, never these.
+   */
+  --color-zinc-50: #f4f4f6;
+  --color-zinc-100: #ececef;
+  --color-zinc-200: #e3e3e8;
+  --color-zinc-300: #cfcfd6;
+  --color-zinc-400: #a9a9b4;
+  /* 500 and 600 carry hint and meta text across the old screens; both stay
+     at or above --fg-3 contrast (the smallest allowed for content). */
+  --color-zinc-500: #8b8b96;
+  --color-zinc-600: #7e7e8a;
+  --color-zinc-700: #2c2c33;
+  --color-zinc-800: #222228;
+  --color-zinc-900: #111114;
+  --color-zinc-950: #09090b;
+  --color-emerald-100: #d3f7e6;
+  --color-emerald-200: #b0f0d3;
+  --color-emerald-300: #8eebc2;
+  --color-emerald-400: #6ee7b3;
+  --color-emerald-500: #3ddc97;
+  --color-emerald-600: #22b277;
+  --color-emerald-700: #1a8a5c;
+  --color-emerald-800: #135f40;
+  --color-emerald-900: #0d3b28;
+  --color-emerald-950: #06261a;
+  --color-green-400: #6ee7b3;
+  --color-green-500: #3ddc97;
+  --color-green-600: #22b277;
+  --color-sky-100: #d3f7e6;
+  --color-sky-200: #b0f0d3;
+  --color-sky-300: #8eebc2;
+  --color-sky-400: #6ee7b3;
+  --color-sky-500: #3ddc97;
+  --color-sky-600: #22b277;
+  --color-sky-700: #1a8a5c;
+  --color-amber-200: #fbe3b0;
+  --color-amber-300: #f8cc7a;
+  --color-amber-400: #f5b544;
+  --color-amber-500: #f5b544;
+  --color-amber-600: #d99a2b;
+  --color-yellow-400: #7d8aa3;
+  --color-yellow-500: #7d8aa3;
+  --color-red-300: #ff9a9d;
+  --color-red-400: #ff7b7f;
+  --color-red-500: #f2555a;
+  --color-red-600: #d9434a;
+  --color-red-700: #a8323a;
+  --color-red-900: #4a1619;
+  --color-red-950: #2b0d0f;
+
+  /* type: UI sans, meta mono (paths, servers, ms, keys) */
+  --font-sans: "Geist Variable", Geist, Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", "JetBrains Mono Variable", ui-monospace, monospace;
+  --text-micro: 11px;
+  --text-micro--line-height: 14px;
+  --text-meta: 12px;
+  --text-meta--line-height: 16px;
+  --text-body: 13.5px;
+  --text-body--line-height: 20px;
+  --text-title: 15px;
+  --text-title--line-height: 20px;
+  --text-head: 20px;
+  --text-head--line-height: 26px;
+  --text-head--letter-spacing: -0.01em;
+  --text-display: 28px;
+  --text-display--line-height: 34px;
+  --text-display--letter-spacing: -0.02em;
+
+  /* motion: every enter eases out; exits ease in at 0.75 of the enter */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --animate-rise: pl-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-pop: pl-pop 140ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade: pl-fade 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+:root {
+  /* plain aliases for hand-written CSS */
+  --bg-0: var(--color-bg-0);
+  --bg-term: var(--color-bg-term);
+  --bg-1: var(--color-bg-1);
+  --bg-2: var(--color-bg-2);
+  --bg-3: var(--color-bg-3);
+  --bg-4: var(--color-bg-4);
+  --line: var(--color-line);
+  --line-2: var(--color-line-2);
+  --line-3: var(--color-line-3);
+  --fg-1: var(--color-fg-1);
+  --fg-2: var(--color-fg-2);
+  --fg-3: var(--color-fg-3);
+  --fg-4: var(--color-fg-4);
+  --accent: var(--color-accent);
+  --accent-glow: 0 0 0 1px rgba(61, 220, 151, 0.45), 0 0 24px rgba(61, 220, 151, 0.12);
+
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px; --s-6: 24px;
+  --s-8: 32px; --s-10: 40px; --s-12: 48px;
+  --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-full: 999px;
+  --e-2-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --e-3-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+
+  --d-press: 90ms;
+  --d-pop: 140ms;
+  --d-switch: 160ms;
+  --d-move: 200ms;
+  --d-sheet: 240ms;
+
+  /* Phone rhythm. The compact square phone (Titan 2, ~412x412) runs the
+     same layout with these tightened through html.pl-square. */
+  --pl-ph-h: 52px;
+  --pl-dock-h: 56px;
+  --pl-chip-h: 44px;
+  --pl-q-h: 26px;
+  --pl-row-h: 52px;
+  --pl-touch: 44px;
+
+  /* Safe area support */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+html.pl-square {
+  --pl-ph-h: 44px;
+  --pl-dock-h: 48px;
+  --pl-chip-h: 40px;
+  --pl-q-h: 22px;
+  --pl-row-h: 44px;
+}
+html.pl-desktop {
+  --pl-touch: 32px;
+}
 
 html, body, #root {
   height: 100dvh;
@@ -7,12 +192,13 @@ html, body, #root {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: #09090b;
-  color: #fafafa;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--color-bg-0);
+  color: var(--color-fg-1);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   touch-action: manipulation;
   overscroll-behavior-y: contain;
+  color-scheme: dark;
 }
 
 body {
@@ -20,12 +206,18 @@ body {
   inset: 0;
 }
 
-/* Safe area support */
-:root {
-  --sat: env(safe-area-inset-top, 0px);
-  --sab: env(safe-area-inset-bottom, 0px);
-  --sal: env(safe-area-inset-left, 0px);
-  --sar: env(safe-area-inset-right, 0px);
+button, input, textarea, select {
+  font-family: inherit;
+}
+
+/* One focus treatment: the accent glow, keyboard focus only. */
+:where(button, a, input, textarea, select, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: none;
+  box-shadow: var(--accent-glow);
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Terminal scrollbar */
@@ -48,20 +240,198 @@ body {
   font-display: swap;
 }
 
-/* Quick-actions dial: items pop up from the FAB with a slight stagger
-   (per-item animation-delay set inline). `both` keeps delayed items hidden
-   until their turn. */
+/* ------------------------------------------------------------------ motion */
+
+@keyframes pl-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pl-pop {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pl-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pl-breathe {
+  0%, 100% { transform: scale(0.8); opacity: 0.6; }
+  50% { transform: scale(1.12); opacity: 0.15; }
+}
+@keyframes pl-spin {
+  to { transform: rotate(360deg); }
+}
 @keyframes pl-fab-in {
   from { opacity: 0; transform: translateY(8px) scale(0.9); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+/* Quick-actions dial: items pop up from the FAB with a slight stagger
+   (per-item animation-delay set inline). */
 .pl-fab-item {
-  animation: pl-fab-in 120ms ease-out both;
+  animation: pl-fab-in 120ms var(--ease-out) both;
 }
 
-/* Panels that arrive from the bottom edge (the Exited tombstone). Used through
-   Tailwind's motion-safe: variant, so reduced motion shows it without moving. */
-@keyframes pl-rise {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+/* Component classes sit in the components layer so a utility on the same
+   element (flex-1, a background) still wins. */
+@layer components {
+/* ------------------------------------------------------------ state glyph */
+/* Static by default. A waiting ring breathes only where a surface asks for
+   it (the wait pill); a working arc turns only on the session in focus. */
+svg.pl-g { flex: none; display: inline-block; overflow: visible; vertical-align: middle; }
+svg.pl-g .g-ring,
+svg.pl-g .g-spin,
+svg.pl-g .g-spin-slow { transform-box: fill-box; transform-origin: center; }
+svg.pl-g.breathe .g-ring { animation: pl-breathe 2400ms ease-in-out infinite; }
+svg.pl-g.live .g-spin { animation: pl-spin 1200ms linear infinite; }
+svg.pl-g.live .g-spin-slow { animation: pl-spin 4800ms linear infinite; }
+
+/* ------------------------------------------------------------ icon button */
+.pl-ib {
+  width: var(--pl-touch);
+  height: var(--pl-touch);
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--color-fg-2);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: background-color var(--d-press), color var(--d-press);
+}
+.pl-ib:hover { color: var(--color-fg-1); }
+.pl-ib:active, .pl-ib[aria-pressed="true"] { background: var(--color-bg-3); color: var(--color-fg-1); }
+.pl-ib:disabled { color: var(--color-fg-4); cursor: default; background: none; }
+.pl-ib.xs { width: 24px; height: 24px; }
+
+/* ---------------------------------------------------------------- sheet */
+.pl-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.42);
+  animation: pl-fade var(--d-sheet) var(--ease-out) both;
+}
+.pl-scrim.closing { opacity: 0; transition: opacity 180ms var(--ease-in); animation: none; }
+.pl-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 61;
+  max-height: 78dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-2);
+  border-top: 1px solid var(--color-line-2);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  box-shadow: var(--e-3-shadow);
+  color: var(--color-fg-1);
+  padding-bottom: var(--sab);
+  /* backwards, not both: once risen, an inline drag transform must win */
+  animation: pl-sheet-in var(--d-sheet) var(--ease-out) backwards;
+  outline: none;
+}
+.pl-sheet.tall { height: 78dvh; }
+.pl-sheet.closing { transform: translateY(100%); transition: transform 180ms var(--ease-in); animation: none; }
+.pl-sheet.dragging { transition: none; }
+html.pl-square .pl-sheet { max-height: calc(100dvh - 24px); }
+html.pl-square .pl-sheet.tall { height: calc(100dvh - 24px); }
+@keyframes pl-sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+/* Desktop: the same sheet is a centred dialog. */
+html.pl-desktop .pl-sheet {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  top: 12vh;
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  max-height: 76vh;
+  transform: translateX(-50%);
+  border: 1px solid var(--color-line-2);
+  border-radius: var(--r-lg);
+  padding-bottom: 0;
+  animation: pl-dialog-in var(--d-pop) var(--ease-out) backwards;
+}
+html.pl-desktop .pl-sheet.tall { height: auto; }
+html.pl-desktop .pl-sheet.closing { opacity: 0; transform: translateX(-50%) translateY(-8px); transition: opacity 105ms var(--ease-in), transform 105ms var(--ease-in); }
+html.pl-desktop .pl-grab { display: none; }
+@keyframes pl-dialog-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to { opacity: 1; transform: translateX(-50%); }
+}
+.pl-grab { height: 18px; flex: none; display: grid; place-items: center; touch-action: none; cursor: grab; }
+.pl-grab span { width: 36px; height: 4px; border-radius: 99px; background: var(--color-line-3); }
+html.pl-square .pl-grab { height: 12px; }
+.pl-sheet-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 0 4px 6px 16px; touch-action: none; min-height: 44px; }
+html.pl-desktop .pl-sheet-h { padding-top: 10px; }
+.pl-sheet-b { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 12px; overscroll-behavior: contain; }
+
+/* ------------------------------------------------------------ answer chips */
+.pl-chip {
+  flex: 0 0 auto;
+  height: var(--pl-chip-h);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-line-2);
+  color: var(--color-fg-1);
+  font: 500 13px/16px var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color var(--d-press), border-color var(--d-press), transform var(--d-press);
+}
+.pl-chip:hover { border-color: var(--color-line-3); }
+.pl-chip:active { background: var(--color-bg-4); transform: scale(0.98); }
+.pl-chip.first { background: var(--color-accent-soft); border-color: rgba(61, 220, 151, 0.32); color: var(--color-accent-hi); }
+.pl-chip.icon { width: 48px; padding: 0; background: transparent; }
+html.pl-desktop .pl-chip { height: 24px; font-size: 12px; padding: 0 8px; }
+html.pl-desktop .pl-chip.icon { width: 26px; }
+
+/* -------------------------------------------------------------- wait pill */
+.pl-wpill {
+  flex: none;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  border-radius: var(--r-full);
+  background: var(--color-st-waiting-soft);
+  border: 1px solid rgba(245, 181, 68, 0.28);
+  font: 500 12px/16px var(--font-sans);
+  color: var(--color-fg-1);
+  white-space: nowrap;
+  cursor: pointer;
+  position: relative;
+  min-width: 0;
+}
+.pl-wpill::before { content: ""; position: absolute; inset: -7px -2px; }
+html.pl-square .pl-wpill { height: 28px; }
+
+}
+
+/* ----------------------------------------------------- reduced motion */
+/* Opacity only, short, no loops: transforms stop, rings and arcs hold still. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  svg.pl-g .g-ring, svg.pl-g .g-spin, svg.pl-g .g-spin-slow { animation: none !important; }
+  .pl-scrim, .pl-sheet { animation: pl-fade 120ms linear both !important; }
+  .pl-sheet.closing, html.pl-desktop .pl-sheet.closing { transform: none; opacity: 0; transition: opacity 90ms linear !important; }
+  html.pl-desktop .pl-sheet { transform: translateX(-50%); }
 }

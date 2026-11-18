@@ -1,16 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useAppStore } from '../stores/appStore';
 import type { Profile, QuickAction, HealthCheck } from '@persalink/shared/protocol';
-
-// ============================================================================
-// Common emoji icons for quick selection
-// ============================================================================
-
-const ICON_OPTIONS = [
-  '📂', '💻', '🧠', '🚀', '🔧', '🎯', '📋', '🍽️', '👨‍🍳', '💰',
-  '📊', '✉️', '📟', '📁', '🔗', '🌐', '🔑', '🐳', '⚡', '🎨',
-  '🛠️', '📦', '🧪', '🔍', '📡', '🗄️', '🖥️', '🤖', '🏗️', '💡',
-];
+import { ProfileTile } from './ui/ProfileTile';
 
 const COLOR_PRESETS = [
   '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4',
@@ -52,7 +43,7 @@ function slugifyId(name: string): string {
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">{children}</h3>
+    <h3 className="text-meta font-semibold text-fg-2 mb-2">{children}</h3>
   );
 }
 
@@ -186,7 +177,7 @@ function HealthCheckEditor({
       />
       <div className="flex gap-2">
         <div className="flex-1">
-          <label className="block text-[10px] text-zinc-600 mb-0.5">Interval (sec)</label>
+          <label className="block text-[11px] text-zinc-600 mb-0.5">Interval (sec)</label>
           <input
             type="number"
             value={healthCheck.intervalSeconds}
@@ -197,7 +188,7 @@ function HealthCheckEditor({
           />
         </div>
         <div className="flex-1">
-          <label className="block text-[10px] text-zinc-600 mb-0.5">Parser</label>
+          <label className="block text-[11px] text-zinc-600 mb-0.5">Parser</label>
           <select
             value={healthCheck.parser}
             onChange={(e) => onChange({ ...healthCheck, parser: e.target.value as HealthCheck['parser'] })}
@@ -334,7 +325,7 @@ export function ProfileEditor() {
           </div>
           <button
             onClick={handleSave}
-            className="px-4 py-1.5 text-sm bg-zinc-100 text-zinc-900 font-medium rounded-lg
+            className="px-4 py-1.5 text-sm bg-accent text-accent-ink font-medium rounded-lg
                        active:bg-zinc-300 transition-colors"
           >
             Save
@@ -352,7 +343,7 @@ export function ProfileEditor() {
 
         {/* Preview */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex items-center gap-3">
-          <span className="text-2xl">{form.icon || '📂'}</span>
+          <ProfileTile name={form.name || 'Untitled'} color={form.color} size={36} />
           <div className="flex-1 min-w-0">
             <div className="font-medium truncate">{form.name || 'Untitled'}</div>
             <div className="text-xs text-zinc-500 truncate">
@@ -438,23 +429,9 @@ export function ProfileEditor() {
         <section className="space-y-3">
           <SectionHeader>Appearance</SectionHeader>
 
-          <div>
-            <FieldLabel optional>Icon</FieldLabel>
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {ICON_OPTIONS.map((icon) => (
-                <button
-                  key={icon}
-                  onClick={() => patch({ icon })}
-                  className={`w-9 h-9 rounded-lg flex items-center justify-center text-base
-                              transition-colors ${form.icon === icon
-                                ? 'bg-zinc-700 ring-1 ring-zinc-500'
-                                : 'bg-zinc-800 active:bg-zinc-700'}`}
-                >
-                  {icon}
-                </button>
-              ))}
-            </div>
-          </div>
+          <Hint>
+            Profiles show as a monogram from the name, on a tint of the colour below.
+          </Hint>
 
           <div>
             <FieldLabel optional>Color</FieldLabel>

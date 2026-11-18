@@ -13,6 +13,8 @@ interface WSClientOptions {
   url: string;
   onMessage: MessageHandler;
   onStateChange: (state: ConnectionState, closeCode?: number) => void;
+  /** Round trip of the last ping, in ms (the connection readout). */
+  onRtt?: (ms: number) => void;
 }
 
 export class WSClient {
@@ -20,6 +22,9 @@ export class WSClient {
   private url: string;
   private onMessage: MessageHandler;
   private onStateChange: (state: ConnectionState, closeCode?: number) => void;
+  private onRtt?: (ms: number) => void;
+  /** When the unanswered ping went out (0 = none in flight). */
+  private pingSentAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -57,6 +62,7 @@ export class WSClient {
     this.url = options.url;
     this.onMessage = options.onMessage;
     this.onStateChange = options.onStateChange;
+    this.onRtt = options.onRtt;
   }
 
   connect(): void {
@@ -90,6 +96,10 @@ export class WSClient {
       this.lastInboundAt = Date.now();
       try {
         const msg: ServerMessage = JSON.parse(event.data);
+        if (msg.type === 'pong' && this.pingSentAt) {
+          this.onRtt?.(Date.now() - this.pingSentAt);
+          this.pingSentAt = 0;
+        }
         this.onMessage(msg);
       } catch (err) {
         // Don't silently drop — protocol drift between client/server shows
@@ -222,12 +232,19 @@ export class WSClient {
   }
 
   private startPing(): void {
-    this.pingTimer = setInterval(() => {
-      this.send({ type: 'ping' });
-    }, this.PING_INTERVAL_MS);
+    // One right away, so the readout has a round trip within a second of
+    // connecting instead of after the first 10s interval.
+    this.sendPing();
+    this.pingTimer = setInterval(() => this.sendPing(), this.PING_INTERVAL_MS);
+  }
+
+  private sendPing(): void {
+    this.pingSentAt = Date.now();
+    this.send({ type: 'ping' });
   }
 
   private stopPing(): void {
+    this.pingSentAt = 0;
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
@@ -287,7 +304,7 @@ export class WSClient {
         // Recently active but ambiguous (e.g. a quick tab switch). Prove the
         // socket with a ping; if no inbound (pong / sessions.list) lands
         // within a short grace, treat it as a zombie and reconnect.
-        this.send({ type: 'ping' });
+        this.sendPing();
         setTimeout(() => {
           if (
             document.visibilityState === 'visible' &&

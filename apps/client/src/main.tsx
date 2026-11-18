@@ -5,6 +5,11 @@ import './styles/index.css';
 // Must run before the browser fires beforeinstallprompt (once, early).
 import './lib/installPrompt';
 import { APP_BASE } from './lib/platform';
+import { installDeviceClasses } from './lib/device';
+
+// UI type: Geist for the interface, Geist Mono for meta (paths, servers, ms).
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
 
 // Self-hosted terminal fonts — variable where available so a single file
 // covers all weights the TerminalSettings UI exposes (300-600).
@@ -63,6 +68,9 @@ function redirectToSecureOrigin(): boolean {
 }
 
 if (!redirectToSecureOrigin()) {
+  // Phone / desktop / compact-square rhythm classes on <html>, before the
+  // first paint so nothing jumps.
+  installDeviceClasses();
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <App />

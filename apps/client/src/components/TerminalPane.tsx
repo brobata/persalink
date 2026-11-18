@@ -855,7 +855,7 @@ export function TerminalPane({
       {/* Pane header */}
       <div className="shrink-0 flex items-center gap-1.5 px-2 py-1 bg-zinc-900/80 border-b border-zinc-800 text-xs">
         <span
-          className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold transition-colors ${
+          className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded text-[11px] font-semibold transition-colors ${
             isFocused ? 'bg-zinc-600 text-zinc-100' : 'bg-zinc-800 text-zinc-500'
           }`}
           title={`Pane ${paneNumber}`}
@@ -864,7 +864,7 @@ export function TerminalPane({
         </span>
         {serverBadge && (
           <span
-            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sky-500/15 text-sky-300"
+            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-sky-500/15 text-sky-300"
             title={`Session on ${serverBadge}`}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
@@ -896,10 +896,10 @@ export function TerminalPane({
               </span>
             )}
             {connState === 'reconnecting' && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] text-yellow-500 bg-yellow-500/10">reconnecting</span>
+              <span className="px-1.5 py-0.5 rounded text-micro text-st-disconnected border border-st-disconnected/40">reconnecting</span>
             )}
             {connState === 'disconnected' && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] text-red-400 bg-red-500/10">offline</span>
+              <span className="px-1.5 py-0.5 rounded text-[11px] text-red-400 bg-red-500/10">offline</span>
             )}
             <input
               ref={fileInputRef}
@@ -1058,7 +1058,7 @@ export function TerminalPane({
             onClick={() => { voice.toggle(); termRef.current?.focus(); }}
             className={`absolute right-3 bottom-3 z-10 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-colors ${
               voice.isListening
-                ? 'bg-red-500 text-white animate-pulse'
+                ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/50'
                 : 'bg-zinc-800/90 text-zinc-300 hover:bg-zinc-700'
             }`}
             title={voice.isListening ? 'Stop dictation' : 'Start dictation'}

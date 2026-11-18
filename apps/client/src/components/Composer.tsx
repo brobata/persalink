@@ -68,7 +68,7 @@ export function Composer({ onSend, onClose, variant }: {
       <button
         onClick={send}
         disabled={!text.trim()}
-        className={`shrink-0 rounded-lg bg-sky-600 text-white disabled:bg-zinc-800 disabled:text-zinc-600 transition-colors ${
+        className={`shrink-0 rounded-lg bg-accent text-accent-ink font-semibold active:bg-accent-lo disabled:bg-bg-3 disabled:text-fg-4 disabled:font-medium transition-colors ${
           touch ? 'px-4 py-2 text-sm' : 'px-3 py-1.5 text-xs'
         }`}
         title="Send (Enter)"

@@ -5,11 +5,13 @@
  *   terminal shows replies hard-wrapped with a gutter, so copying a config or
  *   a long command off the screen drags indentation and line breaks along;
  *   the transcript has the raw markdown. Rendered as an in-pane dropdown on
- *   desktop and a bottom sheet on mobile.
+ *   desktop and the shared Sheet on mobile.
  */
 
 import { useState } from 'react';
+import { Copy } from 'lucide-react';
 import type { ClaudeReplyState } from '../stores/appStore';
+import { Sheet } from './ui/Sheet';
 import { copyTextToClipboard } from '../lib/clipboardBridge';
 import { useAppStore } from '../stores/appStore';
 
@@ -44,6 +46,48 @@ export function ClaudeReplyPanel({ state, onClose, variant }: {
   };
 
   const touch = variant === 'sheet';
+  const list = (
+      <div className={touch ? 'px-1 pb-1' : 'px-2 py-1.5'}>
+        {state === 'loading' && (
+          <div className="px-2 py-4 text-center text-xs text-zinc-600">Reading Claude&apos;s last reply…</div>
+        )}
+        {typeof state === 'object' && !state.found && (
+          <div className="px-2 py-4 text-center text-xs text-zinc-500">{state.reason}</div>
+        )}
+        {typeof state === 'object' && state.found && state.blocks.length === 0 && (
+          <div className="px-2 py-3 text-xs text-zinc-500">
+            No code blocks in the last reply — use <span className="text-zinc-300">Whole reply</span> to copy it.
+          </div>
+        )}
+        {typeof state === 'object' && state.found && state.blocks.map((block, i) => {
+          const lines = block.code.split('\n');
+          const key = `block-${i}`;
+          return (
+            <button
+              key={key}
+              onClick={() => copy(key, block.code)}
+              className="group w-full text-left mb-1.5 rounded-md border border-zinc-800 hover:border-zinc-600 bg-zinc-950/60 transition-colors"
+              title="Copy this block"
+            >
+              <div className="flex items-center justify-between px-2 py-1 border-b border-zinc-800/80">
+                <span className="text-micro font-mono text-fg-3">
+                  {block.lang || 'code'} · {lines.length} line{lines.length === 1 ? '' : 's'}
+                </span>
+                <span className="flex items-center gap-1 text-[11px] text-zinc-500 group-hover:text-zinc-200">
+                  <CopyIcon done={copied === key} />
+                  {copied === key ? 'Copied' : 'Copy'}
+                </span>
+              </div>
+              <pre className="px-2 py-1.5 text-[11px] leading-snug text-zinc-300 font-mono whitespace-pre overflow-hidden">
+                {lines.slice(0, PREVIEW_LINES).join('\n')}
+                {lines.length > PREVIEW_LINES && <span className="text-zinc-600">{`\n… ${lines.length - PREVIEW_LINES} more`}</span>}
+              </pre>
+            </button>
+          );
+        })}
+      </div>
+  );
+
   const body = (
     <>
       <div className={`sticky top-0 bg-zinc-900 flex items-center justify-between border-b border-zinc-800 ${
@@ -70,58 +114,30 @@ export function ClaudeReplyPanel({ state, onClose, variant }: {
           </button>
         </div>
       </div>
-      <div className={touch ? 'px-3 py-2 pb-[max(12px,env(safe-area-inset-bottom))]' : 'px-2 py-1.5'}>
-        {state === 'loading' && (
-          <div className="px-2 py-4 text-center text-xs text-zinc-600">Reading Claude&apos;s last reply…</div>
-        )}
-        {typeof state === 'object' && !state.found && (
-          <div className="px-2 py-4 text-center text-xs text-zinc-500">{state.reason}</div>
-        )}
-        {typeof state === 'object' && state.found && state.blocks.length === 0 && (
-          <div className="px-2 py-3 text-xs text-zinc-500">
-            No code blocks in the last reply — use <span className="text-zinc-300">Whole reply</span> to copy it.
-          </div>
-        )}
-        {typeof state === 'object' && state.found && state.blocks.map((block, i) => {
-          const lines = block.code.split('\n');
-          const key = `block-${i}`;
-          return (
-            <button
-              key={key}
-              onClick={() => copy(key, block.code)}
-              className="group w-full text-left mb-1.5 rounded-md border border-zinc-800 hover:border-zinc-600 bg-zinc-950/60 transition-colors"
-              title="Copy this block"
-            >
-              <div className="flex items-center justify-between px-2 py-1 border-b border-zinc-800/80">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">
-                  {block.lang || 'code'} · {lines.length} line{lines.length === 1 ? '' : 's'}
-                </span>
-                <span className="flex items-center gap-1 text-[11px] text-zinc-500 group-hover:text-zinc-200">
-                  <CopyIcon done={copied === key} />
-                  {copied === key ? 'Copied' : 'Copy'}
-                </span>
-              </div>
-              <pre className="px-2 py-1.5 text-[11px] leading-snug text-zinc-300 font-mono whitespace-pre overflow-hidden">
-                {lines.slice(0, PREVIEW_LINES).join('\n')}
-                {lines.length > PREVIEW_LINES && <span className="text-zinc-600">{`\n… ${lines.length - PREVIEW_LINES} more`}</span>}
-              </pre>
-            </button>
-          );
-        })}
-      </div>
+      {list}
     </>
   );
 
   if (variant === 'sheet') {
     return (
-      <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onClick={onClose}>
-        <div
-          className="w-full max-h-[75vh] bg-zinc-900 border-t border-zinc-700 rounded-t-2xl overflow-y-auto"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {body}
-        </div>
-      </div>
+      <Sheet
+        title="Copy from Claude"
+        sub="Last reply and its code blocks, from the transcript"
+        onClose={onClose}
+        headExtra={typeof state === 'object' && state.found ? (
+          <button
+            type="button"
+            onClick={() => copy('reply', state.text)}
+            className="shrink-0 inline-flex items-center gap-1.5 h-8 px-2.5 rounded-[6px] border border-line-2 text-meta font-medium text-fg-1 active:bg-bg-3"
+            title="Copy the whole reply as markdown"
+          >
+            {copied === 'reply' ? <CopyIcon done /> : <Copy className="w-3.5 h-3.5" strokeWidth={1.75} />}
+            Whole reply
+          </button>
+        ) : undefined}
+      >
+        {list}
+      </Sheet>
     );
   }
   return (

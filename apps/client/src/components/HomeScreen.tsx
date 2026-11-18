@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
 import { useLongPress } from '../lib/useLongPress';
-import { useAttentionOrder } from '../lib/sessionOrder';
+import { orderSessions, useAttentionOrder } from '../lib/sessionOrder';
+import { stateKey, sessionTitle, countStates, needsSentence } from '../lib/sessionState';
+import { SessionRow } from './ui/SessionRow';
+import { StateGlyph } from './ui/StateGlyph';
+import { ProfileTile } from './ui/ProfileTile';
+import { IconButton } from './ui/IconButton';
+import { Pencil, X } from 'lucide-react';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 
 // ============================================================================
@@ -35,16 +41,10 @@ function SessionPill({ session }: { session: SessionInfo }) {
     return () => clearTimeout(t);
   }, [confirmKill]);
   // Explicit pencil-button rename — mobile had NO way to rename a session
-  // (desktop panes use double-click; long-press here is unused and gestures
-  // are undiscoverable anyway).
+  // (desktop panes use double-click; gestures are undiscoverable anyway).
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState('');
 
-  const startEdit = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditName(session.name || session.profileName || '');
-    setEditing(true);
-  };
   const commitEdit = () => {
     const trimmed = editName.trim();
     if (trimmed && trimmed !== session.name) renameSession(session.id, trimmed);
@@ -53,8 +53,8 @@ function SessionPill({ session }: { session: SessionInfo }) {
 
   if (editing) {
     return (
-      <div className="flex items-center gap-3 px-4 py-2.5 bg-emerald-950/30 border border-emerald-700/60 border-l-2 border-l-emerald-500 rounded-xl">
-        {session.profileIcon && <span className="text-lg shrink-0">{session.profileIcon}</span>}
+      <div className="flex items-center gap-2.5 min-h-(--pl-row-h) px-2.5 rounded-[10px] bg-bg-3">
+        <StateGlyph state={stateKey(session)} />
         <input
           value={editName}
           onChange={(e) => setEditName(e.target.value)}
@@ -63,7 +63,8 @@ function SessionPill({ session }: { session: SessionInfo }) {
             if (e.key === 'Enter') commitEdit();
             if (e.key === 'Escape') setEditing(false);
           }}
-          className="flex-1 min-w-0 px-2 py-1.5 bg-zinc-800 border border-zinc-600 rounded-lg text-sm text-zinc-100 outline-none"
+          aria-label="Session name"
+          className="flex-1 min-w-0 h-9 px-2.5 bg-bg-1 border border-line-2 rounded-[6px] text-body text-fg-1 outline-none focus:border-line-3"
           autoFocus
         />
       </div>
@@ -71,77 +72,35 @@ function SessionPill({ session }: { session: SessionInfo }) {
   }
 
   return (
-    <div className="flex items-center gap-0 bg-emerald-950/30 border border-emerald-700/60 border-l-2 border-l-emerald-500 rounded-xl">
-      <button
-        onClick={() => attachSession(session.id)}
-        className="flex items-center gap-3 flex-1 min-w-0 px-4 py-3.5 active:bg-emerald-900/40 transition-colors text-left rounded-l-xl"
-      >
-        {session.profileIcon ? (
-          <span className="text-lg shrink-0">{session.profileIcon}</span>
-        ) : (
-          <div
-            className="w-2.5 h-2.5 rounded-full shrink-0"
-            style={{ backgroundColor: session.profileColor || '#22c55e' }}
-          />
-        )}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="flex-1 text-sm font-medium text-zinc-100 truncate">
-              {session.name || session.profileName}
-            </span>
-            {session.attention === 'waiting' && (
-              <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full" title="Waiting for your input">needs you</span>
-            )}
-            {session.attention === 'error' && (
-              <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" title="Recent error" />
-            )}
-            {session.unseen && session.attention !== 'waiting' && session.attention !== 'error' && (
-              <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="New output" />
-            )}
-          </div>
-          {/* Live peek at the pane — triage from the list without attaching */}
-          {session.preview && (
-            <div className="text-[11px] text-zinc-600 font-mono truncate mt-0.5">{session.preview}</div>
+    <SessionRow
+      session={session}
+      detail="auto"
+      onOpen={() => attachSession(session.id)}
+      trailing={(
+        <>
+          <IconButton
+            label={`Rename ${sessionTitle(session)}`}
+            onClick={(e) => { e.stopPropagation(); setEditName(session.name || session.profileName || ''); setEditing(true); }}
+          >
+            <Pencil className="w-3.5 h-3.5" strokeWidth={1.75} />
+          </IconButton>
+          {confirmKill ? (
+            <button
+              type="button"
+              onClick={() => { killSession(session.id); setConfirmKill(false); }}
+              onBlur={() => setConfirmKill(false)}
+              className="h-11 px-3 rounded-[6px] text-meta font-semibold text-danger active:bg-danger-soft"
+            >
+              Kill?
+            </button>
+          ) : (
+            <IconButton label={`Kill ${sessionTitle(session)}`} onClick={(e) => { e.stopPropagation(); setConfirmKill(true); }}>
+              <X className="w-4 h-4" strokeWidth={1.75} />
+            </IconButton>
           )}
-        </div>
-        {session.profileColor && (
-          <div
-            className="shrink-0 w-1.5 h-4 rounded-full"
-            style={{ backgroundColor: session.profileColor }}
-          />
-        )}
-      </button>
-      <button
-        onClick={startEdit}
-        className="shrink-0 px-2.5 py-3.5 text-zinc-500 active:text-zinc-200 transition-colors border-l border-emerald-700/60"
-        title="Rename session"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" />
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-        </svg>
-      </button>
-      {confirmKill ? (
-        <button
-          onClick={() => { killSession(session.id); setConfirmKill(false); }}
-          onBlur={() => setConfirmKill(false)}
-          className="shrink-0 px-3 py-3.5 text-xs font-medium text-red-400 active:text-red-300 transition-colors border-l border-emerald-700/60 rounded-r-xl"
-        >
-          Kill?
-        </button>
-      ) : (
-        <button
-          onClick={(e) => { e.stopPropagation(); setConfirmKill(true); }}
-          className="shrink-0 px-3 py-3.5 text-zinc-500 active:text-red-400 transition-colors border-l border-emerald-700/60 rounded-r-xl"
-          title="Kill session"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 6 6 18" />
-            <path d="m6 6 12 12" />
-          </svg>
-        </button>
+        </>
       )}
-    </div>
+    />
   );
 }
 
@@ -158,11 +117,9 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
   const health = healthStatuses.find(h => h.profileId === profile.id);
   const liveSessions = sessions.filter(s => s.profileId === profile.id);
   const liveCount = liveSessions.length;
-  // Surface attention/unseen state on the collapsed profile card too, so you
-  // don't have to expand the Live bar to know something wants you.
-  const needsAttention = liveSessions.some(s => s.attention === 'waiting' || s.attention === 'error');
-  const hasUnseen = liveSessions.some(s => s.unseen);
-  const liveDotColor = needsAttention ? 'bg-amber-400' : hasUnseen ? 'bg-emerald-400' : 'bg-green-500';
+  // The most urgent live instance's state, so a card says something wants
+  // you without opening the list. Static glyph; nothing loops.
+  const lead = orderSessions(liveSessions)[0];
 
   // Same gesture contract as the desktop sidebar: tap opens the existing
   // session (or starts one if none is live); long-press always starts a new
@@ -207,32 +164,17 @@ function ProfileCard({ profile, isLive, reordering, onMove }: {
                    active:bg-zinc-800 transition-colors text-left ${reordering ? '' : 'rounded-l-xl'}`}
         style={{ WebkitTouchCallout: 'none' }}
       >
-        <div className="relative shrink-0">
-          <span className="text-lg">{profile.icon || '\uD83D\uDCC2'}</span>
-          {liveCount > 0 && liveCount < 2 && (
-            <div className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ${liveDotColor} ${(needsAttention || hasUnseen) ? 'animate-pulse' : ''}`} />
-          )}
-          {liveCount >= 2 && (
-            <div className={`absolute -top-1 -right-1.5 min-w-[16px] h-[16px] px-1
-                            rounded-full ${liveDotColor} text-[10px] font-bold text-zinc-950
-                            flex items-center justify-center`}>
-              {liveCount}
-            </div>
-          )}
-        </div>
+        <ProfileTile name={profile.name} color={profile.color} size={28} />
         <span className="flex-1 text-sm font-medium truncate">{profile.name}</span>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {health && (
-            <div
-              className="w-1.5 h-1.5 rounded-full"
-              style={{ backgroundColor: health.healthy ? '#22c55e' : '#ef4444' }}
-            />
+        <div className="flex items-center gap-2 shrink-0">
+          {health && !health.healthy && (
+            <span className="text-micro font-medium text-danger" title="Health check failing">Unhealthy</span>
           )}
-          {profile.color && (
-            <div
-              className="w-1.5 h-4 rounded-full"
-              style={{ backgroundColor: profile.color }}
-            />
+          {lead && (
+            <span className="flex items-center gap-1.5 text-micro text-fg-3 tnum" title={`${liveCount} live`}>
+              <StateGlyph state={stateKey(lead)} />
+              {liveCount > 1 ? `${liveCount} live` : 'Live'}
+            </span>
           )}
         </div>
       </button>
@@ -317,7 +259,7 @@ export function HomeScreen() {
               onClick={() => setReordering(!reordering)}
               className={`px-4 py-2 text-sm rounded-lg transition-colors ${
                 reordering
-                  ? 'bg-zinc-100 text-zinc-900 font-medium'
+                  ? 'bg-bg-4 text-fg-1 font-medium'
                   : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
               }`}
             >
@@ -390,11 +332,11 @@ export function HomeScreen() {
         {/* Live Sessions — full-width rows matching profile card size */}
         {sessions.length > 0 && (
           <section>
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              Live ({sessions.length})
+            <h2 className="text-meta font-semibold text-fg-2 mb-1.5 px-1 flex items-baseline gap-2">
+              Sessions
+              <span className="font-medium text-fg-3 tnum">{needsSentence(countStates(sessions).waiting)} · {sessions.length} live</span>
             </h2>
-            <div className="space-y-2">
+            <div className="space-y-0.5 -mx-1">
               {orderedSessions.map((session) => (
                 <SessionPill key={session.id} session={session} />
               ))}
@@ -405,7 +347,7 @@ export function HomeScreen() {
         {/* Pinned Profiles */}
         {groupedProfiles.pinned.length > 0 && (
           <section>
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+            <h2 className="text-meta font-semibold text-fg-2 mb-3">
               Pinned
             </h2>
             <div className="space-y-2">
@@ -422,7 +364,7 @@ export function HomeScreen() {
         {/* Profile Groups */}
         {Array.from(groupedProfiles.groups.entries()).map(([group, profs]) => (
           <section key={group}>
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+            <h2 className="text-meta font-semibold text-fg-2 mb-3">
               {group}
             </h2>
             <div className="space-y-2">

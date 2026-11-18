@@ -125,7 +125,7 @@ export function ShortcutsPanel({ onClose }: { onClose: () => void }) {
             <span>In a browser tab, Chrome keeps Ctrl+Tab for itself. Install for a real app window.</span>
             <button
               onClick={() => { void promptInstall(); }}
-              className="shrink-0 px-2.5 py-1 rounded bg-sky-600 text-white hover:bg-sky-500"
+              className="shrink-0 px-2.5 py-1 rounded bg-accent text-accent-ink font-semibold hover:bg-accent-hi"
             >
               Install
             </button>

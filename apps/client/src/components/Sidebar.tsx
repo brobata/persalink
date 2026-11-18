@@ -10,6 +10,11 @@ import { useLayoutStore } from '../stores/layoutStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 import { useLongPress } from '../lib/useLongPress';
 import { useAttentionOrder } from '../lib/sessionOrder';
+import { sessionTitle } from '../lib/sessionState';
+import { SessionRow } from './ui/SessionRow';
+import { ProfileTile } from './ui/ProfileTile';
+import { IconButton } from './ui/IconButton';
+import { X } from 'lucide-react';
 
 // ============================================================================
 // Session Pill (compact, for sidebar)
@@ -29,86 +34,38 @@ function SessionPill({ session }: { session: SessionInfo }) {
   const paneNumber = paneIndex + 1;
 
   return (
-    <div className={`flex items-center gap-0 rounded-lg transition-colors border-l-2 ${
-      isInFocusedPane
-        ? 'bg-emerald-900/50 border-emerald-400'
-        : isActive
-        ? 'bg-emerald-950/50 border-emerald-500 hover:bg-emerald-900/40'
-        : 'bg-emerald-950/30 border-emerald-700/60 hover:bg-emerald-950/50'
-    }`}>
-      <button
-        // A session click always lands on the grid: close Settings, Files or
-        // the profile editor if one is covering it, else the click looks dead.
-        onClick={() => { assignSession(focusedPaneId, session.id); closeOverlay(); }}
-        className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 text-left"
-        title={
-          isInFocusedPane ? `In focused pane (${paneNumber})`
-            : isActive ? `In pane ${paneNumber} — click to move to focused pane`
-            : 'Attach to focused pane'
-        }
-      >
-        {session.profileIcon ? (
-          <span className="text-sm shrink-0">{session.profileIcon}</span>
-        ) : (
-          <div
-            className="w-2 h-2 rounded-full shrink-0"
-            style={{ backgroundColor: session.profileColor || '#22c55e' }}
-          />
-        )}
-        <span className={`flex-1 text-xs font-medium truncate transition-colors ${
-          isInFocusedPane ? 'text-zinc-50' : 'text-zinc-200'
-        }`}>
-          {session.name || session.profileName}
-        </span>
-        <div className="flex items-center gap-1 shrink-0">
-          {session.attention === 'waiting' && (
-            <span className="text-[9px] font-semibold text-amber-300 bg-amber-500/15 px-1 py-0.5 rounded" title="Waiting for your input">needs you</span>
-          )}
-          {session.attention === 'error' && (
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500" title="Recent error" />
-          )}
-          {session.unseen && session.attention !== 'waiting' && session.attention !== 'error' && (
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="New output" />
-          )}
-          {isActive && (
-            <span
-              className={`inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-semibold ${
-                isInFocusedPane ? 'bg-emerald-400 text-emerald-950' : 'bg-emerald-700/80 text-emerald-100'
-              }`}
-              title={`Pane ${paneNumber}`}
-            >
-              {paneNumber}
-            </span>
-          )}
-          {session.profileColor && (
-            <div
-              className="w-1 h-3.5 rounded-full"
-              style={{ backgroundColor: session.profileColor }}
-            />
-          )}
-        </div>
-      </button>
-      {confirmKill ? (
+    <SessionRow
+      session={session}
+      density="compact"
+      current={isInFocusedPane}
+      selected={isActive && !isInFocusedPane}
+      detail="never"
+      hint={isInFocusedPane ? `In the focused pane (${paneNumber})`
+        : isActive ? `In pane ${paneNumber}. Click to move it to the focused pane.`
+        : 'Open in the focused pane'}
+      // A session click always lands on the grid: close Settings, Files or
+      // the profile editor if one is covering it, else the click looks dead.
+      onOpen={() => { assignSession(focusedPaneId, session.id); closeOverlay(); }}
+      trailing={confirmKill ? (
         <button
+          type="button"
           onClick={() => { killSession(session.id); setConfirmKill(false); }}
           onBlur={() => setConfirmKill(false)}
-          className="shrink-0 px-2 py-2 text-[10px] font-medium text-red-400 hover:text-red-300 transition-colors"
+          className="h-7 px-2 rounded-[6px] text-micro font-semibold text-danger hover:bg-danger-soft"
         >
           Kill?
         </button>
       ) : (
-        <button
+        <IconButton
+          size="xs"
+          label={`Kill ${sessionTitle(session)}`}
+          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
           onClick={(e) => { e.stopPropagation(); setConfirmKill(true); }}
-          className="shrink-0 px-2 py-2 text-zinc-600 hover:text-red-400 transition-colors"
-          title="Kill session"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 6 6 18" />
-            <path d="m6 6 12 12" />
-          </svg>
-        </button>
+          <X className="w-3.5 h-3.5" strokeWidth={1.75} />
+        </IconButton>
       )}
-    </div>
+    />
   );
 }
 
@@ -159,36 +116,18 @@ function ProfileRow({ profile }: { profile: Profile }) {
         title={liveCount > 0 ? 'Click to attach. Shift+click or hold for a new instance.' : profile.name}
         className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 text-left"
       >
-        <div className="relative shrink-0">
-          <span className="text-sm">{profile.icon || '\uD83D\uDCC2'}</span>
-          {liveCount > 0 && liveCount < 2 && (
-            <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          )}
-          {liveCount >= 2 && (
-            <div className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] px-1
-                            rounded-full bg-green-500 text-[9px] font-bold text-zinc-950
-                            flex items-center justify-center">
-              {liveCount}
-            </div>
-          )}
-        </div>
+        <ProfileTile name={profile.name} color={profile.color} size={20} />
         <span className={`flex-1 text-xs font-medium truncate ${
           isActive ? 'text-zinc-100' : 'text-zinc-300'
         }`}>
           {profile.name}
         </span>
-        <div className="flex items-center gap-1 shrink-0">
-          {health && (
-            <div
-              className="w-1.5 h-1.5 rounded-full"
-              style={{ backgroundColor: health.healthy ? '#22c55e' : '#ef4444' }}
-            />
+        <div className="flex items-center gap-1.5 shrink-0">
+          {health && !health.healthy && (
+            <span className="text-micro font-medium text-danger" title="Health check failing">Unhealthy</span>
           )}
-          {profile.color && (
-            <div
-              className="w-1 h-3.5 rounded-full"
-              style={{ backgroundColor: profile.color }}
-            />
+          {liveCount > 0 && (
+            <span className="text-micro text-fg-3 tnum" title={`${liveCount} live`}>{liveCount > 1 ? `${liveCount} live` : 'Live'}</span>
           )}
         </div>
       </button>
@@ -244,7 +183,7 @@ export function Sidebar() {
             {/* Server chip — opens the Servers screen (multi-server switch) */}
           <button
             onClick={openServers}
-            className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+            className="flex items-center gap-1 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
             title="Switch server"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
@@ -309,9 +248,9 @@ export function Sidebar() {
         {/* Live Sessions */}
         {sessions.length > 0 && (
           <section>
-            <h2 className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1.5 px-1 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              Live ({sessions.length})
+            <h2 className="text-meta font-semibold text-fg-2 mb-1 px-1 flex items-baseline gap-2">
+              Sessions
+              <span className="font-medium text-fg-3 tnum">{sessions.length}</span>
             </h2>
             <div className="space-y-1">
               {orderedSessions.map((session) => (
@@ -324,7 +263,7 @@ export function Sidebar() {
         {/* Pinned Profiles */}
         {groupedProfiles.pinned.length > 0 && (
           <section>
-            <h2 className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1 px-1">
+            <h2 className="text-meta font-semibold text-fg-2 mb-1 px-1">
               Pinned
             </h2>
             <div className="space-y-0.5">
@@ -338,7 +277,7 @@ export function Sidebar() {
         {/* Profile Groups */}
         {Array.from(groupedProfiles.groups.entries()).map(([group, profs]) => (
           <section key={group}>
-            <h2 className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1 px-1">
+            <h2 className="text-meta font-semibold text-fg-2 mb-1 px-1">
               {group}
             </h2>
             <div className="space-y-0.5">

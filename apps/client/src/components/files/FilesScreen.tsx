@@ -74,7 +74,7 @@ function NameDialog({ title, initial, action, onSubmit, onCancel }: {
         {trimmed.includes('/') && <p className="text-xs text-red-400">Names cannot contain /</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onCancel} className="px-3 py-1.5 text-sm text-zinc-400 bg-zinc-800 rounded-lg active:bg-zinc-700">Cancel</button>
-          <button type="submit" disabled={invalid} className="px-3 py-1.5 text-sm font-medium text-zinc-900 bg-zinc-100 rounded-lg disabled:opacity-40">{action}</button>
+          <button type="submit" disabled={invalid} className="px-3 py-1.5 text-sm font-medium text-accent-ink bg-accent rounded-lg disabled:opacity-40">{action}</button>
         </div>
       </form>
     </div>
@@ -684,7 +684,7 @@ export function FilesScreen() {
             <button
               onClick={() => setAddOpen((o) => !o)}
               disabled={!dir || readOnly}
-              className="ml-1 flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-zinc-900 bg-zinc-100 rounded-lg active:bg-zinc-300 hover:bg-white disabled:opacity-40"
+              className="ml-1 flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-accent-ink bg-accent rounded-lg active:bg-accent-lo hover:bg-accent-hi disabled:opacity-40"
             >
               <Upload className="w-4 h-4" /> <span className="hidden sm:inline">Add</span>
             </button>
@@ -750,7 +750,7 @@ export function FilesScreen() {
           </div>
         )}
         {prefs.view === 'list' && shown.length > 0 && (
-          <div className="hidden sm:flex items-center gap-2 px-2 pb-1 text-[11px] uppercase tracking-wide text-zinc-600">
+          <div className="hidden sm:flex items-center gap-2 px-2 pb-1 text-micro text-fg-3">
             <span className="w-9" />
             <button className="flex-1 text-left hover:text-zinc-300" onClick={() => updatePrefs(prefs.sort === 'name' ? { desc: !prefs.desc } : { sort: 'name', desc: false })}>Name</button>
             <button className="w-28 text-right hover:text-zinc-300" onClick={() => updatePrefs(prefs.sort === 'mtime' ? { desc: !prefs.desc } : { sort: 'mtime', desc: true })}>Modified</button>

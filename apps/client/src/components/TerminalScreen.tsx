@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -19,30 +19,19 @@ import { useVoiceInput } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
-import { nextWaiting, useAttentionOrder, waitAge } from '../lib/sessionOrder';
+import { useAttentionOrder } from '../lib/sessionOrder';
 import { ExitedTombstone } from './ExitedTombstone';
+import { KeyRow } from './ui/KeyRow';
+import { Sheet } from './ui/Sheet';
+import { SessionRow } from './ui/SessionRow';
+import { StateGlyph } from './ui/StateGlyph';
+import { ProfileTile } from './ui/ProfileTile';
+import { IconButton } from './ui/IconButton';
+import { WaitPill } from './ui/WaitPill';
+import { ConnectionReadout } from './ui/ConnectionReadout';
+import { countStates, groupSessions, needsSentence, sessionTitle, stateKey } from '../lib/sessionState';
+import { Check, ChevronLeft, ChevronRight, Copy, Pencil, Plus } from 'lucide-react';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
-
-// Soft-keyboard helper: keys absent from mobile keyboards but essential
-// for terminal use (Esc, arrows, Tab, common Ctrl combos). Each entry
-// maps a label to the byte sequence sent on tap.
-const TERMINAL_KEYS: Array<{ label: string; seq: string }> = [
-  { label: 'Esc', seq: '\x1b' },
-  { label: 'Tab', seq: '\t' },
-  { label: '⇧Tab', seq: '\x1b[Z' },
-  { label: '↑', seq: '\x1b[A' },
-  { label: '↓', seq: '\x1b[B' },
-  { label: '←', seq: '\x1b[D' },
-  { label: '→', seq: '\x1b[C' },
-  { label: '^C', seq: '\x03' },
-  { label: '^D', seq: '\x04' },
-  { label: '^L', seq: '\x0c' },
-  { label: '^R', seq: '\x12' },
-  { label: 'PgUp', seq: '\x1b[5~' },
-  { label: 'PgDn', seq: '\x1b[6~' },
-  { label: 'Home', seq: '\x1b[H' },
-  { label: 'End', seq: '\x1b[F' },
-];
 
 // Arrow-key joystick (lives on the FAB — the terminal long-press belongs to
 // native text selection now): repeat interval by drag distance from the press
@@ -55,107 +44,6 @@ const JOY_GEARS = [
 const ARROW_SEQ = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' } as const;
 const JOY_HOLD_MS = 300;
 const JOY_ACTIVATE_PX = 14;
-
-// Space that doubles as a trackpad: tap = space, hold + slide = arrow keys —
-// Termius's "hold Space and slide" alternative cursor control. Trackpad
-// semantics (one arrow per step of travel), distinct from the hold-joystick
-// on the terminal surface. touch-action none + pointer capture keep the
-// slide from scrolling the key bar underneath.
-function SpaceTrackpadKey({ sendInput }: { sendInput: (data: string) => void }) {
-  const STEP_PX = 14;
-  const stateRef = useRef({ active: false, moved: false, lastX: 0, lastY: 0 });
-  return (
-    <button
-      onPointerDown={(e) => {
-        e.preventDefault();
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-        stateRef.current = { active: true, moved: false, lastX: e.clientX, lastY: e.clientY };
-      }}
-      onPointerMove={(e) => {
-        const s = stateRef.current;
-        if (!s.active) return;
-        const dx = e.clientX - s.lastX;
-        const dy = e.clientY - s.lastY;
-        if (Math.abs(dx) >= Math.abs(dy)) {
-          const steps = Math.trunc(dx / STEP_PX);
-          if (steps !== 0) {
-            s.lastX += steps * STEP_PX;
-            s.lastY = e.clientY;
-            s.moved = true;
-            sendInput((steps > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(steps)));
-          }
-        } else {
-          const steps = Math.trunc(dy / STEP_PX);
-          if (steps !== 0) {
-            s.lastY += steps * STEP_PX;
-            s.lastX = e.clientX;
-            s.moved = true;
-            sendInput((steps > 0 ? '\x1b[B' : '\x1b[A').repeat(Math.abs(steps)));
-          }
-        }
-      }}
-      onPointerUp={() => {
-        const s = stateRef.current;
-        if (s.active && !s.moved) sendInput(' ');
-        s.active = false;
-      }}
-      onPointerCancel={() => { stateRef.current.active = false; }}
-      className="shrink-0 min-w-[72px] px-4 py-2 text-xs font-mono bg-zinc-800 text-zinc-400 rounded-md active:bg-zinc-600 transition-colors select-none"
-      style={{ touchAction: 'none' }}
-      title="Space — hold and slide for arrow keys"
-    >
-      ␣
-    </button>
-  );
-}
-
-function TerminalKeyBar({ sendInput, ctrlArmed, onToggleCtrl, onOpenSnippets }: {
-  sendInput: (data: string) => void;
-  ctrlArmed: boolean;
-  onToggleCtrl: () => void;
-  onOpenSnippets: () => void;
-}) {
-  return (
-    <div
-      className="shrink-0 flex gap-1 px-2 py-1.5 bg-zinc-900 border-t border-zinc-800 overflow-x-auto"
-      style={{ scrollbarWidth: 'none' }}
-    >
-      {/* Sticky Ctrl — arm it, then type any letter on the soft keyboard to
-          send that Ctrl-combo (soft keyboards have no Ctrl key, and a fixed
-          ^X list can never cover them all). Disarms after one use. */}
-      <button
-        onPointerDown={(e) => { e.preventDefault(); onToggleCtrl(); }}
-        className={`shrink-0 min-w-[44px] px-2 py-2 text-xs font-mono rounded-md transition-colors select-none ${
-          ctrlArmed ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-200 active:bg-zinc-600'
-        }`}
-      >
-        Ctrl
-      </button>
-      <SpaceTrackpadKey sendInput={sendInput} />
-      {/* Snippet library — saved commands with {{variable}} prompts */}
-      <button
-        onPointerDown={(e) => { e.preventDefault(); onOpenSnippets(); }}
-        className="shrink-0 min-w-[44px] px-2 py-2 text-xs font-mono bg-zinc-800 text-zinc-200 rounded-md active:bg-zinc-600 transition-colors select-none"
-        title="Snippets — saved commands"
-      >
-        {'{}'}
-      </button>
-      {TERMINAL_KEYS.map((k) => (
-        <button
-          key={k.label}
-          onPointerDown={(e) => {
-            // Keep terminal focus so the soft keyboard stays up between taps.
-            e.preventDefault();
-            sendInput(k.seq);
-          }}
-          className="shrink-0 min-w-[44px] px-2 py-2 text-xs font-mono bg-zinc-800 text-zinc-200 rounded-md active:bg-zinc-600 transition-colors select-none"
-        >
-          {k.label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function WindowTab({ w, windowCount }: { w: { index: number; name: string; active: boolean }; windowCount: number }) {
   const { selectWindow, killWindow, renameWindow } = useAppStore();
@@ -244,49 +132,33 @@ function TabPicker({ onClose }: { onClose: () => void }) {
     return groups;
   }, [profiles]);
 
-  const handlePick = (profile: Profile) => {
-    createSession(profile.id);
-    // onClose is handled by store (showTabPicker set to false on attach)
-  };
-
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={onClose}>
-      <div
-        className="w-full max-h-[70vh] bg-zinc-900 border-t border-zinc-700 rounded-t-2xl overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between">
-          <span className="text-sm font-semibold text-zinc-300">Open in new tab</span>
-          <button onClick={onClose} className="px-2 py-1 text-zinc-500 text-sm">Cancel</button>
-        </div>
-        <div className="px-4 py-3 space-y-4">
-          {Array.from(grouped.entries()).map(([group, profs]) => (
-            <div key={group}>
-              <div className="text-[11px] font-semibold text-zinc-600 uppercase tracking-wider mb-1.5">{group}</div>
-              <div className="space-y-1">
-                {profs.map((p) => {
-                  const isLive = sessions.some(s => s.profileId === p.id);
-                  return (
-                    <button
-                      key={p.id}
-                      onClick={() => handlePick(p)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg active:bg-zinc-800 transition-colors text-left"
-                    >
-                      <span className="text-base shrink-0">{p.icon || '\uD83D\uDCC2'}</span>
-                      <span className="flex-1 text-sm truncate">{p.name}</span>
-                      {isLive && <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />}
-                      {p.color && (
-                        <div className="w-1.5 h-4 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
+    <Sheet title="New session" sub="From a profile" onClose={onClose}>
+      {profiles.length === 0 && (
+        <p className="px-3 py-8 text-center text-body text-fg-3">No profiles yet.</p>
+      )}
+      {Array.from(grouped.entries()).map(([group, profs]) => (
+        <section key={group} className="mt-1.5">
+          <h3 className="h-8 flex items-center px-2 text-meta font-semibold text-fg-2">{group}</h3>
+          {profs.map((p) => {
+            const live = sessions.filter((x) => x.profileId === p.id).length;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                // The store closes the picker when the new session attaches.
+                onClick={() => createSession(p.id)}
+                className="w-full flex items-center gap-3 min-h-(--pl-row-h) px-2.5 rounded-[10px] text-left active:bg-bg-3 hover:bg-bg-3/60 transition-colors duration-(--d-press)"
+              >
+                <ProfileTile name={p.name} color={p.color} />
+                <span className="flex-1 min-w-0 truncate text-[14px] font-medium text-fg-1">{p.name}</span>
+                {live > 0 && <span className="shrink-0 text-micro text-fg-3 tnum">{live} live</span>}
+              </button>
+            );
+          })}
+        </section>
+      ))}
+    </Sheet>
   );
 }
 
@@ -305,62 +177,38 @@ function LinkSheet({ links, onClose }: { links: string[]; onClose: () => void })
     } catch { /* clipboard denied — opening via the anchor still works */ }
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onClick={onClose}>
-      <div
-        className="w-full max-h-[70vh] bg-zinc-900 border-t border-zinc-700 rounded-t-2xl overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between">
-          <span className="text-sm font-semibold text-zinc-300">Recent links</span>
-          <button onClick={onClose} className="px-2 py-1 text-zinc-500 text-sm">Close</button>
+    <Sheet title="Links in this session" sub="Newest first, whole even when wrapped" onClose={onClose}>
+      {links.length === 0 && (
+        <div className="px-3 py-8 text-center text-body text-fg-3">No links in recent output</div>
+      )}
+      {links.map((url, i) => (
+        <div key={`${url}-${i}`} className="flex items-center gap-1">
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 min-w-0 px-3 py-3 text-body text-accent-hi active:bg-bg-3 rounded-[10px] break-all"
+          >
+            {url}
+          </a>
+          <IconButton label={copiedIdx === i ? 'Copied' : 'Copy link'} onClick={() => copy(url, i)}>
+            {copiedIdx === i
+              ? <Check className="w-4 h-4 text-accent-hi" strokeWidth={1.75} />
+              : <Copy className="w-4 h-4" strokeWidth={1.75} />}
+          </IconButton>
         </div>
-        <div className="px-3 py-2 pb-[max(12px,env(safe-area-inset-bottom))]">
-          {links.length === 0 && (
-            <div className="px-3 py-8 text-center text-sm text-zinc-600">
-              No links found in recent output
-            </div>
-          )}
-          {links.map((url, i) => (
-            <div key={`${url}-${i}`} className="flex items-center gap-1">
-              <a
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 min-w-0 px-3 py-3 text-sm text-sky-400 active:bg-zinc-800 rounded-lg break-all leading-snug"
-              >
-                {url}
-              </a>
-              <button
-                onClick={() => copy(url, i)}
-                className="shrink-0 px-2.5 py-2.5 text-zinc-500 active:text-zinc-200 transition-colors"
-                title="Copy link"
-              >
-                {copiedIdx === i ? (
-                  <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                )}
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
+      ))}
+    </Sheet>
   );
 }
 
-// One switcher row. The pencil swaps the row into an inline rename input —
-// the only way to rename a session from inside the terminal on mobile
-// (desktop panes have double-click; gestures proved undiscoverable).
-function SwitcherRow({ s, active, onPick, onClose }: {
+// One switcher row: the shared SessionRow plus a rename pencil. The pencil
+// swaps the row into an inline rename input — the only way to rename a
+// session from inside the terminal on a phone.
+function SwitcherRow({ s, active, onPick }: {
   s: SessionInfo;
   active: boolean;
   onPick: (id: string) => void;
-  onClose: () => void;
 }) {
   const renameSession = useAppStore((st) => st.renameSession);
   const [editing, setEditing] = useState(false);
@@ -374,17 +222,18 @@ function SwitcherRow({ s, active, onPick, onClose }: {
 
   if (editing) {
     return (
-      <div className={`flex items-center gap-3 px-3 py-2 rounded-lg ${active ? 'bg-zinc-800' : ''}`}>
-        <span className="text-base shrink-0">{s.profileIcon || '🖥️'}</span>
+      <div className="flex items-center gap-2.5 min-h-(--pl-row-h) px-2.5 rounded-[10px] bg-bg-3">
+        <StateGlyph state={stateKey(s)} />
         <input
           value={editName}
           onChange={(e) => setEditName(e.target.value)}
           onBlur={commitEdit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commitEdit();
-            if (e.key === 'Escape') setEditing(false);
+            if (e.key === 'Escape') { e.stopPropagation(); setEditing(false); }
           }}
-          className="flex-1 min-w-0 px-2 py-1.5 bg-zinc-900 border border-zinc-600 rounded-lg text-sm text-zinc-100 outline-none"
+          aria-label="Session name"
+          className="flex-1 min-w-0 h-9 px-2.5 bg-bg-1 border border-line-2 rounded-[6px] text-body text-fg-1 outline-none focus:border-line-3"
           autoFocus
         />
       </div>
@@ -392,43 +241,23 @@ function SwitcherRow({ s, active, onPick, onClose }: {
   }
 
   return (
-    <div className={`flex items-center rounded-lg transition-colors ${active ? 'bg-zinc-800' : 'active:bg-zinc-800/60'}`}>
-      <button
-        onClick={() => { onPick(s.id); onClose(); }}
-        className="flex-1 min-w-0 flex items-center gap-3 px-3 py-3 text-left"
-      >
-        <span className="text-base shrink-0">{s.profileIcon || '🖥️'}</span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="flex-1 min-w-0 truncate text-sm text-zinc-100">{s.name || s.profileName || s.id}</span>
-            {s.attention === 'working' && <span className="shrink-0 text-[10px] text-sky-300">working…</span>}
-            {s.attention === 'waiting' && <span className="shrink-0 text-[10px] font-semibold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-full">needs you</span>}
-            {s.attention === 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-red-500" />}
-            {s.unseen && s.attention !== 'waiting' && s.attention !== 'error' && <span className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
-            {active && <span className="shrink-0 text-[10px] text-zinc-500">current</span>}
-          </div>
-          {/* Live peek at the pane — see what's happening before switching */}
-          {s.preview && (
-            <div className="text-[10px] text-zinc-600 font-mono truncate mt-0.5">{s.preview}</div>
-          )}
-        </div>
-      </button>
-      <button
-        onClick={() => { setEditName(s.name || s.profileName || ''); setEditing(true); }}
-        className="shrink-0 px-2.5 py-3 text-zinc-600 active:text-zinc-200 transition-colors"
-        title="Rename session"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M11 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-5" />
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-        </svg>
-      </button>
-    </div>
+    <SessionRow
+      session={s}
+      current={active}
+      detail="auto"
+      onOpen={() => onPick(s.id)}
+      trailing={(
+        <IconButton label={`Rename ${sessionTitle(s)}`} onClick={() => { setEditName(s.name || s.profileName || ''); setEditing(true); }}>
+          <Pencil className="w-3.5 h-3.5" strokeWidth={1.75} />
+        </IconButton>
+      )}
+    />
   );
 }
 
-// Quick session switcher — a bottom sheet of live sessions with their attention
-// badges, so you can hop between running agents without going home.
+// Quick session switcher: every live session in the named groups (Needs you,
+// Working, Quiet, Ended), longest wait first, so you can hop between agents
+// without going home. Quiet and Ended fold to their header.
 function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
   sessions: SessionInfo[];
   currentId: string | null;
@@ -437,29 +266,60 @@ function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
   onClose: () => void;
 }) {
   const ordered = useAttentionOrder(sessions);
+  const groups = groupSessions(ordered).filter((g) => g.items.length > 0);
+  const c = countStates(sessions);
   return (
-    <div className="fixed inset-0 z-50" onClick={onClose}>
-      {/* Dropdown anchored just under the top bar, where the trigger lives —
-          opening a bottom sheet from a top button felt disorienting. */}
-      <div
-        className="absolute left-2 right-2 max-h-[60vh] bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-y-auto"
-        style={{ top: 'calc(env(safe-area-inset-top) + 2.75rem)' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 bg-zinc-900 px-4 pt-3 pb-2 border-b border-zinc-800 flex items-center justify-between rounded-t-2xl">
-          <span className="text-sm font-semibold text-zinc-300">Switch session</span>
-          <button onClick={onNew} className="text-xs text-emerald-400 active:text-emerald-300">+ New</button>
-        </div>
-        <div className="px-2 py-2 space-y-0.5">
-          {sessions.length === 0 && (
-            <div className="px-3 py-6 text-center text-sm text-zinc-600">No live sessions</div>
-          )}
-          {ordered.map((s) => (
-            <SwitcherRow key={s.id} s={s} active={s.id === currentId} onPick={onPick} onClose={onClose} />
+    <Sheet
+      title="Sessions"
+      sub={`${needsSentence(c.waiting)} · ${sessions.length} live`}
+      tall
+      onClose={onClose}
+      headExtra={(
+        <button
+          type="button"
+          onClick={onNew}
+          className="shrink-0 inline-flex items-center gap-1.5 h-8 px-2.5 rounded-[6px] border border-line-2 text-meta font-medium text-fg-1 active:bg-bg-3"
+        >
+          <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
+          New
+        </button>
+      )}
+    >
+      {sessions.length === 0 && (
+        <div className="px-3 py-8 text-center text-body text-fg-3">No live sessions</div>
+      )}
+      {groups.map((g) => (
+        <SwitcherGroup key={g.id} label={g.label} count={g.items.length} startFolded={g.id === 'ended'}>
+          {g.items.map((s) => (
+            <SwitcherRow key={s.id} s={s} active={s.id === currentId} onPick={(id) => { onPick(id); onClose(); }} />
           ))}
-        </div>
-      </div>
-    </div>
+        </SwitcherGroup>
+      ))}
+    </Sheet>
+  );
+}
+
+function SwitcherGroup({ label, count, startFolded, children }: {
+  label: string;
+  count: number;
+  startFolded: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(!startFolded);
+  return (
+    <section className="mt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full h-8 flex items-center gap-1.5 px-2 text-left text-meta font-semibold text-fg-2"
+      >
+        <ChevronRight className={`w-3.5 h-3.5 text-fg-4 transition-transform duration-(--d-move) ${open ? 'rotate-90' : ''}`} strokeWidth={1.75} />
+        <span>{label}</span>
+        <span className="font-medium text-fg-3 tnum">{count}</span>
+      </button>
+      {open && <div>{children}</div>}
+    </section>
   );
 }
 
@@ -530,12 +390,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const restartEnded = useAppStore((s) => s.restartEnded);
   const dismissEnded = useAppStore((s) => s.dismissEnded);
   const openNextWaiting = useAppStore((s) => s.openNextWaiting);
-  // The agent that has waited longest, other than this one: the header pill.
-  const waitingNext = useMemo(
-    () => nextWaiting(sessions, attachedSession?.id ?? null),
-    [sessions, attachedSession?.id],
-  );
   const ended = endedSession && endedSession.id === attachedSession?.id ? endedSession : null;
+  // attachedSession is the snapshot taken at attach; state lives in the list.
+  const liveAttached = sessions.find((s) => s.id === attachedSession?.id) ?? attachedSession;
   const isEnded = !!ended;
   // Text-box composer (FAB → Message): write, edit, dictate, then send once.
   const [composerOpen, setComposerOpen] = useState(false);
@@ -543,10 +400,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // 'authenticated' is the only fully-usable state; anything else means input
   // won't reach the session, so surface it instead of dropping keystrokes silently.
   const online = connectionState === 'authenticated';
-  const connLabel = connectionState === 'reconnecting' ? 'Reconnecting…'
-    : connectionState === 'disconnected' ? 'Offline'
-    : connectionState === 'connecting' ? 'Connecting…'
-    : 'Authenticating…';
 
   const tabs = useMemo(() => getTabs(), [sessions]);
 
@@ -1901,11 +1754,13 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         {/* Back button — mobile only */}
         {!sidebarVisible && (
           <button
+            type="button"
             onClick={detachSession}
-            className="shrink-0 px-2.5 py-2 text-sm bg-zinc-800 text-zinc-400 rounded-lg
-                       active:bg-zinc-700 transition-colors"
+            aria-label="Home"
+            title="Home"
+            className="pl-ib shrink-0 w-9"
           >
-            &larr;
+            <ChevronLeft className="w-[18px] h-[18px]" strokeWidth={1.75} />
           </button>
         )}
 
@@ -1914,28 +1769,15 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         {!sidebarVisible && (
           <button
             onClick={() => setShowSwitcher(true)}
-            className="flex items-center gap-1.5 flex-1 min-w-0 px-2 py-1 active:bg-zinc-800 rounded-lg transition-colors"
+            aria-label={attachedSession ? `Switch session. ${sessionTitle(attachedSession)}` : 'Switch session'}
+            className="flex items-center gap-1.5 flex-1 min-w-0 px-1.5 py-1 active:bg-bg-3 rounded-[6px] transition-colors"
           >
-            {attachedSession?.profileIcon && (
-              <span className="text-sm shrink-0">{attachedSession.profileIcon}</span>
+            {liveAttached && (
+              <StateGlyph state={isEnded ? 'exited' : stateKey(liveAttached)} live label={isEnded ? 'Ended' : undefined} />
             )}
-            <span className="truncate text-xs text-zinc-300">
-              {attachedSession?.name || attachedSession?.profileName || ''}
+            <span className="truncate text-body font-medium text-fg-1">
+              {attachedSession ? sessionTitle(attachedSession) : ''}
             </span>
-            {/* Badge: how many OTHER live sessions want attention. */}
-            {(() => {
-              const others = sessions.filter((s) => s.id !== attachedSession?.id);
-              const flagged = others.filter((s) => s.attention === 'waiting' || s.attention === 'error' || s.unseen).length;
-              if (others.length === 0) return null;
-              return (
-                <span className={`shrink-0 text-[10px] px-1 rounded-full ${flagged ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-600'}`}>
-                  {flagged ? `${flagged}●` : `+${others.length}`}
-                </span>
-              );
-            })()}
-            <svg className="w-3 h-3 shrink-0 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
           </button>
         )}
 
@@ -1947,14 +1789,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         )}
 
         {/* Connection health — only shown when not fully connected. */}
-        {!online && (
-          <span className={`shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-            connectionState === 'disconnected' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-300'
-          }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${connectionState === 'disconnected' ? 'bg-red-500' : 'bg-amber-400 animate-pulse'}`} />
-            {connLabel}
-          </span>
-        )}
+        {!online && <ConnectionReadout className="shrink-0 px-1" />}
 
         {/* Upload */}
         <input
@@ -2074,7 +1909,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             autoCorrect="off"
             className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
           />
-          <span className="shrink-0 text-[10px] text-zinc-500 w-12 text-center">
+          <span className="shrink-0 text-[11px] text-zinc-500 w-12 text-center">
             {searchCount ? `${searchCount.current}/${searchCount.total}` : searchQuery ? '0' : ''}
           </span>
           <button
@@ -2139,25 +1974,19 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         {ended && <ExitedTombstone ended={ended} onRestart={restartEnded} onDismiss={dismissEnded} />}
         {/* Next waiting — the agent that has waited longest for you, one tap
             away. Floats at the top edge (old scrollback, never the prompt rows
-            at the bottom) because today's top bar has no room left; the phone
-            header redesign gives it a home there. Amber = waiting for you. */}
-        {!sidebarVisible && waitingNext && (
-          <button
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={(e) => { e.stopPropagation(); openNextWaiting(); }}
-            className="absolute top-2 right-2 z-20 flex items-center gap-1.5 h-8 max-w-[60%] pl-2.5 pr-3 rounded-full
-                       border border-amber-400/40 bg-zinc-950/90 text-[12px] text-amber-200 shadow-lg
-                       active:bg-zinc-900 motion-safe:animate-[pl-rise_160ms_ease-out]"
-            aria-label={`Open ${waitingNext.name || waitingNext.profileName}, waiting ${waitAge(waitingNext)}`}
-          >
-            <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400" />
-            <span className="truncate">{waitingNext.name || waitingNext.profileName}</span>
-            <span className="shrink-0 tabular-nums text-amber-300/70">{waitAge(waitingNext)}</span>
-          </button>
+            at the bottom) until the phone header gets room for it. */}
+        {!sidebarVisible && (
+          <WaitPill
+            variant="phone"
+            sessions={sessions}
+            currentId={attachedSession?.id ?? null}
+            onJump={() => openNextWaiting()}
+            className="absolute top-2 right-2 z-20 shadow-(--e-2-shadow) bg-bg-2! motion-safe:animate-pop"
+          />
         )}
         {/* Input-debug overlay — raw events, newest at the bottom */}
         {inputDebug && (
-          <div className="absolute left-2 top-2 z-40 pointer-events-none rounded-lg bg-black/80 px-2.5 py-2 font-mono text-[10px] leading-4 text-emerald-300 max-w-[75vw] break-words">
+          <div className="absolute left-2 top-2 z-40 pointer-events-none rounded-lg bg-black/80 px-2.5 py-2 font-mono text-[11px] leading-4 text-emerald-300 max-w-[75vw] break-words">
             {debugLog.length === 0
               ? <div className="text-zinc-500">input debug — waiting for events…</div>
               : debugLog.map((l, i) => <div key={i}>{l.msg}{l.n > 1 ? ` ×${l.n}` : ''}</div>)}
@@ -2318,7 +2147,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
                   onPointerDown={(e) => e.preventDefault()}
                   onClick={() => { applySoftKb(!softKbOn); setFabOpen(false); }}
                   className={`w-10 h-10 rounded-full shadow-lg flex items-center justify-center ${
-                    softKbOn ? 'bg-emerald-600 text-white' : 'bg-zinc-800/95 text-zinc-300 active:bg-zinc-700'
+                    softKbOn ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/40' : 'bg-zinc-800/95 text-zinc-300 active:bg-zinc-700'
                   }`}
                   aria-label={softKbOn ? 'Hide soft keyboard' : 'Show soft keyboard'}
                 >
@@ -2344,9 +2173,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           }}
           className={`absolute right-3 z-20 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
             voice.isListening && !fabOpen
-              ? 'bg-red-500 text-white animate-pulse'
+              ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/50'
               : softKbOn && !fabOpen && !hwKeyboard
-                ? 'bg-emerald-600 text-white'
+                ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/40'
                 : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
           }`}
           style={{ bottom: 'max(12px, env(safe-area-inset-bottom))', touchAction: 'none' }}
@@ -2404,7 +2233,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
 
       {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
       {!sidebarVisible && showKeyBar && (
-        <TerminalKeyBar sendInput={sendInput} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl} onOpenSnippets={() => setShowSnippets(true)} />
+        <KeyRow sendInput={sendInput} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl} onOpenSnippets={() => setShowSnippets(true)} />
       )}
 
       {/* Session quick-switcher — mobile only */}

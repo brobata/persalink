@@ -10,6 +10,9 @@ import { useAppStore, type ServerEntry } from '../stores/appStore';
 import { useLayoutStore, type Layout } from '../stores/layoutStore';
 import { TerminalPane } from './TerminalPane';
 import { TerminalSettings } from './TerminalSettings';
+import { SessionRow } from './ui/SessionRow';
+import { ProfileTile } from './ui/ProfileTile';
+import { WaitPill } from './ui/WaitPill';
 import { ShortcutsPanel, useDesktopShortcuts } from './ShortcutsPanel';
 import { orderSessions } from '../lib/sessionOrder';
 import { remoteSnapshot, remoteCreateSession, resolveEntryHost } from '../lib/remoteServer';
@@ -146,34 +149,26 @@ function SessionPicker({
             </div>
           )}
           {remoteError && (
-            <div className="px-3 py-4 text-xs text-amber-300/90 leading-snug">{remoteError}</div>
+            <div className="px-3 py-4 text-xs text-danger leading-snug">{remoteError}</div>
           )}
           {sessions.length > 0 && (
             <section>
-              <div className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1.5 px-1">
+              <div className="text-meta font-semibold text-fg-2 mb-1.5 px-1">
                 Live sessions
               </div>
               <div className="space-y-1">
                 {orderSessions(sessions).map((s: SessionInfo) => {
                   const inUse = usedKeys.has(`${pickServerId ?? ''}:${s.id}`);
                   return (
-                    <button
+                    <SessionRow
                       key={s.id}
-                      onClick={() => onPick(s.id, pickServerId)}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors text-left"
-                    >
-                      {s.profileIcon && <span className="text-sm shrink-0">{s.profileIcon}</span>}
-                      {!s.profileIcon && (
-                        <div
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: s.profileColor || '#22c55e' }}
-                        />
-                      )}
-                      <span className="flex-1 text-sm text-zinc-200 truncate">{s.profileName || s.name}</span>
-                      {inUse && (
-                        <span className="text-[10px] text-zinc-500">in another pane</span>
-                      )}
-                    </button>
+                      session={s}
+                      density="compact"
+                      detail="never"
+                      hint={inUse ? 'In another pane' : undefined}
+                      onOpen={() => onPick(s.id, pickServerId)}
+                      trailing={inUse ? <span className="px-1.5 text-micro text-fg-3">in another pane</span> : undefined}
+                    />
                   );
                 })}
               </div>
@@ -182,7 +177,7 @@ function SessionPicker({
 
           {Array.from(grouped.entries()).map(([group, profs]) => (
             <section key={group}>
-              <div className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1.5 px-1">
+              <div className="text-meta font-semibold text-fg-2 mb-1.5 px-1">
                 Start from {group}
               </div>
               <div className="space-y-1">
@@ -192,9 +187,9 @@ function SessionPicker({
                     onClick={() => onCreateFromProfile(p.id, pickServerId)}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors text-left"
                   >
-                    <span className="text-sm shrink-0">{p.icon || '\uD83D\uDCC2'}</span>
+                    <ProfileTile name={p.name} color={p.color} size={20} />
                     <span className="flex-1 text-sm text-zinc-300 truncate">{p.name}</span>
-                    <span className="text-[10px] text-zinc-600">new session</span>
+                    <span className="text-[11px] text-zinc-600">new session</span>
                   </button>
                 ))}
               </div>
@@ -250,6 +245,8 @@ export function GridLayout() {
   const createSession = useAppStore(s => s.createSession);
   const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
   const pushNotification = useAppStore(s => s.pushNotification);
+  const sessions = useAppStore(s => s.sessions);
+  const openNextWaiting = useAppStore(s => s.openNextWaiting);
 
   const [pickerPaneId, setPickerPaneId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -273,9 +270,12 @@ export function GridLayout() {
       <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-900 relative">
         <LayoutSwitcher />
         <div className="flex-1" />
-        <span className="text-[10px] text-zinc-600">
-          {panes.length} pane{panes.length > 1 ? 's' : ''} &middot; click a pane to focus
-        </span>
+        <WaitPill
+          variant="desktop"
+          sessions={sessions}
+          currentId={panes.find((p) => p.id === focusedPaneId)?.sessionId ?? null}
+          onJump={() => openNextWaiting()}
+        />
         <div className="relative">
           <button
             onClick={toggleShortcuts}

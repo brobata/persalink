@@ -47,7 +47,7 @@ export function ToastStack() {
                 onClick={() => { void completePendingCopy(); dismiss(n.id); }}
                 className="flex-1 min-w-0 text-left"
               >
-                <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 mb-0.5">copy</div>
+                <div className="text-[11px] font-medium text-emerald-400 mb-0.5">Copy</div>
                 <div className="break-words">{n.message}</div>
               </button>
             ) : n.op === LINK_OPEN_OP ? (
@@ -58,7 +58,7 @@ export function ToastStack() {
                 className="flex-1 min-w-0 text-left"
                 title={n.message}
               >
-                <div className="text-[11px] font-mono uppercase tracking-wider text-sky-400 mb-0.5">open link</div>
+                <div className="text-[11px] font-medium text-sky-400 mb-0.5">Open link</div>
                 <div className="break-all line-clamp-2 text-sky-200 underline decoration-sky-500/40">{n.message}</div>
               </button>
             ) : n.op === SHARE_PENDING_OP ? (
@@ -72,13 +72,13 @@ export function ToastStack() {
                 }}
                 className="flex-1 min-w-0 text-left"
               >
-                <div className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 mb-0.5">share</div>
+                <div className="text-[11px] font-medium text-emerald-400 mb-0.5">Share</div>
                 <div className="break-words">{n.message}</div>
               </button>
             ) : (
               <div className="flex-1 min-w-0">
                 {n.op && (
-                  <div className="text-[11px] font-mono uppercase tracking-wider opacity-60 mb-0.5">{n.op}</div>
+                  <div className="text-[11px] font-medium opacity-60 mb-0.5">{n.op}</div>
                 )}
                 <div className="break-words">{n.message}</div>
               </div>

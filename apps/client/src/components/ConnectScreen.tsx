@@ -6,6 +6,8 @@
  *   reachable but connection refused) instead of leaving a silent spinner.
  */
 import { useState, useEffect } from 'react';
+import { Server } from 'lucide-react';
+import { HeroIcon } from './ui/HeroIcon';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
 import { pageHost, schemesFor } from '../lib/platform';
 
@@ -69,7 +71,7 @@ function ServerRow({ entry, isActive, reachable, connState, onRemove }: {
         >
           <span
             className={`shrink-0 w-2.5 h-2.5 rounded-full ${
-              reachable === undefined ? 'bg-zinc-700 animate-pulse' : reachable ? 'bg-emerald-500' : 'bg-zinc-600'
+              reachable === undefined ? 'bg-transparent ring-1 ring-inset ring-st-disconnected' : reachable ? 'bg-accent' : 'bg-transparent ring-1 ring-inset ring-fg-4'
             }`}
             title={reachable === undefined ? 'Checking…' : reachable ? 'Reachable' : 'Unreachable'}
           />
@@ -77,10 +79,10 @@ function ServerRow({ entry, isActive, reachable, connState, onRemove }: {
             <div className="text-sm font-medium text-zinc-100 truncate">
               {entry.serverName || entry.label}
               {isActive && connState === 'authenticated' && (
-                <span className="ml-2 text-[10px] text-emerald-400">connected</span>
+                <span className="ml-2 text-[11px] text-emerald-400">connected</span>
               )}
               {isActive && (connState === 'connecting' || connState === 'reconnecting' || connState === 'connected') && (
-                <span className="ml-2 text-[10px] text-amber-300">connecting…</span>
+                <span className="ml-2 text-[11px] text-amber-300">connecting…</span>
               )}
             </div>
             <div className="text-xs text-zinc-600 font-mono truncate">{host}</div>
@@ -199,12 +201,12 @@ export function ConnectScreen() {
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {servers.length === 0 && !showAdd && (
           <div className="text-center pt-16 space-y-3">
-            <div className="text-5xl">&#x1F517;</div>
+            <HeroIcon icon={Server} />
             <h2 className="text-xl font-bold">PersaLink</h2>
             <p className="text-sm text-zinc-500">Add a server to get started.</p>
             <button
               onClick={() => setShowAdd(true)}
-              className="px-6 py-2.5 bg-zinc-100 text-zinc-900 font-semibold rounded-xl active:bg-zinc-300 transition-colors"
+              className="px-6 py-2.5 bg-accent text-accent-ink font-semibold rounded-xl active:bg-accent-lo transition-colors"
             >
               Add server
             </button>
@@ -233,7 +235,7 @@ export function ConnectScreen() {
               <button
                 onClick={handleAdd}
                 disabled={!newHost.trim()}
-                className="flex-1 py-2.5 bg-zinc-100 text-zinc-900 text-sm font-semibold rounded-lg active:bg-zinc-300 disabled:opacity-40 transition-colors"
+                className="flex-1 py-2.5 bg-accent text-accent-ink text-sm font-semibold rounded-lg active:bg-accent-lo disabled:opacity-40 transition-colors"
               >
                 Add &amp; connect
               </button>

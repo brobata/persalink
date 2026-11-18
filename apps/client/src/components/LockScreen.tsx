@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { Lock } from 'lucide-react';
+import { HeroIcon } from './ui/HeroIcon';
 import { useAppStore } from '../stores/appStore';
 
 export function LockScreen() {
@@ -32,7 +34,7 @@ export function LockScreen() {
     <div className="flex flex-col items-center justify-center h-full px-6">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center space-y-2">
-          <div className="text-5xl">&#x1F512;</div>
+          <HeroIcon icon={Lock} />
           <h1 className="text-2xl font-bold tracking-tight">PersaLink</h1>
           <p className="text-zinc-500 text-sm">Unlock with biometrics to continue</p>
         </div>
@@ -41,14 +43,14 @@ export function LockScreen() {
           <button
             onClick={handleUnlock}
             disabled={unlocking}
-            className="w-full py-3 bg-zinc-100 text-zinc-900 font-semibold rounded-xl
-                       hover:bg-zinc-200 active:bg-zinc-300
+            className="w-full py-3 bg-accent text-accent-ink font-semibold rounded-xl
+                       hover:bg-accent-hi active:bg-accent-lo
                        disabled:opacity-40 disabled:cursor-not-allowed
                        transition-colors"
           >
             {unlocking ? (
               <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-zinc-400 border-t-zinc-900 rounded-full animate-spin" />
+                <span className="w-4 h-4 border-2 border-accent-ink/30 border-t-accent-ink rounded-full animate-spin" />
                 Verifying...
               </span>
             ) : (
@@ -62,7 +64,7 @@ export function LockScreen() {
           </button>
 
           {failed && (
-            <p className="text-amber-400 text-sm text-center">
+            <p className="text-danger text-sm text-center">
               Biometric verification failed. Try again or disconnect.
             </p>
           )}

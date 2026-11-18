@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { KeyRound, LockKeyhole } from 'lucide-react';
+import { HeroIcon } from './ui/HeroIcon';
 import { useAppStore } from '../stores/appStore';
 
 export function AuthScreen() {
@@ -41,7 +43,7 @@ export function AuthScreen() {
     <div className="flex flex-col items-center justify-center h-full px-6">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center space-y-2">
-          <div className="text-5xl">{setupMode ? '\uD83D\uDD10' : '\uD83D\uDD12'}</div>
+          <HeroIcon icon={setupMode ? KeyRound : LockKeyhole} />
           <h1 className="text-2xl font-bold tracking-tight">
             {setupMode ? 'Set Password' : 'Authenticate'}
           </h1>
@@ -97,8 +99,8 @@ export function AuthScreen() {
           <button
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className="w-full py-3 bg-zinc-100 text-zinc-900 font-semibold rounded-xl
-                       hover:bg-zinc-200 active:bg-zinc-300
+            className="w-full py-3 bg-accent text-accent-ink font-semibold rounded-xl
+                       hover:bg-accent-hi active:bg-accent-lo
                        disabled:opacity-40 disabled:cursor-not-allowed
                        transition-colors"
           >
