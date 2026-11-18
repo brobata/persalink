@@ -3,6 +3,7 @@ import { useAppStore } from '../stores/appStore';
 import { COPY_PENDING_OP, completePendingCopy } from '../lib/clipboardBridge';
 import { SHARE_PENDING_OP, consumePendingShare } from '../lib/shareTarget';
 import { LINK_OPEN_OP, openExternal } from '../lib/linkOpen';
+import { goesToStatusBar } from '../lib/statusLine';
 
 const AUTO_DISMISS_MS = 5_000;
 // Tap-to-act toasts (finish a copy, insert shared text) get longer — the
@@ -11,8 +12,11 @@ const TAP_ACTION_DISMISS_MS = 12_000;
 // Link prompts wait longer still: the user may be reading the reply first.
 const LINK_DISMISS_MS = 30_000;
 
-export function ToastStack() {
-  const notifications = useAppStore((s) => s.notifications);
+/** `desktop`: plain confirmations go to the status bar instead (see
+ *  lib/statusLine), and the stack sits bottom-right above the status bar. */
+export function ToastStack({ desktop = false }: { desktop?: boolean }) {
+  const all = useAppStore((s) => s.notifications);
+  const notifications = desktop ? all.filter((n) => !goesToStatusBar(n)) : all;
   const dismiss = useAppStore((s) => s.dismissNotification);
 
   useEffect(() => {
@@ -30,7 +34,9 @@ export function ToastStack() {
   if (notifications.length === 0) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 px-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+    <div className={desktop
+      ? 'pointer-events-none fixed right-3 bottom-8 z-[60] w-[380px] flex flex-col items-end gap-2'
+      : 'pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 px-3 pb-[max(12px,env(safe-area-inset-bottom))]'}>
       {notifications.map((n) => (
         <div
           key={n.id}

@@ -13,7 +13,7 @@
 import type { ReactNode } from 'react';
 import type { SessionInfo } from '@persalink/shared/protocol';
 import { StateGlyph } from './StateGlyph';
-import { groupOf, rowAge, sessionTitle, stateKey, stateWord, type StateKey } from '../../lib/sessionState';
+import { groupOf, previewLine, rowAge, sessionTitle, stateKey, stateWord, type StateKey } from '../../lib/sessionState';
 
 export interface SessionRowProps {
   session: SessionInfo;
@@ -44,7 +44,7 @@ export function SessionRow({
   const showDetail = detail === 'never' ? false
     : detail === 'auto' ? (g === 'needs' || g === 'working' || k === 'done')
     : !!selected;
-  const sub = showDetail ? (k === 'done' ? `New output · ${session.preview ?? ''}` : session.preview ?? '') : '';
+  const sub = showDetail ? (k === 'done' ? `New output · ${previewLine(session, k)}` : previewLine(session, k)) : '';
   const touch = density === 'touch';
   const name = sessionTitle(session);
   const tip = [name, session.profileName && session.profileName !== name ? session.profileName : '', server ?? '', stateWord(session, k), hint ?? '']

@@ -10,9 +10,29 @@
 import { RefreshCw, X } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 
-export function UpdatePill() {
+/** `inline`: the desktop title bar's quiet form ("Update ready · Reload"). */
+export function UpdatePill({ inline = false }: { inline?: boolean }) {
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   if (!updateAvailable) return null;
+  if (inline) {
+    return (
+      <span className="flex items-center h-7 rounded-[6px] text-meta text-fg-2 motion-safe:animate-fade" role="status">
+        <button type="button" onClick={() => window.location.reload()} className="flex items-center gap-1.5 h-7 px-2 rounded-[6px] hover:bg-bg-3 hover:text-fg-1">
+          <i aria-hidden className="w-1.5 h-1.5 rounded-full bg-accent" />
+          Update ready<span className="text-fg-4">·</span><span className="text-accent-hi">Reload</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => useAppStore.setState({ updateAvailable: false })}
+          className="grid place-items-center w-6 h-6 rounded-[4px] text-fg-3 hover:text-fg-1"
+          aria-label="Dismiss update notice"
+          title="Dismiss"
+        >
+          <X className="w-3 h-3" strokeWidth={1.75} />
+        </button>
+      </span>
+    );
+  }
 
   return (
     <div

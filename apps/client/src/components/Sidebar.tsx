@@ -1,65 +1,86 @@
 /**
  * @file Sidebar
- * @description Persistent sidebar for desktop layout — profiles, live sessions,
- *   and quick actions always visible alongside the terminal.
+ * @description The desktop sidebar: a calm inbox, left of the panes. Named
+ *   groups in a fixed order (Needs you, Working, Quiet, Ended, Profiles,
+ *   Servers), one line per row; only the selected row (the focused pane's
+ *   session) says its question, and Working rows carry one activity line.
+ *   Needs you shows at most three rows, then "+N more waiting · Show all".
+ *   Quiet, Ended and Profiles start folded with a count; a folded group still
+ *   shows the selected row so the sidebar always says where you are. No
+ *   answer chips here: the focused pane strip is the one answer surface.
+ *   Ctrl+Alt+B folds the sidebar to a 52px rail of glyphs and monograms. On
+ *   the desktop Home tab it is always the rail, holding Home, Files and
+ *   Settings only (Home already lists everything).
  */
 
-import { useCallback, useMemo, useState } from 'react';
-import { ConnectionReadout } from './ui/ConnectionReadout';
-import { useAppStore } from '../stores/appStore';
-import { useLayoutStore } from '../stores/layoutStore';
+import { useMemo, useState } from 'react';
+import {
+  Check, ChevronRight, FolderOpen, House, Pencil, Play, Plus, ScanSearch, Server, Settings, X,
+} from 'lucide-react';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
-import { useLongPress } from '../lib/useLongPress';
+import { useAppStore, type ServerEntry } from '../stores/appStore';
+import { useLayoutStore } from '../stores/layoutStore';
+import { useUiStore, type SidebarGroup } from '../stores/uiStore';
 import { useAttentionOrder } from '../lib/sessionOrder';
-import { sessionTitle } from '../lib/sessionState';
+import { groupSessions, groupOf, sessionTitle, stateKey, stateWord, type GroupId } from '../lib/sessionState';
+import { openSession, startProfile } from '../lib/openSession';
+import { readout } from '../lib/readout';
 import { SessionRow } from './ui/SessionRow';
 import { ProfileTile } from './ui/ProfileTile';
+import { StateGlyph } from './ui/StateGlyph';
 import { IconButton } from './ui/IconButton';
-import { X } from 'lucide-react';
+
+const NEEDS_CAP = 3;
+const ICON = 'w-4 h-4';
+
+/** The session in the focused pane, when that pane is on the active server. */
+function useSelectedId(): string | null {
+  const activeServerId = useAppStore((s) => s.activeServerId);
+  return useLayoutStore((s) => {
+    const p = s.panes.find((x) => x.id === s.focusedPaneId);
+    if (!p || (p.serverId && p.serverId !== activeServerId)) return null;
+    return p.sessionId;
+  });
+}
+
+function useInView(): Set<string> {
+  const panes = useLayoutStore((s) => s.panes);
+  return useMemo(() => new Set(panes.map((p) => p.sessionId).filter((x): x is string => !!x)), [panes]);
+}
 
 // ============================================================================
-// Session Pill (compact, for sidebar)
+// Rows
 // ============================================================================
 
-function SessionPill({ session }: { session: SessionInfo }) {
-  const killSession = useAppStore(s => s.killSession);
-  const closeOverlay = useAppStore(s => s.closeOverlay);
-  const panes = useLayoutStore(s => s.panes);
-  const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
-  const assignSession = useLayoutStore(s => s.assignSession);
+function SidebarSession({ session, selected, inView }: { session: SessionInfo; selected: boolean; inView: boolean }) {
+  const killSession = useAppStore((s) => s.killSession);
   const [confirmKill, setConfirmKill] = useState(false);
-  const paneIndex = panes.findIndex(p => p.sessionId === session.id);
-  const paneSlot = paneIndex >= 0 ? panes[paneIndex] : null;
-  const isActive = !!paneSlot;
-  const isInFocusedPane = paneSlot?.id === focusedPaneId;
-  const paneNumber = paneIndex + 1;
-
+  const g = groupOf(stateKey(session));
   return (
     <SessionRow
       session={session}
       density="compact"
-      current={isInFocusedPane}
-      selected={isActive && !isInFocusedPane}
-      detail="never"
-      hint={isInFocusedPane ? `In the focused pane (${paneNumber})`
-        : isActive ? `In pane ${paneNumber}. Click to move it to the focused pane.`
-        : 'Open in the focused pane'}
-      // A session click always lands on the grid: close Settings, Files or
-      // the profile editor if one is covering it, else the click looks dead.
-      onOpen={() => { assignSession(focusedPaneId, session.id); closeOverlay(); }}
+      current={selected}
+      selected={selected}
+      // Working rows always say what they are doing; every other row only
+      // when selected (the waiting question lives on the selected row).
+      detail={g === 'working' ? 'auto' : 'selected'}
+      hint={selected ? 'In the focused pane' : inView ? 'In a pane. Click to focus it.' : 'Open in the focused pane'}
+      onOpen={() => openSession(session.id, null)}
       trailing={confirmKill ? (
         <button
           type="button"
+          autoFocus
           onClick={() => { killSession(session.id); setConfirmKill(false); }}
           onBlur={() => setConfirmKill(false)}
           className="h-7 px-2 rounded-[6px] text-micro font-semibold text-danger hover:bg-danger-soft"
         >
-          Kill?
+          End it?
         </button>
       ) : (
         <IconButton
           size="xs"
-          label={`Kill ${sessionTitle(session)}`}
+          label={`End ${sessionTitle(session)}`}
           className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
           onClick={(e) => { e.stopPropagation(); setConfirmKill(true); }}
         >
@@ -70,79 +91,243 @@ function SessionPill({ session }: { session: SessionInfo }) {
   );
 }
 
-// ============================================================================
-// Profile Row (compact sidebar version)
-// ============================================================================
+function ProfileRow({ profile, open, onToggle }: { profile: Profile; open: boolean; onToggle: () => void }) {
+  const sessions = useAppStore((s) => s.sessions);
+  const health = useAppStore((s) => s.healthStatuses.find((h) => h.profileId === profile.id));
+  const editProfile = useAppStore((s) => s.editProfile);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const live = sessions.filter((s) => s.profileId === profile.id);
+  const actions = profile.actions ?? [];
+  const down = health && !health.healthy;
+  const tip = [profile.name, profile.cwd, down ? `Health check failing${health?.output ? `: ${health.output}` : ''}` : ''].filter(Boolean).join('\n');
 
-function ProfileRow({ profile }: { profile: Profile }) {
-  const { createSession, sessions, healthStatuses, editProfile } = useAppStore();
-  const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
-  const panes = useLayoutStore(s => s.panes);
-  const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
-
-  const health = healthStatuses.find(h => h.profileId === profile.id);
-  const liveSessions = sessions.filter(s => s.profileId === profile.id);
-  const liveCount = liveSessions.length;
-  const focusedSessionId = panes.find(p => p.id === focusedPaneId)?.sessionId;
-  const isActive = !!(focusedSessionId && liveSessions.some(s => s.id === focusedSessionId));
-
-  // Shift/Alt-click OR long-press forces a new instance even if one already
-  // exists. Plain click attaches the first existing session (default
-  // ergonomic). Mirrors the mobile profile card's tap / hold contract.
-  // Either way the grid comes back to the front (closeOverlay is a no-op when
-  // nothing covers it).
-  const handleNewInstance = useCallback(() => {
-    markPendingAssign(focusedPaneId);
-    createSession(profile.id);
-    useAppStore.getState().closeOverlay();
-  }, [markPendingAssign, focusedPaneId, createSession, profile.id]);
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    const forceNew = e.shiftKey || e.altKey;
-    const existing = liveSessions[0];
-    if (existing && !forceNew) {
-      useLayoutStore.getState().assignSession(focusedPaneId, existing.id);
-      useAppStore.getState().closeOverlay();
-      return;
-    }
-    handleNewInstance();
-  }, [liveSessions, focusedPaneId, handleNewInstance]);
-  const press = useLongPress(handleNewInstance, handleClick);
+  const runQuick = (actionId: string, name: string, command: string, confirm?: boolean) => {
+    if (confirm && !window.confirm(`Run "${name}"?\n\n${command}`)) return;
+    useUiStore.getState().setQuickRun({ profileId: profile.id, actionId, title: `${profile.name}: ${name}`, command, confirm: !!confirm, startedAt: Date.now() });
+    useAppStore.getState().runAction(profile.id, actionId);
+  };
 
   return (
-    <div className={`flex items-center gap-0 rounded-lg transition-colors ${
-      isActive ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-    }`}>
+    <div>
       <button
-        {...press}
-        title={liveCount > 0 ? 'Click to attach. Shift+click or hold for a new instance.' : profile.name}
-        className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 text-left"
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title={tip}
+        className={`w-full h-8 flex items-center gap-2.5 px-2 rounded-[10px] text-left transition-colors ${open ? 'bg-bg-3/60' : 'hover:bg-bg-3/60'}`}
       >
         <ProfileTile name={profile.name} color={profile.color} size={20} />
-        <span className={`flex-1 text-xs font-medium truncate ${
-          isActive ? 'text-zinc-100' : 'text-zinc-300'
-        }`}>
-          {profile.name}
-        </span>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {health && !health.healthy && (
-            <span className="text-micro font-medium text-danger" title="Health check failing">Unhealthy</span>
-          )}
-          {liveCount > 0 && (
-            <span className="text-micro text-fg-3 tnum" title={`${liveCount} live`}>{liveCount > 1 ? `${liveCount} live` : 'Live'}</span>
-          )}
+        <span className="flex-1 min-w-0 truncate text-body font-medium text-fg-1">{profile.name}</span>
+        {down ? (
+          <span className="shrink-0 text-micro font-medium text-danger">Down</span>
+        ) : live.length > 0 ? (
+          <span className="shrink-0 text-micro font-mono tnum text-fg-3">{live.length} live</span>
+        ) : null}
+        <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-fg-4 transition-transform duration-(--d-pop) ${open ? 'rotate-90' : ''}`} strokeWidth={1.75} />
+      </button>
+      <div className={`pl-fold${open ? '' : ' shut'}`}>
+        <div inert={!open}>
+          <div className="pl-2 pr-1 pt-1 pb-2 space-y-0.5">
+            {live.slice(0, 3).map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => openSession(s.id, null)}
+                className="w-full h-7 flex items-center gap-2 px-2 rounded-[6px] text-left text-meta text-fg-2 hover:bg-bg-3/60 hover:text-fg-1"
+              >
+                <StateGlyph state={stateKey(s)} size={11} />
+                <span className="flex-1 min-w-0 truncate">{sessionTitle(s)}</span>
+                <span className="shrink-0 text-micro text-fg-3">{stateWord(s)}</span>
+              </button>
+            ))}
+            <div className="flex items-center gap-1 pt-1">
+              <button type="button" className="pl-btn sm" onClick={() => startProfile(profile.id)}>
+                <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />New session
+              </button>
+              {actions.length > 0 && (
+                <button
+                  type="button"
+                  className="pl-btn sm"
+                  aria-expanded={actionsOpen}
+                  onClick={() => setActionsOpen((v) => !v)}
+                  title="Quick actions"
+                >
+                  <Play className="w-3.5 h-3.5" strokeWidth={1.75} />Actions
+                </button>
+              )}
+              <IconButton size="xs" label={`Edit ${profile.name}`} className="ml-auto" onClick={() => editProfile(profile)}>
+                <Pencil className="w-3.5 h-3.5" strokeWidth={1.75} />
+              </IconButton>
+            </div>
+            {actionsOpen && actions.length > 0 && (
+              <div className="pt-1 space-y-0.5 motion-safe:animate-fade">
+                {actions.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => runQuick(a.id, a.name, a.command, a.confirm)}
+                    title={a.command}
+                    className="w-full h-7 flex items-center gap-2 px-2 rounded-[6px] text-left text-meta text-fg-2 hover:bg-bg-3/60 hover:text-fg-1"
+                  >
+                    <Play className="w-3 h-3 text-fg-3" strokeWidth={1.75} />
+                    <span className="truncate">{a.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </button>
-      <button
-        onClick={(e) => { e.stopPropagation(); editProfile(profile); }}
-        className="shrink-0 px-2 py-2 text-zinc-600 hover:text-zinc-400 transition-colors"
-        title="Edit profile"
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-          <path d="m15 5 4 4"/>
-        </svg>
-      </button>
+      </div>
     </div>
+  );
+}
+
+function ServerRow({ entry }: { entry: ServerEntry }) {
+  const activeServerId = useAppStore((s) => s.activeServerId);
+  const connectionState = useAppStore((s) => s.connectionState);
+  const rttMs = useAppStore((s) => s.rttMs);
+  const active = entry.id === activeServerId;
+  const r = readout(connectionState, rttMs);
+  const name = entry.serverName || entry.label;
+  return (
+    <button
+      type="button"
+      onClick={() => (active ? useAppStore.getState().openServers() : useAppStore.getState().selectServer(entry.id))}
+      title={active ? `${name} · ${r.text}. Click to manage servers.` : `Switch to ${name}`}
+      className="w-full h-8 flex items-center gap-2.5 px-2.5 rounded-[10px] text-left hover:bg-bg-3/60"
+    >
+      <i
+        aria-hidden
+        className={`w-1.5 h-1.5 shrink-0 rounded-full ${active && r.kind === 'ok' ? 'bg-accent' : active && r.kind === 'slow' ? 'shadow-[inset_0_0_0_1.5px_var(--color-accent)]' : 'shadow-[inset_0_0_0_1.25px_var(--color-fg-3)]'}`}
+      />
+      <span className={`flex-1 min-w-0 truncate font-mono text-meta ${active ? 'text-fg-1' : 'text-fg-2'}`}>{name}</span>
+      <span className={`shrink-0 text-micro font-mono tnum ${r.kind === 'slow' ? 'text-fg-1' : active && r.kind !== 'ok' ? 'text-st-disconnected' : 'text-fg-3'}`}>
+        {active ? r.text : 'switch'}
+      </span>
+    </button>
+  );
+}
+
+// ============================================================================
+// Group section
+// ============================================================================
+
+function Section({ id, label, count, children, extra, pin, tone }: {
+  id: SidebarGroup;
+  label: string;
+  count: number;
+  children: React.ReactNode;
+  extra?: React.ReactNode;
+  /** Kept visible under a folded header (the selected row). */
+  pin?: React.ReactNode;
+  tone?: 'needs';
+}) {
+  const folded = useUiStore((s) => s.folded[id]);
+  const toggleGroup = useUiStore((s) => s.toggleGroup);
+  return (
+    <section className="pb-1">
+      <div className="pl-sbh">
+        <button type="button" className={`gh${tone === 'needs' ? ' needs' : ''}`} aria-expanded={!folded} onClick={() => toggleGroup(id)}>
+          <ChevronRight className="chev w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
+          <span className="truncate">{label}</span>
+          <span className="n">{count}</span>
+        </button>
+        {extra}
+      </div>
+      {folded && pin}
+      <div className={`pl-fold${folded ? ' shut' : ''}`}>
+        <div inert={folded}><div className="space-y-px">{children}</div></div>
+      </div>
+    </section>
+  );
+}
+
+// ============================================================================
+// Rail
+// ============================================================================
+
+function Rail({ homeOnly }: { homeOnly: boolean }) {
+  const sessions = useAppStore((s) => s.sessions);
+  const profiles = useAppStore((s) => s.profiles);
+  const view = useAppStore((s) => s.view);
+  const filesDisabled = useAppStore((s) => s.filesDisabled);
+  const home = useLayoutStore((s) => s.home);
+  const ordered = useAttentionOrder(sessions);
+  const selectedId = useSelectedId();
+  const groups = groupSessions(ordered).filter((g) => g.items.length > 0);
+  const pinned = profiles.filter((p) => p.pinned);
+  const railProfiles = pinned.length > 0 ? pinned : profiles.slice(0, 6);
+
+  const homeOn = home && view !== 'files' && view !== 'settings' && view !== 'profile-editor';
+  return (
+    <>
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col items-center gap-1 py-2">
+        {homeOnly ? (
+          <button
+            type="button"
+            className={`pl-railb${homeOn ? ' on' : ''}`}
+            title="Home: who needs you (Ctrl+Alt+H)"
+            aria-label="Home"
+            aria-current={homeOn ? 'page' : undefined}
+            onClick={() => { useAppStore.getState().closeOverlay(); useLayoutStore.getState().showHome(); }}
+          >
+            <House className={ICON} strokeWidth={1.75} />
+          </button>
+        ) : (
+          <>
+            {groups.map((g, gi) => (
+              <div key={g.id} className={`flex flex-col items-center gap-0.5 ${gi > 0 ? 'pt-1.5 mt-1 border-t border-line w-9' : ''}`}>
+                {g.items.map((s) => {
+                  const k = stateKey(s);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className={`pl-railb${s.id === selectedId ? ' on' : ''}`}
+                      title={`${sessionTitle(s)} · ${stateWord(s, k)}${s.preview ? `\n${s.preview}` : ''}`}
+                      aria-label={`${sessionTitle(s)}, ${stateWord(s, k)}`}
+                      onClick={() => openSession(s.id, null)}
+                    >
+                      <StateGlyph state={k} size={12} live={s.id === selectedId} />
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+            {railProfiles.length > 0 && (
+              <div className="flex flex-col items-center gap-0.5 pt-1.5 mt-1 border-t border-line w-9">
+                {railProfiles.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="pl-railb"
+                    title={`${p.name}: open its session, or start one`}
+                    aria-label={`${p.name}: open or start`}
+                    onClick={() => {
+                      const existing = sessions.find((s) => s.profileId === p.id);
+                      if (existing) openSession(existing.id, null);
+                      else startProfile(p.id);
+                    }}
+                  >
+                    <ProfileTile name={p.name} color={p.color} size={22} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div className="shrink-0 flex flex-col items-center gap-1 py-2 border-t border-line">
+        {!filesDisabled && (
+          <button type="button" className={`pl-railb${view === 'files' ? ' on' : ''}`} title="Files (Ctrl+Alt+F)" aria-label="Files" onClick={() => useAppStore.getState().openFiles()}>
+            <FolderOpen className={ICON} strokeWidth={1.75} />
+          </button>
+        )}
+        <button type="button" className={`pl-railb${view === 'settings' ? ' on' : ''}`} title="Settings (Ctrl+Alt+,)" aria-label="Settings" onClick={() => useAppStore.getState().openSettings()}>
+          <Settings className={ICON} strokeWidth={1.75} />
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -151,164 +336,158 @@ function ProfileRow({ profile }: { profile: Profile }) {
 // ============================================================================
 
 export function Sidebar() {
-  const { sessions, profiles, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile } = useAppStore();
+  const sessions = useAppStore((s) => s.sessions);
+  const profiles = useAppStore((s) => s.profiles);
+  const servers = useAppStore((s) => s.servers);
+  const view = useAppStore((s) => s.view);
   const filesDisabled = useAppStore((s) => s.filesDisabled);
-  const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
-  const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
-  const orderedSessions = useAttentionOrder(sessions);
+  const mode = useUiStore((s) => s.sidebar);
+  const home = useLayoutStore((s) => s.home);
+  const ordered = useAttentionOrder(sessions);
+  const selectedId = useSelectedId();
+  const inView = useInView();
+  const [showAllWaiting, setShowAllWaiting] = useState(false);
+  const [openProfile, setOpenProfile] = useState<string | null>(null);
 
-  const groupedProfiles = useMemo(() => {
-    const groups = new Map<string, Profile[]>();
-    const pinned: Profile[] = [];
+  // On Home the groups are already the page: the sidebar steps back to a rail.
+  const onHome = home;
+  const rail = mode === 'rail' || onHome;
 
-    for (const profile of profiles) {
-      if (profile.pinned) {
-        pinned.push(profile);
-        continue;
-      }
-      const group = profile.group || 'Other';
-      if (!groups.has(group)) groups.set(group, []);
-      groups.get(group)!.push(profile);
-    }
+  const groups = useMemo(() => groupSessions(ordered), [ordered]);
+  const sortedProfiles = useMemo(
+    () => [...profiles].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)),
+    [profiles],
+  );
 
-    return { pinned, groups };
-  }, [profiles]);
+  const row = (s: SessionInfo) => (
+    <SidebarSession key={s.id} session={s} selected={s.id === selectedId} inView={inView.has(s.id)} />
+  );
 
   return (
-    <div className="flex flex-col h-full w-[260px] shrink-0 bg-zinc-950 border-r border-zinc-800">
-      {/* Header */}
-      <div className="shrink-0 px-3 pt-3 pb-2 border-b border-zinc-800">
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h1 className="text-sm font-bold text-zinc-100">PersaLink</h1>
-            {/* Server chip — opens the Servers screen (multi-server switch) */}
-          <button
-            onClick={openServers}
-            className="flex items-center gap-1 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
-            title="Switch server"
-          >
-            {/* Server + round trip; says "reconnecting" while the link is down. */}
-            <ConnectionReadout server />
-            <svg className="w-2.5 h-2.5 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
-            </svg>
-          </button>
+    <nav className={`pl-sb${rail ? ' rail' : ''}`} aria-label="Sessions">
+      {rail ? <Rail homeOnly={onHome} /> : (
+        <>
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 pt-2 pb-2">
+            {groups.map((g) => {
+              if (g.id === 'needs' && g.items.length === 0) {
+                return (
+                  <section key="needs" className="pb-1">
+                    <div className="pl-sbh"><span className="gh calm"><Check className="w-3.5 h-3.5 text-accent" strokeWidth={2} />Nothing needs you</span></div>
+                  </section>
+                );
+              }
+              if (g.items.length === 0) return null;
+              const id = g.id as GroupId & SidebarGroup;
+              let items = g.items;
+              let more = 0;
+              if (g.id === 'needs' && !showAllWaiting && items.length > NEEDS_CAP) {
+                more = items.length - NEEDS_CAP;
+                items = items.slice(0, NEEDS_CAP);
+              }
+              const sel = g.items.find((s) => s.id === selectedId);
+              return (
+                <Section
+                  key={g.id}
+                  id={id}
+                  label={g.label}
+                  count={g.items.length}
+                  tone={g.id === 'needs' ? 'needs' : undefined}
+                  pin={sel ? <div className="pb-1">{row(sel)}</div> : undefined}
+                >
+                  {items.map(row)}
+                  {more > 0 && (
+                    <button type="button" className="pl-more" onClick={() => setShowAllWaiting(true)}>
+                      <StateGlyph state="waiting" size={10} />
+                      <span>+{more} more waiting</span>
+                      <span className="sa">Show all</span>
+                    </button>
+                  )}
+                  {g.id === 'needs' && showAllWaiting && g.items.length > NEEDS_CAP && (
+                    <button type="button" className="pl-more" onClick={() => setShowAllWaiting(false)}>
+                      <span className="sa ml-0">Show fewer</span>
+                    </button>
+                  )}
+                </Section>
+              );
+            })}
+
+            <Section
+              id="profiles"
+              label="Profiles"
+              count={profiles.length}
+              extra={(
+                <>
+                  <IconButton size="xs" label="Scan for projects" onClick={() => useAppStore.getState().discoverProfiles()}>
+                    <ScanSearch className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  </IconButton>
+                  <IconButton size="xs" label="New profile" onClick={() => useAppStore.getState().editProfile(null)}>
+                    <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  </IconButton>
+                </>
+              )}
+            >
+              {sortedProfiles.map((p) => (
+                <ProfileRow key={p.id} profile={p} open={openProfile === p.id} onToggle={() => setOpenProfile((cur) => (cur === p.id ? null : p.id))} />
+              ))}
+              {profiles.length === 0 && (
+                <button type="button" className="pl-more" onClick={() => useAppStore.getState().editProfile(null)}>
+                  <Plus className="w-3.5 h-3.5" strokeWidth={1.75} /><span>New profile</span>
+                </button>
+              )}
+            </Section>
+
+            {servers.length > 0 && (
+              <Section
+                id="servers"
+                label="Servers"
+                count={servers.length}
+                extra={(
+                  <IconButton size="xs" label="Manage servers" onClick={() => useAppStore.getState().openServers()}>
+                    <Server className="w-3.5 h-3.5" strokeWidth={1.75} />
+                  </IconButton>
+                )}
+              >
+                {servers.map((e) => <ServerRow key={e.id} entry={e} />)}
+              </Section>
+            )}
           </div>
-          <div className="flex gap-1">
+
+          <div className="shrink-0 flex items-center gap-0.5 px-2 py-1.5 border-t border-line">
+            {!filesDisabled && (
+              <button
+                type="button"
+                onClick={() => useAppStore.getState().openFiles()}
+                aria-pressed={view === 'files'}
+                title="Files (Ctrl+Alt+F)"
+                className={`h-8 flex items-center gap-2 px-2.5 rounded-[6px] text-body ${view === 'files' ? 'bg-bg-3 text-fg-1' : 'text-fg-2 hover:text-fg-1 hover:bg-bg-3/60'}`}
+              >
+                <FolderOpen className={ICON} strokeWidth={1.75} />Files
+              </button>
+            )}
             <button
-              // Hard reload to pull a fresh bundle. The PWA window has no
-              // address bar / reload affordance, so an installed desktop app
-              // can sit on a stale in-memory build indefinitely (this is how
-              // the mic button "disappeared"). The service worker caches
-              // nothing, so a plain reload re-fetches current assets; tmux
-              // sessions survive and the app auto-reconnects on load.
-              onClick={() => window.location.reload()}
-              className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
-              title="Refresh app"
+              type="button"
+              onClick={() => useAppStore.getState().openSettings()}
+              aria-pressed={view === 'settings'}
+              title="Settings (Ctrl+Alt+,)"
+              className={`h-8 flex items-center gap-2 px-2.5 rounded-[6px] text-body ${view === 'settings' ? 'bg-bg-3 text-fg-1' : 'text-fg-2 hover:text-fg-1 hover:bg-bg-3/60'}`}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>
-                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/>
-              </svg>
+              <Settings className={ICON} strokeWidth={1.75} />Settings
             </button>
-            <button
-              onClick={discoverProfiles}
-              className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
-              title="Scan for projects"
+            <IconButton
+              label="New shell session in the focused pane"
+              className="ml-auto"
+              onClick={() => {
+                const layout = useLayoutStore.getState();
+                layout.markPendingAssign(layout.focusedPaneId);
+                useAppStore.getState().createSession();
+                useAppStore.getState().closeOverlay();
+              }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-              </svg>
-            </button>
-            <button
-              onClick={openFiles}
-              hidden={filesDisabled}
-              className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
-              title="Files"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
-              </svg>
-            </button>
-            <button
-              onClick={openSettings}
-              className="p-1.5 text-zinc-600 hover:text-zinc-400 transition-colors rounded"
-              title="Settings"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                <circle cx="12" cy="12" r="3"/>
-              </svg>
-            </button>
+              <Plus className={ICON} strokeWidth={1.75} />
+            </IconButton>
           </div>
-        </div>
-      </div>
-
-      {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto px-2 py-2 space-y-3">
-        {/* Live Sessions */}
-        {sessions.length > 0 && (
-          <section>
-            <h2 className="text-meta font-semibold text-fg-2 mb-1 px-1 flex items-baseline gap-2">
-              Sessions
-              <span className="font-medium text-fg-3 tnum">{sessions.length}</span>
-            </h2>
-            <div className="space-y-1">
-              {orderedSessions.map((session) => (
-                <SessionPill key={session.id} session={session} />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Pinned Profiles */}
-        {groupedProfiles.pinned.length > 0 && (
-          <section>
-            <h2 className="text-meta font-semibold text-fg-2 mb-1 px-1">
-              Pinned
-            </h2>
-            <div className="space-y-0.5">
-              {groupedProfiles.pinned.map((profile) => (
-                <ProfileRow key={profile.id} profile={profile} />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Profile Groups */}
-        {Array.from(groupedProfiles.groups.entries()).map(([group, profs]) => (
-          <section key={group}>
-            <h2 className="text-meta font-semibold text-fg-2 mb-1 px-1">
-              {group}
-            </h2>
-            <div className="space-y-0.5">
-              {profs.map((profile) => (
-                <ProfileRow key={profile.id} profile={profile} />
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-
-      {/* Bottom actions */}
-      <div className="shrink-0 px-2 py-2 border-t border-zinc-800 space-y-1">
-        <button
-          onClick={() => { markPendingAssign(focusedPaneId); createSession(); useAppStore.getState().closeOverlay(); }}
-          className="w-full py-1.5 text-xs text-zinc-600 hover:text-zinc-400
-                     border border-dashed border-zinc-800 hover:border-zinc-700
-                     rounded-lg transition-colors"
-        >
-          + New Session
-        </button>
-        <button
-          onClick={() => editProfile(null)}
-          className="w-full py-1.5 text-xs text-zinc-600 hover:text-zinc-400
-                     border border-dashed border-zinc-800 hover:border-zinc-700
-                     rounded-lg transition-colors"
-        >
-          + New Profile
-        </button>
-      </div>
-    </div>
+        </>
+      )}
+    </nav>
   );
 }

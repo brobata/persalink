@@ -8,8 +8,7 @@ import { TerminalScreen } from './components/TerminalScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { ProfileEditor } from './components/ProfileEditor';
 import { FilesScreen } from './components/files/FilesScreen';
-import { Sidebar } from './components/Sidebar';
-import { GridLayout } from './components/GridLayout';
+import { DesktopShell } from './components/desktop/DesktopShell';
 import { ToastStack } from './components/Toast';
 import { UpdatePill } from './components/UpdatePill';
 import { PublicChip } from './components/ui/ConnectionReadout';
@@ -172,31 +171,15 @@ export function App() {
   // Toast lives at the root so it overlays whatever view is rendered.
   // (Pre-auth views above don't need it — server isn't accepting messages yet.)
 
-  // Desktop: sidebar always visible + main panel (GridLayout replaces the
-  // single-session TerminalScreen here — a 1-pane grid is single-session mode).
+  // Desktop: one title bar, the sidebar (left = where), the panes or Home
+  // (centre = the work), and Settings / Files / the profile editor as a
+  // right panel over the panes (right = details), then the status bar.
   if (isDesktop) {
-    const overlaying = view === 'settings' || view === 'profile-editor' || view === 'files';
     return (
-      <div className="flex h-screen bg-zinc-950 relative">
-        <Sidebar />
-        <div className="flex-1 min-w-0 h-full overflow-hidden">
-          {overlaying ? (
-            <>
-              {view === 'settings' && <SettingsScreen />}
-              {view === 'profile-editor' && <ProfileEditor />}
-              {view === 'files' && <FilesScreen />}
-            </>
-          ) : (
-            <GridLayout />
-          )}
-        </div>
-        <ReconnectLine />
-        <ReconnectBanner />
+      <DesktopShell>
         <WindowSurfaces />
-        <ToastStack />
-        <UpdatePill />
         <PublicBadge />
-      </div>
+      </DesktopShell>
     );
   }
 

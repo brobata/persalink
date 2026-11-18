@@ -67,3 +67,14 @@ export function estimateDimsFromViewport(): TermDims {
 export function getInitialDims(): TermDims {
   return getLastKnownDims() ?? estimateDimsFromViewport();
 }
+
+/**
+ * Whole-row fitting: the space left over after `fit()` places whole rows in
+ * a box (always less than one row once the fit has settled). The pane puts
+ * this gap above the terminal, so its last row sits on the bottom edge and
+ * no row is ever drawn cut in half. Never negative, never fractional.
+ */
+export function rowInset(boxHeight: number, screenHeight: number): number {
+  if (!(boxHeight > 0) || !(screenHeight > 0)) return 0;
+  return Math.max(0, Math.floor(boxHeight - screenHeight));
+}

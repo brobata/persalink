@@ -106,3 +106,15 @@ export function needsSentence(n: number): string {
   if (n === 0) return 'Nothing needs you';
   return n === 1 ? '1 agent needs you' : `${n} agents need you`;
 }
+
+/**
+ * The preview line as a person should read it: box-drawing frames and the
+ * prompt caret gone, and a bare numbered option ("3. No, and tell Claude
+ * ...", the last line a permission prompt draws) replaced by what it means
+ * for a waiting agent: it is asking you to choose.
+ */
+export function previewLine(s: SessionInfo, k: StateKey = stateKey(s)): string {
+  const raw = (s.preview ?? '').replace(/[│┃|╭╮╰╯─━]+/g, ' ').replace(/^[\s❯›>]+/, '').replace(/\s+/g, ' ').trim();
+  if ((k === 'waiting' || k === 'error') && /^\d{1,2}[.)]\s/.test(raw)) return 'Asking you to choose an option';
+  return raw;
+}

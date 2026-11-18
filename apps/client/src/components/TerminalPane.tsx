@@ -4,6 +4,13 @@
  *   Owns its own WebSocket, xterm.js instance, and attach/detach lifecycle so
  *   multiple panes can be live at once — each streaming a different tmux
  *   session. The single-pane mobile TerminalScreen keeps its own code path.
+ *   Chrome is one 28px strip: state glyph, name, a server chip when not on
+ *   the main box, "Waiting 4m", and (focused pane only) the answer chips
+ *   read from the prompt on screen, first chip accented; pane actions show
+ *   on hover. A 2px rail on the left edge carries the waiting state; the
+ *   focused pane gets the accent hairline (styles: .pl-pane). The terminal
+ *   is fitted to whole rows and sits on the bottom edge. Files dropped on a
+ *   pane upload to the server and offer "Insert path".
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -26,7 +33,15 @@ import { ClaudeReplyPanel } from './ClaudeReplyPanel';
 import { Composer, wrapForPaste } from './Composer';
 import type { ClaudeReplyState } from '../stores/appStore';
 import { PANE_COMMAND_EVENT, type PaneCommandDetail } from '../lib/paneCommands';
-import { chipLabel, promptOnScreen } from '../lib/claudePrompt';
+import { chipLabel, isRedirectOption, promptOnScreen, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
+import { rowInset } from '../lib/terminalDims';
+import { sentSentence } from '../lib/statusLine';
+import { sessionTitle, stateKey, stateWord } from '../lib/sessionState';
+import { useUiStore } from '../stores/uiStore';
+import { StateGlyph } from './ui/StateGlyph';
+import { AnswerChips } from './ui/AnswerChips';
+import { IconButton } from './ui/IconButton';
+import { ClipboardCopy, Link2, MessageSquare, Mic, Paperclip, X } from 'lucide-react';
 
 interface TerminalPaneProps {
   paneId: string;
@@ -38,6 +53,11 @@ interface TerminalPaneProps {
    *  phase 2) — null for active-server panes. */
   serverBadge?: string | null;
   isFocused: boolean;
+  /** A right panel is open and this pane is not the focused one: strip only
+   *  (still live; a click brings it up). */
+  collapsed?: boolean;
+  /** Flex order in the right-panel column (focused pane first). */
+  order?: number;
   onFocus: () => void;
   onClear: () => void;
   onPickSession: () => void;
@@ -96,8 +116,17 @@ function WindowTab({ w, onSelect, onRename }: {
 }
 
 export function TerminalPane({
-  paneId, paneNumber, sessionId, serverUrl, authToken, serverBadge = null, isFocused, onFocus, onClear, onPickSession,
+  paneId, sessionId, serverUrl, authToken, serverBadge = null, isFocused, collapsed = false, order, onFocus, onClear, onPickSession,
 }: TerminalPaneProps) {
+  // The numbered prompt on screen (focused + waiting only), for answer chips.
+  const [prompt, setPrompt] = useState<ClaudePrompt | null>(null);
+  // Files dropped on the pane: dragging over it, and the paths just uploaded.
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+  const [dropped, setDropped] = useState<string[] | null>(null);
+  const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Read by the socket handler, which is mounted once.
+  const watchPromptRef = useRef(false);
   const [attachedSession, setAttachedSession] = useState<SessionInfo | null>(null);
   const [windows, setWindows] = useState<TmuxWindowInfo[]>([]);
   const [connState, setConnState] = useState<'connecting' | 'ready' | 'reconnecting' | 'disconnected'>('connecting');
@@ -207,8 +236,7 @@ export function TerminalPane({
         // left alone (the key was not meant for a shell).
         const option = termRef.current ? promptOnScreen(termRef.current)?.options.find((o) => o.key === data) : undefined;
         if (!option) return;
-        sendInput(option.key);
-        useAppStore.getState().pushNotification('info', `Answered: ${chipLabel(option)}`);
+        answerRef.current(option);
       } else return;
       e.preventDefault();
     };
@@ -260,6 +288,26 @@ export function TerminalPane({
       termRef.current?.focus();
     }
   }, [serverUrl, authToken, sendInput]);
+
+  // ------------------------------------------------------------------
+  // Answer chips: read the prompt on screen shortly after output settles,
+  // only for the focused pane while its agent waits.
+  // ------------------------------------------------------------------
+  const readPrompt = useCallback(() => {
+    const t = termRef.current;
+    const next = t && watchPromptRef.current ? promptOnScreen(t) : null;
+    setPrompt((cur) => {
+      const same = cur && next && cur.question === next.question && cur.options.length === next.options.length
+        && cur.options.every((o, i) => o.key === next.options[i].key && o.label === next.options[i].label);
+      return same ? cur : next;
+    });
+  }, []);
+  const schedulePromptCheckRef = useRef<() => void>(() => {});
+  schedulePromptCheckRef.current = () => {
+    if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+    promptTimerRef.current = setTimeout(readPrompt, 180);
+  };
+  useEffect(() => () => { if (promptTimerRef.current) clearTimeout(promptTimerRef.current); }, []);
 
   // ------------------------------------------------------------------
   // WebSocket lifecycle — one connection per pane, reused across sessions
@@ -354,6 +402,7 @@ export function TerminalPane({
             if (msg.sessionId !== sessionIdRef.current) break;
             if (termRef.current) termRef.current.write(msg.data);
             else pendingRef.current.push({ data: msg.data, sessionId: msg.sessionId });
+            if (watchPromptRef.current) schedulePromptCheckRef.current();
             break;
           }
           case 'session.ended':
@@ -759,6 +808,12 @@ export function TerminalPane({
     let lastRows = 0;
     const doFit = () => {
       try { fit.fit(); } catch { /* may fail if detached */ }
+      // Whole rows only: the leftover sliver goes above the terminal, so
+      // the prompt sits on the bottom edge and no row is ever cut.
+      const box = containerRef.current;
+      const screen = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
+      if (box && screen) box.style.setProperty('--pl-row-inset', `${rowInset(box.clientHeight, screen.offsetHeight)}px`);
+      useUiStore.getState().setPaneDims(paneId, term.cols, term.rows);
       if (term.cols !== lastCols || term.rows !== lastRows) {
         lastCols = term.cols;
         lastRows = term.rows;
@@ -857,133 +912,170 @@ export function TerminalPane({
     }
     setRenamingSession(false);
   };
-  const focusRing = isFocused ? 'ring-1 ring-zinc-500' : 'ring-1 ring-transparent';
+  const k = attachedSession ? stateKey(attachedSession) : null;
+  const nameNow = attachedSession ? sessionTitle(attachedSession) : null;
+
+  const answer = (o: PromptOption) => {
+    sendInput(o.key);
+    setPrompt(null);
+    if (isRedirectOption(o)) {
+      // That option opens Claude's own reply field: write the reply here.
+      setComposerOpen(true);
+      useUiStore.getState().say(`Tell ${nameNow ?? 'Claude'} what to do differently, then send`, { ttl: 4000 });
+      return;
+    }
+    // Look again once the agent has had time to move on: if the prompt is
+    // still there (the key did not take), the chips come back.
+    setTimeout(() => { if (watchPromptRef.current) readPrompt(); }, 1500);
+    useUiStore.getState().say(sentSentence(chipLabel(o), nameNow), {
+      ttl: 3000,
+      action: { label: 'Stop', title: 'Press Esc in the session to interrupt what was just approved', run: () => sendInput('\x1b') },
+    });
+  };
+  const answerRef = useRef(answer);
+  answerRef.current = answer;
+
+  // Watch for a prompt only on the focused pane while its agent waits.
+  const watching = isFocused && !collapsed && k === 'waiting';
+  useEffect(() => {
+    watchPromptRef.current = watching;
+    if (watching) readPrompt();
+    else setPrompt(null);
+  }, [watching, readPrompt]);
+
+  // Drop to upload.
+  const acceptsFiles = (e: React.DragEvent) =>
+    !filesDisabled && !!attachedSession && Array.from(e.dataTransfer.types).includes('Files');
+  const uploadDropped = async (files: FileList) => {
+    if (files.length === 0) return;
+    setUploading(true);
+    try {
+      const paths = await uploadFiles(files, { serverUrl, authToken });
+      if (paths.length === 0) throw new Error('the server kept none of them (too large?)');
+      setDropped(paths);
+      useUiStore.getState().say(
+        paths.length === 1 ? `Uploaded ${files[0].name}` : `Uploaded ${paths.length} files`,
+        { ttl: 4000 },
+      );
+    } catch (err) {
+      useAppStore.getState().pushNotification('error', `Upload failed: ${err instanceof Error ? err.message : err}`, 'upload');
+    } finally {
+      setUploading(false);
+    }
+  };
+  useEffect(() => {
+    if (!dropped) return;
+    const t = setTimeout(() => setDropped(null), 30_000);
+    return () => clearTimeout(t);
+  }, [dropped]);
+  const insertDropped = () => {
+    if (!dropped) return;
+    sendInput(dropped.join(' ') + ' ');
+    setDropped(null);
+    termRef.current?.focus();
+  };
+
+  const stripIcon = 'w-3.5 h-3.5';
 
   return (
-    <div
-      className={`flex flex-col h-full min-w-0 bg-[#09090b] rounded overflow-hidden ${focusRing}`}
+    <section
+      className={`pl-pane${isFocused ? ' focused' : ''}${collapsed ? ' collapsed' : ''}`}
+      data-st={k ?? undefined}
+      style={order !== undefined ? { order } : undefined}
       onMouseDown={onFocus}
+      onDragEnter={(e) => { if (!acceptsFiles(e)) return; e.preventDefault(); dragDepth.current++; setDragOver(true); }}
+      onDragOver={(e) => { if (!acceptsFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+      onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragOver(false); }}
+      onDrop={(e) => {
+        if (!acceptsFiles(e)) return;
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragOver(false);
+        void uploadDropped(e.dataTransfer.files);
+      }}
+      aria-label={nameNow ? `${nameNow} pane` : 'Empty pane'}
     >
-      {/* Pane header */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 py-1 bg-zinc-900/80 border-b border-zinc-800 text-xs">
-        <span
-          className={`shrink-0 inline-flex items-center justify-center w-5 h-5 rounded text-[11px] font-semibold transition-colors ${
-            isFocused ? 'bg-zinc-600 text-zinc-100' : 'bg-zinc-800 text-zinc-500'
-          }`}
-          title={`Pane ${paneNumber}`}
-        >
-          {paneNumber}
-        </span>
-        {serverBadge && (
-          <span
-            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-sky-500/15 text-sky-300"
-            title={`Session on ${serverBadge}`}
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
-            {serverBadge}
-          </span>
-        )}
-        {label ? (
+      <span className="pl-prail" aria-hidden />
+      <header className="pl-pstrip" title={collapsed ? 'Click to bring this pane up' : undefined}>
+        <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
+        {attachedSession && label ? (
           <>
-            {renamingSession ? (
-              <input
-                ref={sessionNameInputRef}
-                value={sessionEditName}
-                onChange={(e) => setSessionEditName(e.target.value)}
-                onBlur={commitSessionRename}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitSessionRename();
-                  if (e.key === 'Escape') setRenamingSession(false);
-                }}
-                className="flex-1 min-w-0 px-1.5 py-0.5 bg-zinc-800 border border-zinc-600 rounded text-xs text-zinc-100 outline-none"
-                autoFocus
+            <span className="ttl pl-slide" key={attachedSession.id}>
+              {k && <StateGlyph state={k} size={12} live={isFocused} label={stateWord(attachedSession, k)} />}
+              {renamingSession ? (
+                <input
+                  ref={sessionNameInputRef}
+                  value={sessionEditName}
+                  onChange={(e) => setSessionEditName(e.target.value)}
+                  onBlur={commitSessionRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitSessionRename();
+                    if (e.key === 'Escape') setRenamingSession(false);
+                  }}
+                  aria-label="Session name"
+                  className="flex-1 min-w-0 h-5 px-1.5 bg-bg-0 border border-line-3 rounded-[4px] text-meta text-fg-1 outline-none"
+                  autoFocus
+                />
+              ) : (
+                <span className="nm" onDoubleClick={startSessionRename} title={`${label}. Double-click to rename.`}>{label}</span>
+              )}
+              {serverBadge && <span className="sv" title={`Session on ${serverBadge}`}>{serverBadge}</span>}
+              {connState === 'reconnecting' && <span className="note text-st-disconnected">reconnecting</span>}
+              {connState === 'disconnected' && <span className="note text-danger">offline</span>}
+              {uploading && <span className="note">Uploading…</span>}
+            </span>
+            {k === 'waiting' && <span className="wst">{stateWord(attachedSession, k)}</span>}
+            {isFocused && !collapsed && prompt && (
+              <AnswerChips
+                className="ans"
+                options={prompt.options}
+                onAnswer={answer}
+                onOpenQuestion={() => termRef.current?.focus()}
               />
-            ) : (
-              <span
-                className="truncate flex-1 text-zinc-300 cursor-text"
-                onDoubleClick={startSessionRename}
-                title="Double-click to rename"
-              >
-                {label}
+            )}
+            {isFocused && !collapsed && k === 'waiting' && (
+              <IconButton size="xs" label="Reply in your own words" onClick={() => setComposerOpen(true)} className="!w-[26px]">
+                <MessageSquare className={stripIcon} strokeWidth={1.75} />
+              </IconButton>
+            )}
+            {!collapsed && (
+              <span className="hov">
+                {!(isFocused && k === 'waiting') && (
+                  <IconButton label="Write a message (Ctrl+Shift+M)" pressed={composerOpen} onClick={() => setComposerOpen((v) => !v)}>
+                    <MessageSquare className={stripIcon} strokeWidth={1.75} />
+                  </IconButton>
+                )}
+                <IconButton label="Copy from Claude (Ctrl+Shift+Y)" pressed={claudeReply !== null} onClick={toggleClaudeReply}>
+                  <ClipboardCopy className={stripIcon} strokeWidth={1.75} />
+                </IconButton>
+                <IconButton label="Links in this session (Ctrl+Shift+L)" pressed={paneLinks !== null} onClick={toggleLinks}>
+                  <Link2 className={stripIcon} strokeWidth={1.75} />
+                </IconButton>
+                {!filesDisabled && (
+                  <IconButton label="Upload a file (or drop it on the pane)" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
+                    <Paperclip className={stripIcon} strokeWidth={1.75} />
+                  </IconButton>
+                )}
+                <IconButton label="Take the session out of this pane (it keeps running)" onClick={onClear}>
+                  <X className={stripIcon} strokeWidth={1.75} />
+                </IconButton>
               </span>
             )}
-            {connState === 'reconnecting' && (
-              <span className="px-1.5 py-0.5 rounded text-micro text-st-disconnected border border-st-disconnected/40">reconnecting</span>
-            )}
-            {connState === 'disconnected' && (
-              <span className="px-1.5 py-0.5 rounded text-[11px] text-red-400 bg-red-500/10">offline</span>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-            <button
-              onClick={() => setComposerOpen((open) => !open)}
-              className={`p-1 transition-colors ${composerOpen ? 'text-zinc-200' : 'text-zinc-600 hover:text-zinc-300'}`}
-              title="Write a message (Ctrl+Shift+M)"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-              </svg>
-            </button>
-            <button
-              onClick={toggleClaudeReply}
-              className={`p-1 transition-colors ${claudeReply !== null ? 'text-zinc-200' : 'text-zinc-600 hover:text-zinc-300'}`}
-              title="Copy from Claude — last reply and its code blocks (Ctrl+Shift+K)"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-              </svg>
-            </button>
-            <button
-              onClick={toggleLinks}
-              className={`p-1 transition-colors ${paneLinks !== null ? 'text-zinc-200' : 'text-zinc-600 hover:text-zinc-300'}`}
-              title="Recent links — whole, even when wrapped (Ctrl+Shift+L)"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10.172 13.828a4 4 0 010-5.656l3-3a4 4 0 015.656 5.656l-1.5 1.5" />
-              </svg>
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              hidden={filesDisabled}
-              disabled={uploading}
-              className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
-              title="Upload file"
-            >
-              {uploading ? (
-                <span className="w-3.5 h-3.5 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin inline-block" />
-              ) : (
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                </svg>
-              )}
-            </button>
-            <button
-              onClick={onClear}
-              className="px-1.5 py-0.5 text-zinc-600 hover:text-zinc-300 transition-colors"
-              title="Detach session from pane"
-            >
-              &times;
-            </button>
           </>
         ) : (
-          <span className="text-zinc-600 flex-1">
-            {connState === 'connecting' && 'Connecting...'}
-            {connState === 'reconnecting' && 'Reconnecting...'}
-            {connState === 'disconnected' && 'Disconnected'}
-            {connState === 'ready' && 'Empty'}
+          <span className="ttl">
+            <span className="nm" style={{ color: 'var(--color-fg-3)' }}>
+              {sessionId
+                ? (connState === 'reconnecting' ? 'Reconnecting…' : connState === 'disconnected' ? 'Offline' : 'Opening…')
+                : 'Empty pane'}
+            </span>
           </span>
         )}
-      </div>
+      </header>
 
       {/* Window tabs — when session has multiple windows */}
       {windows.length > 1 && (
-        <div className="shrink-0 flex items-center gap-0.5 px-1.5 py-0.5 bg-zinc-900/40 border-b border-zinc-800/50 overflow-x-auto">
+        <div className="pl-wtabs shrink-0 flex items-center gap-0.5 h-6 px-1.5 bg-bg-1 border-b border-line overflow-x-auto">
           {windows.map((w) => (
             <WindowTab
               key={w.index}
@@ -996,7 +1088,7 @@ export function TerminalPane({
       )}
 
       {/* Terminal area (empty-state overlay when no session) */}
-      <div className="flex-1 min-h-0 relative" onClick={() => termRef.current?.focus()}>
+      <div className="pl-pterm" onClick={() => termRef.current?.focus()}>
         <div ref={containerRef} className="absolute inset-0 overflow-hidden" />
         {/* Harvested-links panel — anchored to the top so it reads like a
             dropdown from the header button that opened it. */}
@@ -1068,37 +1160,53 @@ export function TerminalPane({
             // workflow on desktop.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => { voice.toggle(); termRef.current?.focus(); }}
-            className={`absolute right-3 bottom-3 z-10 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-colors ${
+            className={`absolute right-3 bottom-3 z-10 w-9 h-9 rounded-full grid place-items-center border transition-colors duration-(--d-press) ${
               voice.isListening
-                ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/50'
-                : 'bg-zinc-800/90 text-zinc-300 hover:bg-zinc-700'
+                ? 'bg-accent-soft text-accent-hi border-accent/50'
+                : 'bg-bg-2/90 text-fg-2 border-line-2 hover:text-fg-1'
             }`}
             title={voice.isListening ? 'Stop dictation' : 'Start dictation'}
             aria-label={voice.isListening ? 'Stop dictation' : 'Start dictation'}
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
-            </svg>
+            <Mic className="w-4 h-4" strokeWidth={1.75} />
           </button>
         )}
         {!attachedSession && (
           // z-10: xterm's canvas layers carry explicit z-indexes, so without
           // one this overlay can lose the stacking fight and the button
           // becomes unclickable (canvas intercepts the pointer).
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/95 pointer-events-auto">
-            <button
-              onClick={onPickSession}
-              className="px-4 py-2 text-xs text-zinc-400 border border-dashed border-zinc-700 rounded hover:border-zinc-500 hover:text-zinc-200 transition-colors"
-            >
-              Pick a session for this pane
-            </button>
+          <div className="absolute inset-0 z-10 grid place-items-center bg-bg-term pointer-events-auto">
+            <div className="flex flex-col items-center gap-3 text-center">
+              <p className="text-body text-fg-3">{sessionId ? 'Opening the session…' : 'Nothing in this pane yet'}</p>
+              {!sessionId && (
+                <button type="button" className="pl-btn sm" onClick={onPickSession} title="Ctrl+Alt+T">
+                  Pick a session
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {dragOver && (
+          <div className="pl-drop" aria-hidden>
+            <div className="text-center">
+              <div>Drop to upload to the server</div>
+              <div className="text-meta text-fg-3">then insert its path here</div>
+            </div>
+          </div>
+        )}
+        {dropped && (
+          <div className="pl-dropped" role="status" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <span className="p" title={dropped.join('\n')}>{dropped.length === 1 ? dropped[0] : `${dropped.length} files uploaded`}</span>
+            <button type="button" className="pl-chip first" onClick={insertDropped} title="Type the path into the session">Insert path</button>
+            <IconButton size="xs" label="Dismiss" onClick={() => setDropped(null)}>
+              <X className="w-3.5 h-3.5" strokeWidth={1.75} />
+            </IconButton>
           </div>
         )}
       </div>
       {composerOpen && attachedSession && (
         <Composer onSend={sendComposed} onClose={closeComposer} variant="pane" />
       )}
-    </div>
+    </section>
   );
 }

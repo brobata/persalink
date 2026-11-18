@@ -87,7 +87,11 @@ export function runKeyAction(action: KeyAction): void {
       else app.openFiles();
       return;
     case 'settings': app.openSettings(); return;
-    case 'home': if (app.view !== 'home') app.goBack(); return;
+    case 'home':
+      if (deviceKind() === 'desktop') { app.closeOverlay(); useLayoutStore.getState().showHome(); return; }
+      if (app.view !== 'home') app.goBack();
+      return;
+    case 'sidebar': ui.toggleSidebar(); return;
     case 'prev-session': stepPhoneSession(-1); return;
     case 'next-session': stepPhoneSession(1); return;
     case 'composer': sendPaneCommand(currentTerminal(), 'composer'); return;

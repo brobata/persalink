@@ -23,7 +23,8 @@ export type KeyAction =
   | 'home'
   | 'files'
   | 'settings'
-  | 'shortcuts';
+  | 'shortcuts'
+  | 'sidebar';
 
 export interface KeyRow { keys: string; action: string }
 
@@ -35,6 +36,8 @@ export const DESKTOP_KEYS: readonly KeyRow[] = [
   { keys: 'Ctrl+Alt+← / →', action: 'Previous / next session in this pane' },
   { keys: 'Ctrl+Alt+1-9', action: 'Jump to session 1-9 in this pane' },
   { keys: 'Ctrl+Alt+T', action: 'Open or start a session in this pane' },
+  { keys: 'Ctrl+Alt+H', action: 'Home: who needs you' },
+  { keys: 'Ctrl+Alt+B', action: 'Sidebar: expanded or rail' },
   { keys: 'Ctrl+Shift+M', action: 'Write a message in a text box' },
   { keys: 'Ctrl+Shift+Y', action: 'Copy from Claude' },
   { keys: 'Ctrl+Shift+L', action: 'Links in this session' },
@@ -71,6 +74,8 @@ export const DESKTOP_CHORD: Partial<Record<KeyAction, string>> = {
   'files': 'Ctrl+Alt+F',
   'settings': 'Ctrl+Alt+,',
   'shortcuts': 'Ctrl+Shift+/',
+  'home': 'Ctrl+Alt+H',
+  'sidebar': 'Ctrl+Alt+B',
 };
 
 /** The parts of a KeyboardEvent the matchers read (testable without a DOM). */
@@ -104,6 +109,8 @@ export function desktopAction(e: KeyLike, inTerminal: boolean): KeyAction | null
   if (e.ctrlKey && e.altKey && !e.shiftKey && k === 'j') return 'next-waiting';
   if (e.ctrlKey && e.altKey && !e.shiftKey && k === 'f') return 'files';
   if (e.ctrlKey && e.altKey && !e.shiftKey && k === ',') return 'settings';
+  if (e.ctrlKey && e.altKey && !e.shiftKey && k === 'b') return 'sidebar';
+  if (e.ctrlKey && e.altKey && !e.shiftKey && k === 'h') return 'home';
   if (mod && e.shiftKey && !e.altKey && (e.code === 'Slash' || k === '?' || k === '/')) return 'shortcuts';
   return null;
 }

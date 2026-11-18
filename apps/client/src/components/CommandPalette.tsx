@@ -15,7 +15,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import {
   ArrowUpCircle, Braces, ClipboardCopy, Columns2, FolderOpen, House, Keyboard, LayoutGrid, Link2,
-  MessageSquare, Play, Rows2, Search, Server, Settings, SlidersHorizontal, Square, TextSearch, Upload, X,
+  MessageSquare, PanelLeft, Play, Plus, RefreshCw, Rows2, Search, Server, Settings, SlidersHorizontal, Square, TextSearch, Upload, X,
 } from 'lucide-react';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
@@ -26,8 +26,9 @@ import { needsYou, nextWaiting, orderSessions } from '../lib/sessionOrder';
 import { sessionTitle, stateKey, stateWord } from '../lib/sessionState';
 import { currentTerminal, PHONE_TERMINAL, sendPaneCommand } from '../lib/paneCommands';
 import { DESKTOP_CHORD } from '../lib/keymap';
+import { runKeyAction } from './ShortcutsPanel';
+import { openSession, startProfile } from '../lib/openSession';
 import { deviceKind } from '../lib/device';
-import { getInitialDims } from '../lib/terminalDims';
 import { remoteSnapshot } from '../lib/remoteServer';
 import { StateGlyph } from './ui/StateGlyph';
 import { ProfileTile } from './ui/ProfileTile';
@@ -86,43 +87,6 @@ function cleanPreview(text: string | undefined): string {
 }
 
 // ---------------------------------------------------------------- actions
-/** Open a session wherever you are: the focused pane on desktop (or the pane
- *  already showing it), the terminal on a phone. Another server's session on
- *  a phone switches to that server, which then opens it. */
-function openSession(id: string, serverId: string | null): void {
-  const app = useAppStore.getState();
-  const onActive = !serverId || serverId === app.activeServerId;
-  if (deviceKind() === 'desktop') {
-    const layout = useLayoutStore.getState();
-    const boundTo = (p: { serverId: string | null }) => p.serverId ?? app.activeServerId;
-    const shown = layout.panes.find((p) => p.sessionId === id && boundTo(p) === (serverId ?? app.activeServerId));
-    if (shown) layout.setFocusedPane(shown.id);
-    else layout.assignSession(layout.focusedPaneId, id, serverId ?? app.activeServerId);
-    app.closeOverlay();
-    return;
-  }
-  if (onActive) {
-    app.attachSession(id);
-    return;
-  }
-  app.selectServer(serverId!);
-  // The cold open after sign-in lands on the last session when it is recent.
-  useAppStore.setState({ lastActiveSessionId: id, lastActiveAt: Date.now() });
-}
-
-function startProfile(profileId: string): void {
-  const app = useAppStore.getState();
-  if (deviceKind() === 'desktop') {
-    const layout = useLayoutStore.getState();
-    layout.markPendingAssign(layout.focusedPaneId);
-    app.createSession(profileId);
-    app.closeOverlay();
-    return;
-  }
-  const { cols, rows } = getInitialDims();
-  app.createSession(profileId, cols, rows);
-}
-
 const LAYOUTS: Array<{ id: Layout; label: string; icon: ReactNode }> = [
   { id: 'single', label: 'One pane', icon: <Square className={ICON} /> },
   { id: 'split-h', label: 'Two panes side by side', icon: <Columns2 className={ICON} /> },
@@ -145,6 +109,7 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
   const panes = useLayoutStore((s) => s.panes);
   const focusedPaneId = useLayoutStore((s) => s.focusedPaneId);
   const layout = useLayoutStore((s) => s.layout);
+  const deskHome = useLayoutStore((s) => s.home);
   const [remote, remoteVersion] = useRemoteSessions(open, servers, activeServerId);
 
   return useMemo(() => {
@@ -155,7 +120,7 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
     const overlay = view === 'settings' || view === 'files' || view === 'profile-editor';
     // Is there a terminal to send terminal actions to?
     const terminal = desktop
-      ? !overlay && !!focused?.sessionId
+      ? !overlay && !deskHome && !!focused?.sessionId
       : view === 'terminal' && !!attachedSession && !endedSession;
     const target = terminal ? currentTerminal() : null;
     const chord = (k: keyof typeof DESKTOP_CHORD) => (desktop ? DESKTOP_CHORD[k] : undefined);
@@ -200,6 +165,7 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
       items.push({ id, section: 'Actions' as PaletteSection, label, icon, run, ...extra });
 
     if (!desktop && view !== 'home') A('home', 'Home', <House className={ICON} />, () => useAppStore.getState().goBack());
+    if (desktop && (!deskHome || overlay)) A('home', 'Home', <House className={ICON} />, () => runKeyAction('home'), { keys: chord('home'), alias: 'needs you summary' });
     if (target) {
       A('composer', 'Write a message', <MessageSquare className={ICON} />, () => sendPaneCommand(target, 'composer'), { keys: chord('composer'), alias: 'composer dictate voice reply' });
       A('claude', 'Copy from Claude', <ClipboardCopy className={ICON} />, () => sendPaneCommand(target, 'claude'), { keys: chord('copy-claude'), alias: 'reply code' });
@@ -214,8 +180,11 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
     if (!filesDisabled) A('files', 'Files', <FolderOpen className={ICON} />, () => useAppStore.getState().openFiles(), { keys: chord('files'), alias: 'browse upload' });
     A('settings', 'Settings', <Settings className={ICON} />, () => useAppStore.getState().openSettings(), { keys: chord('settings'), alias: 'preferences notifications' });
     A('shortcuts', 'Keyboard shortcuts', <Keyboard className={ICON} />, () => useUiStore.getState().openShortcuts(), { keys: chord('shortcuts'), alias: 'keys help' });
+    A('reload', 'Reload the app', <RefreshCw className={ICON} />, () => window.location.reload(), { sub: 'Sessions keep running; this page reconnects', alias: 'refresh restart', searchOnly: true });
     if (updateAvailable) A('update', 'Update ready', <ArrowUpCircle className={ICON} />, () => window.location.reload(), { sub: 'Reload to use the new version' });
     if (desktop) {
+      A('sidebar', 'Sidebar: expanded or rail', <PanelLeft className={ICON} />, () => runKeyAction('sidebar'), { keys: chord('sidebar'), alias: 'collapse rail hide', searchOnly: true });
+      A('workspace:new', 'New workspace', <Plus className={ICON} />, () => useLayoutStore.getState().addWorkspace(), { alias: 'tab layout', searchOnly: true });
       for (const l of LAYOUTS) {
         if (l.id === layout) continue;
         A(`layout:${l.id}`, l.label, l.icon, () => useLayoutStore.getState().setLayout(l.id), { alias: 'layout split grid panes', searchOnly: true });
@@ -256,7 +225,7 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
     }
     return { items, checking };
   }, [sessions, profiles, snippets, servers, activeServerId, view, attachedSession, endedSession, filesDisabled,
-    updateAvailable, panes, focusedPaneId, layout, remote, remoteVersion]);
+    updateAvailable, panes, focusedPaneId, layout, deskHome, remote, remoteVersion]);
 }
 
 // ---------------------------------------------------------------- view

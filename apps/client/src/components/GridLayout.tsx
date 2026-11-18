@@ -1,60 +1,24 @@
 /**
  * @file GridLayout
- * @description Desktop multi-pane container. Renders N TerminalPane components
- *   in a CSS grid based on the layout mode, handles focus tracking, and shows
- *   a session picker popup when the user clicks to fill an empty pane.
+ * @description Desktop pane grid. Renders the live workspace's panes
+ *   (single, split or 2x2) with 1px hairline gutters, tracks focus, and
+ *   shows a session picker when an empty pane is filled. With a right panel
+ *   open (Settings, Files, the profile editor; `panel`), the focused pane
+ *   keeps the space and every other pane collapses to its 28px strip, still
+ *   live; clicking a strip brings that pane up. The title bar and status bar
+ *   live in components/desktop.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
 import { useLayoutStore, type Layout } from '../stores/layoutStore';
 import { TerminalPane } from './TerminalPane';
-import { TerminalSettings } from './TerminalSettings';
 import { SessionRow } from './ui/SessionRow';
 import { ProfileTile } from './ui/ProfileTile';
-import { WaitPill } from './ui/WaitPill';
 import { useDesktopShortcuts } from './ShortcutsPanel';
-import { Kbd } from './ui/Kbd';
-import { useUiStore } from '../stores/uiStore';
-import { Search } from 'lucide-react';
 import { orderSessions } from '../lib/sessionOrder';
 import { remoteSnapshot, remoteCreateSession, resolveEntryHost } from '../lib/remoteServer';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
-
-function LayoutIcon({ layout }: { layout: Layout }) {
-  const cls = 'w-3.5 h-3.5';
-  if (layout === 'single') {
-    return (
-      <svg className={cls} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect x="2" y="2" width="12" height="12" rx="1" />
-      </svg>
-    );
-  }
-  if (layout === 'split-h') {
-    return (
-      <svg className={cls} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect x="2" y="2" width="5.5" height="12" rx="1" />
-        <rect x="8.5" y="2" width="5.5" height="12" rx="1" />
-      </svg>
-    );
-  }
-  if (layout === 'split-v') {
-    return (
-      <svg className={cls} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect x="2" y="2" width="12" height="5.5" rx="1" />
-        <rect x="2" y="8.5" width="12" height="5.5" rx="1" />
-      </svg>
-    );
-  }
-  return (
-    <svg className={cls} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <rect x="2" y="2" width="5.5" height="5.5" rx="1" />
-      <rect x="8.5" y="2" width="5.5" height="5.5" rx="1" />
-      <rect x="2" y="8.5" width="5.5" height="5.5" rx="1" />
-      <rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1" />
-    </svg>
-  );
-}
 
 function SessionPicker({
   onPick, onClose, onCreateFromProfile,
@@ -204,28 +168,6 @@ function SessionPicker({
   );
 }
 
-export function LayoutSwitcher() {
-  const layout = useLayoutStore(s => s.layout);
-  const setLayout = useLayoutStore(s => s.setLayout);
-  const options: Layout[] = ['single', 'split-h', 'split-v', '2x2'];
-  return (
-    <div className="flex items-center gap-0.5 bg-zinc-900 border border-zinc-800 rounded p-0.5">
-      {options.map((opt) => (
-        <button
-          key={opt}
-          onClick={() => setLayout(opt)}
-          className={`p-1 rounded transition-colors ${
-            layout === opt ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-          title={opt}
-        >
-          <LayoutIcon layout={opt} />
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function gridClasses(layout: Layout): string {
   if (layout === 'single') return 'grid-cols-1 grid-rows-1';
   if (layout === 'split-h') return 'grid-cols-2 grid-rows-1';
@@ -233,10 +175,11 @@ function gridClasses(layout: Layout): string {
   return 'grid-cols-2 grid-rows-2';
 }
 
-export function GridLayout() {
+export function GridLayout({ panel = false }: { panel?: boolean }) {
   const layout = useLayoutStore(s => s.layout);
   const panes = useLayoutStore(s => s.panes);
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
+  const workspaceId = useLayoutStore(s => s.activeWorkspaceId);
   const assignSession = useLayoutStore(s => s.assignSession);
   const clearPane = useLayoutStore(s => s.clearPane);
   const setFocusedPane = useLayoutStore(s => s.setFocusedPane);
@@ -248,14 +191,8 @@ export function GridLayout() {
   const createSession = useAppStore(s => s.createSession);
   const markPendingAssign = useLayoutStore(s => s.markPendingAssign);
   const pushNotification = useAppStore(s => s.pushNotification);
-  const sessions = useAppStore(s => s.sessions);
-  const openNextWaiting = useAppStore(s => s.openNextWaiting);
 
   const [pickerPaneId, setPickerPaneId] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
-  const openShortcuts = useUiStore((s) => s.openShortcuts);
-  const openPalette = useUiStore((s) => s.openPalette);
   useDesktopShortcuts({ onPickSession: setPickerPaneId });
 
   // Resolve a pane's connection target from its bound server. Legacy panes
@@ -268,69 +205,34 @@ export function GridLayout() {
     return { url: resolveEntryHost(entry), token: entry.authToken ?? '', entry, isRemote: true };
   };
 
-  return (
-    <div className="flex flex-col h-full bg-zinc-950">
-      {/* Top bar with layout switcher */}
-      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-900 relative">
-        <LayoutSwitcher />
-        <div className="flex-1 min-w-0 flex justify-center">
-          {/* The palette, described, with its chord: the one search on desktop. */}
-          <button type="button" className="pl-paltrig" onClick={() => openPalette()} title="Search and commands (Ctrl+Shift+K)">
-            <Search className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
-            <span className="grow">Jump to a session or run a command</span>
-            <Kbd keys="Ctrl+Shift+K" />
-          </button>
-        </div>
-        <WaitPill
-          variant="desktop"
-          sessions={sessions}
-          currentId={panes.find((p) => p.id === focusedPaneId)?.sessionId ?? null}
-          onJump={() => openNextWaiting()}
-        />
-        <button
-          onClick={openShortcuts}
-          className={`p-1.5 rounded transition-colors ${
-            shortcutsOpen ? 'text-zinc-100 bg-zinc-800' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-          }`}
-          title="Keyboard shortcuts (Ctrl+Shift+/)"
-          aria-label="Keyboard shortcuts"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="2" y="6" width="20" height="12" rx="2" />
-            <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
-          </svg>
-        </button>
-        <div className="relative">
-          <button
-            onClick={() => setShowSettings((v) => !v)}
-            className={`p-1.5 rounded transition-colors ${
-              showSettings ? 'text-zinc-100 bg-zinc-800' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-            }`}
-            title="Terminal appearance"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </svg>
-          </button>
-          {showSettings && <TerminalSettings onClose={() => setShowSettings(false)} />}
-        </div>
-      </div>
+  const multi = panes.length > 1;
+  // Panel mode: one column, the focused pane first and full, the rest as
+  // strips. Still a grid (only the template changes): switching the
+  // container to flex left Chromium with a stale zero-height layout inside
+  // the focused pane.
+  const panelStyle = panel && multi
+    ? { gridTemplateColumns: 'minmax(0, 1fr)', gridTemplateRows: `minmax(0, 1fr) ${'28px '.repeat(panes.length - 1).trim()}` }
+    : undefined;
 
-      {/* Grid */}
-      <div className={`flex-1 min-h-0 grid gap-1 p-1 ${gridClasses(layout)}`}>
+  return (
+    <div className="flex flex-col h-full min-h-0 bg-bg-0">
+      <div className={`pl-wsg flex-1 min-h-0 ${panelStyle ? '' : gridClasses(layout)}${multi ? ' multi' : ''}`} style={panelStyle}>
         {panes.map((slot, i) => {
           const r = resolvePane(slot.serverId);
+          const focused = slot.id === focusedPaneId;
+          const collapsed = !!panelStyle && !focused;
           return (
             <TerminalPane
-              key={slot.id}
+              key={`${workspaceId}:${slot.id}`}
               paneId={slot.id}
               paneNumber={i + 1}
               sessionId={slot.sessionId}
               serverUrl={r.url}
               authToken={r.token}
               serverBadge={r.isRemote ? (r.entry?.serverName || r.entry?.label || 'remote') : null}
-              isFocused={slot.id === focusedPaneId}
+              isFocused={focused}
+              collapsed={collapsed}
+              order={panelStyle ? (focused ? 0 : 1 + i) : undefined}
               onFocus={() => setFocusedPane(slot.id)}
               onClear={() => clearPane(slot.id)}
               onPickSession={() => setPickerPaneId(slot.id)}
