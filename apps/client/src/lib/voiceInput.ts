@@ -63,6 +63,17 @@ const AUTO_STOP_ON_SILENCE = (() => {
 // starting dictation in any pane first hard-stops whichever pane has the mic.
 let activeMic: { abandon: () => void } | null = null;
 
+/** Whether dictation can run here at all (a recognizer exists, the page is a
+ *  secure context, and the kill switch is off). Callable outside the hook, so
+ *  a dock can say "Dictate" or "Message" before anything mounts. */
+export function voiceSupported(): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    if (localStorage.getItem('persalink_voice') === 'off') return false;
+  } catch { /* storage blocked: the switch cannot be on */ }
+  return getCtor() !== null && window.isSecureContext;
+}
+
 export type VoiceInputState = {
   isSupported: boolean;
   isListening: boolean;

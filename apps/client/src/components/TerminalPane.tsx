@@ -13,7 +13,7 @@
  *   pane upload to the server and offer "Insert path".
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -23,7 +23,7 @@ import { WSClient } from '../lib/ws';
 import { useAppStore } from '../stores/appStore';
 import { handleOsc52 } from '../lib/clipboardBridge';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
-import { useVoiceInput } from '../lib/voiceInput';
+import { voiceSupported } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
@@ -176,13 +176,11 @@ export function TerminalPane({
     wsRef.current?.send({ type: 'session.resize', cols, rows });
   }, []);
 
-  const voice = useVoiceInput(useCallback((text: string) => {
-    sendInput(text);
-  }, [sendInput]));
-  useEffect(() => {
-    if (!voice.error) return;
-    useAppStore.getState().pushNotification('error', voice.error, 'voice');
-  }, [voice.error]);
+  // Dictation lives in the composer: what the mic hears lands in the box for
+  // review, never straight in the session. The pane's mic opens it listening.
+  const canDictate = useMemo(() => voiceSupported(), []);
+  const [composerListen, setComposerListen] = useState(false);
+  useEffect(() => { if (!composerOpen) setComposerListen(false); }, [composerOpen]);
 
   // Toggles read the open state through refs: a socket send doesn't belong
   // inside a setState updater (React may run updaters twice).
@@ -1151,22 +1149,15 @@ export function TerminalPane({
         {claudeReply !== null && (
           <ClaudeReplyPanel state={claudeReply} onClose={() => setClaudeReply(null)} variant="pane" />
         )}
-        {attachedSession && voice.isSupported && (
+        {attachedSession && canDictate && !composerOpen && (
           <button
             // onMouseDown preventDefault stops the browser from moving focus
-            // from xterm's textarea to the button. Without this, after
-            // tapping the mic once, xterm never sees keypresses again —
-            // including Ctrl+C, which silently broke the "select + copy"
-            // workflow on desktop.
+            // from xterm's textarea to the button.
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => { voice.toggle(); termRef.current?.focus(); }}
-            className={`absolute right-3 bottom-3 z-10 w-9 h-9 rounded-full grid place-items-center border transition-colors duration-(--d-press) ${
-              voice.isListening
-                ? 'bg-accent-soft text-accent-hi border-accent/50'
-                : 'bg-bg-2/90 text-fg-2 border-line-2 hover:text-fg-1'
-            }`}
-            title={voice.isListening ? 'Stop dictation' : 'Start dictation'}
-            aria-label={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+            onClick={() => { setComposerListen(true); setComposerOpen(true); }}
+            className="absolute right-3 bottom-3 z-10 w-9 h-9 rounded-full grid place-items-center border transition-colors duration-(--d-press) bg-bg-2/90 text-fg-2 border-line-2 hover:text-fg-1"
+            title="Dictate a message"
+            aria-label="Dictate a message"
           >
             <Mic className="w-4 h-4" strokeWidth={1.75} />
           </button>
@@ -1205,7 +1196,7 @@ export function TerminalPane({
         )}
       </div>
       {composerOpen && attachedSession && (
-        <Composer onSend={sendComposed} onClose={closeComposer} variant="pane" />
+        <Composer onSend={sendComposed} onClose={closeComposer} variant="pane" listen={composerListen} />
       )}
     </section>
   );

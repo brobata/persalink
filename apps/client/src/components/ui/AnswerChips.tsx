@@ -13,11 +13,11 @@
  *   it presses Esc, which interrupts Claude before the approved step runs on.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { chipLabel, isRedirectOption, type PromptOption } from '../../lib/claudePrompt';
 
-export function AnswerChips({ options, onAnswer, onReply, onOpenQuestion, accent = true, className = '' }: {
+export function AnswerChips({ options, onAnswer, onReply, onOpenQuestion, accent = true, replyIcon, className = '' }: {
   options: readonly PromptOption[];
   /** A chip was tapped. The redirect option ("No, explain") goes to onReply when given. */
   onAnswer: (option: PromptOption) => void;
@@ -27,6 +27,8 @@ export function AnswerChips({ options, onAnswer, onReply, onOpenQuestion, accent
   onOpenQuestion?: () => void;
   /** Accent the first chip (off where another control owns the accent). */
   accent?: boolean;
+  /** The reply chip's icon (the phone answers by voice: a mic). */
+  replyIcon?: ReactNode;
   className?: string;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -77,7 +79,7 @@ export function AnswerChips({ options, onAnswer, onReply, onOpenQuestion, accent
           title="Reply in your own words"
           aria-label="Reply in your own words"
         >
-          <MessageSquare className="w-4 h-4" strokeWidth={1.75} />
+          {replyIcon ?? <MessageSquare className="w-4 h-4" strokeWidth={1.75} />}
         </button>
       )}
     </>

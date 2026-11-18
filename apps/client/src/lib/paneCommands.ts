@@ -27,7 +27,9 @@ export type PaneCommand =
   | 'answer'
   | 'snippets'
   | 'find'
-  | 'terminal-settings';
+  | 'terminal-settings'
+  /** Phone: slide to the next ("1") or previous ("-1") session. */
+  | 'step';
 
 export interface PaneCommandDetail {
   paneId: string;

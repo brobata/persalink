@@ -2,14 +2,16 @@
  * @file KeyRow
  * @description The one terminal key row for touch phones: the keys a soft
  *   keyboard lacks. Esc, Tab, a sticky Ctrl and the arrows are pinned on the
- *   left; the rarer keys, the space trackpad and Snippets scroll to their
- *   right. 44px tall, neutral keys, Ctrl armed shows as the soft accent.
- *   Every key keeps terminal focus (pointerdown preventDefault), so the soft
- *   keyboard stays up between taps.
+ *   left; the shell's suggestions for what you are typing come first in the
+ *   scrolling part (soft accent, the typed prefix in white), then the space
+ *   trackpad, Snippets and the rarer keys. 44px tall, neutral keys, Ctrl
+ *   armed shows as the soft accent. With `keys` off the same row carries the
+ *   suggestions alone. Every key keeps terminal focus (pointerdown
+ *   preventDefault), so the soft keyboard stays up between taps.
  */
 
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Braces } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Braces, ChevronDown } from 'lucide-react';
 
 const PINNED: Array<{ label: string; seq: string; aria: string }> = [
   { label: 'Esc', seq: '\x1b', aria: 'Escape' },
@@ -95,38 +97,70 @@ function SpaceTrackpadKey({ sendInput }: { sendInput: (data: string) => void }) 
   );
 }
 
-export function KeyRow({ sendInput, ctrlArmed, onToggleCtrl, onOpenSnippets }: {
+export interface KeySuggestions {
+  /** What is typed so far. */
+  prefix: string;
+  /** Whole commands that start with it. */
+  items: readonly string[];
+}
+
+export function KeyRow({ sendInput, ctrlArmed, onToggleCtrl, onOpenSnippets, suggestions, onSuggest, keys = true, onHide }: {
   sendInput: (data: string) => void;
   /** Sticky Ctrl: arm it, then type a letter on the soft keyboard. */
   ctrlArmed: boolean;
   onToggleCtrl: () => void;
   onOpenSnippets: () => void;
+  /** Shell history matches for the command being typed. */
+  suggestions?: KeySuggestions;
+  /** A suggestion was tapped (the caller types the rest of it). */
+  onSuggest?: (command: string) => void;
+  /** Draw the keys; off leaves the suggestions alone in the row. */
+  keys?: boolean;
+  /** Put the soft keyboard away (a button at the right end). */
+  onHide?: () => void;
 }) {
+  const sugg = suggestions && suggestions.items.length > 0 ? suggestions : null;
+  const chips = sugg && onSuggest
+    ? sugg.items.map((cmd) => (
+      <button
+        key={cmd}
+        type="button"
+        onPointerDown={(e) => { hold(e); onSuggest(cmd); }}
+        className="pl-sug"
+        title={cmd}
+        aria-label={`Complete: ${cmd}`}
+      >
+        <b>{sugg.prefix}</b>{cmd.slice(sugg.prefix.length)}
+      </button>
+    ))
+    : null;
   return (
-    <div className="shrink-0 h-11 flex items-center bg-bg-1 border-t border-line" role="toolbar" aria-label="Terminal keys">
-      <div className="shrink-0 h-11 flex items-center gap-[3px] px-[5px] border-r border-line">
-        {PINNED.map((k) => (
-          <button key={k.label} type="button" onPointerDown={(e) => { hold(e); sendInput(k.seq); }} className={`${KEY} w-[38px] h-10`} aria-label={k.aria}>
-            {k.label}
+    <div className="pl-keyrow" role="toolbar" aria-label="Terminal keys">
+      {keys && (
+        <div className="shrink-0 h-11 flex items-center gap-[3px] px-[5px] border-r border-line">
+          {PINNED.map((k) => (
+            <button key={k.label} type="button" onPointerDown={(e) => { hold(e); sendInput(k.seq); }} className={`${KEY} w-[38px] h-10`} aria-label={k.aria}>
+              {k.label}
+            </button>
+          ))}
+          {/* Soft keyboards have no Ctrl key, and a fixed ^X list can never
+              cover every combo. Disarms after one use. */}
+          <button
+            type="button"
+            onPointerDown={(e) => { hold(e); onToggleCtrl(); }}
+            aria-pressed={ctrlArmed}
+            aria-label="Control, applies to the next key"
+            className={`${KEY} w-[38px] h-10 ${ctrlArmed ? '!bg-accent-soft !text-accent-hi shadow-[inset_0_0_0_1px_rgba(61,220,151,0.4)]' : ''}`}
+          >
+            Ctrl
           </button>
-        ))}
-        {/* Soft keyboards have no Ctrl key, and a fixed ^X list can never
-            cover every combo. Disarms after one use. */}
-        <button
-          type="button"
-          onPointerDown={(e) => { hold(e); onToggleCtrl(); }}
-          aria-pressed={ctrlArmed}
-          aria-label="Control"
-          className={`${KEY} w-[38px] h-10 ${ctrlArmed ? '!bg-accent-soft !text-accent-hi shadow-[inset_0_0_0_1px_rgba(61,220,151,0.4)]' : ''}`}
-        >
-          Ctrl
-        </button>
-        {ARROWS.map((k) => (
-          <button key={k.aria} type="button" onPointerDown={(e) => { hold(e); sendInput(k.seq); }} className={`${KEY} w-[31px] h-10`} aria-label={k.aria}>
-            {k.icon}
-          </button>
-        ))}
-      </div>
+          {ARROWS.map((k) => (
+            <button key={k.aria} type="button" onPointerDown={(e) => { hold(e); sendInput(k.seq); }} className={`${KEY} w-[31px] h-10`} aria-label={k.aria}>
+              {k.icon}
+            </button>
+          ))}
+        </div>
+      )}
       <div
         className="flex-1 min-w-0 h-11 flex items-center gap-1 pl-1.5 pr-[18px] overflow-x-auto"
         style={{
@@ -135,22 +169,39 @@ export function KeyRow({ sendInput, ctrlArmed, onToggleCtrl, onOpenSnippets }: {
           maskImage: 'linear-gradient(90deg,#000 calc(100% - 18px),transparent)',
         }}
       >
-        <SpaceTrackpadKey sendInput={sendInput} />
+        {chips}
+        {chips && keys && <span className="shrink-0 w-px h-5 mx-1 bg-line-2" aria-hidden />}
+        {keys && (
+          <>
+            <SpaceTrackpadKey sendInput={sendInput} />
+            <button
+              type="button"
+              onPointerDown={(e) => { hold(e); onOpenSnippets(); }}
+              className={`${KEY} min-w-10 px-2.5 text-fg-2`}
+              title="Snippets: saved commands"
+              aria-label="Snippets"
+            >
+              <Braces className="w-4 h-4" strokeWidth={1.75} />
+            </button>
+            {MORE_KEYS.map((k) => (
+              <button key={k.label} type="button" onPointerDown={(e) => { hold(e); sendInput(k.seq); }} className={`${KEY} min-w-10 px-2.5`} aria-label={k.aria}>
+                {k.label}
+              </button>
+            ))}
+          </>
+        )}
+      </div>
+      {onHide && (
         <button
           type="button"
-          onPointerDown={(e) => { hold(e); onOpenSnippets(); }}
-          className={`${KEY} min-w-10 px-2.5 text-fg-2`}
-          title="Snippets: saved commands"
-          aria-label="Snippets"
+          onPointerDown={(e) => { hold(e); onHide(); }}
+          className="shrink-0 w-11 h-11 grid place-items-center text-fg-2 border-l border-line active:bg-bg-3"
+          aria-label="Hide the keyboard"
+          title="Hide the keyboard"
         >
-          <Braces className="w-4 h-4" strokeWidth={1.75} />
+          <ChevronDown className="w-4 h-4" strokeWidth={1.75} />
         </button>
-        {MORE_KEYS.map((k) => (
-          <button key={k.label} type="button" onPointerDown={(e) => { hold(e); sendInput(k.seq); }} className={`${KEY} min-w-10 px-2.5`} aria-label={k.aria}>
-            {k.label}
-          </button>
-        ))}
-      </div>
+      )}
     </div>
   );
 }

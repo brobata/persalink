@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo, type ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -7,19 +7,19 @@ import { SearchAddon } from '@xterm/addon-search';
 import { useAppStore } from '../stores/appStore';
 import { handleOsc52 } from '../lib/clipboardBridge';
 import { openExternal, promptOpen } from '../lib/linkOpen';
-import { ClaudeReplyPanel } from './ClaudeReplyPanel';
-import { Composer, wrapForPaste } from './Composer';
+import { ClaudeSheet, type ClaudeTab } from './ClaudeReplyPanel';
+import { Composer, wrapForPaste, type ComposerContext } from './Composer';
 import { ReaderMirror } from '../lib/readerMirror';
 import { isNativeShell } from '../lib/platform';
 import { hasPendingShare, SHARE_PENDING_OP } from '../lib/shareTarget';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { TerminalSettings } from './TerminalSettings';
 import { SnippetSheet } from './SnippetSheet';
-import { useVoiceInput } from '../lib/voiceInput';
+import { voiceSupported } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
-import { useAttentionOrder } from '../lib/sessionOrder';
+import { orderSessions, useAttentionOrder, waitingSessions } from '../lib/sessionOrder';
 import { ExitedTombstone } from './ExitedTombstone';
 import { KeyRow } from './ui/KeyRow';
 import { Sheet } from './ui/Sheet';
@@ -27,29 +27,24 @@ import { SessionRow } from './ui/SessionRow';
 import { StateGlyph } from './ui/StateGlyph';
 import { ProfileTile } from './ui/ProfileTile';
 import { IconButton } from './ui/IconButton';
-import { WaitPill } from './ui/WaitPill';
+import { PhoneHeader, HeaderFlash } from './ui/PhoneHeader';
 import { ConnectionReadout } from './ui/ConnectionReadout';
+import { Dock, type DockItem } from './ui/Dock';
+import { AnswerBar } from './ui/AnswerBar';
+import { useAnswerSend } from './ui/AnswerChips';
+import { readout } from '../lib/readout';
 import { ReconnectBanner } from './ui/Reconnect';
-import { countStates, groupSessions, needsSentence, sessionTitle, stateKey } from '../lib/sessionState';
-import { Check, ChevronLeft, ChevronRight, Copy, Ellipsis, Keyboard, Pencil, Plus, Search, SlidersHorizontal, TextSearch } from 'lucide-react';
+import { countStates, groupSessions, needsSentence, sessionTitle, stateKey, stateWord } from '../lib/sessionState';
+import {
+  ArrowDown, Braces, Check, ChevronDown, ChevronRight, ChevronUp, ClipboardCopy, ClipboardPaste, Copy, Ellipsis, Keyboard, Link,
+  MessageSquare, Mic, Pencil, Plus, Rows3, Search, SlidersHorizontal, SquarePlus, TextCursor, TextSearch, Upload, X,
+} from 'lucide-react';
 import { PANE_COMMAND_EVENT, PHONE_TERMINAL, type PaneCommandDetail } from '../lib/paneCommands';
-import { chipLabel, promptOnScreen } from '../lib/claudePrompt';
+import { isRedirectOption, promptOnScreen, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
 import { useGlobalShortcuts } from './ShortcutsPanel';
 import { MoreSheet, type MenuItem } from './ui/MoreSheet';
 import { useUiStore } from '../stores/uiStore';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
-
-// Arrow-key joystick (lives on the FAB — the terminal long-press belongs to
-// native text selection now): repeat interval by drag distance from the press
-// point — hold still to keep the current rate, drag further to shift up.
-const JOY_GEARS = [
-  { maxDist: 56, intervalMs: 180 },
-  { maxDist: 128, intervalMs: 90 },
-  { maxDist: Infinity, intervalMs: 45 },
-];
-const ARROW_SEQ = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' } as const;
-const JOY_HOLD_MS = 300;
-const JOY_ACTIVATE_PX = 14;
 
 function WindowTab({ w, windowCount }: { w: { index: number; name: string; active: boolean }; windowCount: number }) {
   const { selectWindow, killWindow, renameWindow } = useAppStore();
@@ -81,8 +76,8 @@ function WindowTab({ w, windowCount }: { w: { index: number; name: string; activ
 
   return (
     <div
-      className={`shrink-0 flex items-center gap-0.5 rounded-lg transition-colors ${
-        w.active ? 'bg-zinc-700' : ''
+      className={`shrink-0 flex items-center gap-0.5 rounded-[6px] transition-colors duration-(--d-press) ${
+        w.active ? 'bg-bg-3' : ''
       }`}
     >
       {editing ? (
@@ -95,7 +90,8 @@ function WindowTab({ w, windowCount }: { w: { index: number; name: string; activ
             if (e.key === 'Enter') commitRename();
             if (e.key === 'Escape') setEditing(false);
           }}
-          className="w-20 px-2 py-1.5 bg-zinc-800 border border-zinc-600 rounded text-xs text-zinc-100 outline-none"
+          aria-label="Window name"
+          className="w-24 h-8 px-2 bg-bg-term border border-line-2 rounded-[6px] text-meta text-fg-1 outline-none focus:border-accent/45"
           autoFocus
         />
       ) : (
@@ -105,8 +101,8 @@ function WindowTab({ w, windowCount }: { w: { index: number; name: string; activ
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
-          className={`px-3 py-2 text-sm transition-colors ${
-            w.active ? 'text-zinc-100' : 'text-zinc-500 active:text-zinc-300'
+          className={`h-9 px-3 text-body transition-colors duration-(--d-press) ${
+            w.active ? 'text-fg-1 font-medium' : 'text-fg-3 active:text-fg-1'
           }`}
         >
           {w.name}
@@ -115,10 +111,11 @@ function WindowTab({ w, windowCount }: { w: { index: number; name: string; activ
       {windowCount > 1 && (
         <button
           onClick={(e) => { e.stopPropagation(); killWindow(w.index); }}
-          className="px-1 py-1 text-zinc-600 active:text-red-400 transition-colors text-xs mr-0.5"
-          title="Close tab"
+          className="w-7 h-9 grid place-items-center text-fg-3 active:text-danger transition-colors duration-(--d-press)"
+          title={`Close window ${w.name}`}
+          aria-label={`Close window ${w.name}`}
         >
-          &times;
+          <X className="w-3.5 h-3.5" strokeWidth={1.75} />
         </button>
       )}
     </div>
@@ -383,33 +380,36 @@ function isPhysicalKeyEvent(e: KeyboardEvent): boolean {
     && !SOFT_KEYBOARD_CODES.has(e.code);
 }
 
-export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: boolean }) {
+export function TerminalScreen() {
   const {
-    attachedSession, sendInput, exitScroll, resize, detachSession, killSession,
-    initialScrollback, windows, selectWindow, createWindow, serverUrl, authToken,
-    sessions, activeTabId, switchTab, closeTab, showTabPicker, setShowTabPicker, getTabs,
-    attachSession, connectionState, requestLinks, sessionLinks, clearSessionLinks,
-    snippets, claudeReply, requestClaudeReply, clearClaudeReply,
+    attachedSession, sendInput, exitScroll, resize, detachSession,
+    windows, createWindow, serverUrl, authToken,
+    sessions, showTabPicker, setShowTabPicker,
+    connectionState, requestLinks, sessionLinks, clearSessionLinks,
+    claudeReply, requestClaudeReply, clearClaudeReply,
   } = useAppStore();
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const endedSession = useAppStore((s) => s.endedSession);
   const restartEnded = useAppStore((s) => s.restartEnded);
   const dismissEnded = useAppStore((s) => s.dismissEnded);
-  const openNextWaiting = useAppStore((s) => s.openNextWaiting);
   const openPalette = useUiStore((s) => s.openPalette);
   const openShortcuts = useUiStore((s) => s.openShortcuts);
   const ended = endedSession && endedSession.id === attachedSession?.id ? endedSession : null;
   // attachedSession is the snapshot taken at attach; state lives in the list.
   const liveAttached = sessions.find((s) => s.id === attachedSession?.id) ?? attachedSession;
   const isEnded = !!ended;
-  // Text-box composer (FAB → Message): write, edit, dictate, then send once.
-  const [composerOpen, setComposerOpen] = useState(false);
+  // The composer sheet: write or dictate, review, then send once. `listen`
+  // opens it with the mic on (Dictate); `redirectKey` is the "No, and tell
+  // Claude..." option, pressed only when the message is actually sent.
+  const [composer, setComposer] = useState<null | {
+    listen: boolean;
+    redirectKey?: string;
+    context: ComposerContext | null;
+  }>(null);
 
   // 'authenticated' is the only fully-usable state; anything else means input
   // won't reach the session, so surface it instead of dropping keystrokes silently.
   const online = connectionState === 'authenticated';
-
-  const tabs = useMemo(() => getTabs(), [sessions]);
 
   const [uploading, setUploading] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
@@ -418,72 +418,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   const [showStyleSheet, setShowStyleSheet] = useState(false);
   // Snippet library sheet (opened from the key bar's {} key).
   const [showSnippets, setShowSnippets] = useState(false);
-  // Quick-actions dial: one FAB that fans out keyboard / mic / paste /
-  // snippets + the first few var-free snippets as one-tap pills. Replaces the
-  // separate keyboard + mic buttons that were eating terminal real estate.
-  const [fabOpen, setFabOpen] = useState(false);
-  const quickSnips = useMemo(
-    () => snippets.filter((s) => !/\{\{[a-zA-Z0-9_ -]+\}\}/.test(s.command)).slice(0, 3),
-    [snippets],
-  );
-  // FAB joystick: hold the FAB ~a third of a second, then drag any direction
-  // for repeating arrow keys with the same speed gears the on-screen hold
-  // used to have. A plain tap still opens the dial; a joystick run suppresses
-  // that click on release.
-  const fabJoyRef = useRef({
-    armed: false, active: false, suppressClick: false,
-    startX: 0, startY: 0, lastX: 0, lastY: 0, gear: -1,
-    holdTimer: null as ReturnType<typeof setTimeout> | null,
-    tickTimer: null as ReturnType<typeof setTimeout> | null,
-  });
-  const fabJoyStop = useCallback(() => {
-    const j = fabJoyRef.current;
-    if (j.holdTimer) clearTimeout(j.holdTimer);
-    if (j.tickTimer) clearTimeout(j.tickTimer);
-    j.holdTimer = null;
-    j.tickTimer = null;
-    j.armed = false;
-    j.active = false;
-    j.gear = -1;
-  }, []);
-  const fabJoyDown = useCallback((e: ReactPointerEvent) => {
-    const j = fabJoyRef.current;
-    fabJoyStop();
-    j.suppressClick = false;
-    j.startX = e.clientX; j.startY = e.clientY;
-    j.lastX = e.clientX; j.lastY = e.clientY;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    j.holdTimer = setTimeout(() => {
-      j.holdTimer = null;
-      j.armed = true;
-      try { navigator.vibrate?.(15); } catch { /* unsupported */ }
-    }, JOY_HOLD_MS);
-  }, [fabJoyStop]);
-  const fabJoyMove = useCallback((e: ReactPointerEvent) => {
-    const j = fabJoyRef.current;
-    j.lastX = e.clientX; j.lastY = e.clientY;
-    if (!j.armed || j.active) return;
-    if (Math.hypot(e.clientX - j.startX, e.clientY - j.startY) <= JOY_ACTIVATE_PX) return;
-    j.active = true;
-    j.suppressClick = true;
-    const tick = () => {
-      const dx = j.lastX - j.startX;
-      const dy = j.lastY - j.startY;
-      const dist = Math.hypot(dx, dy);
-      const dir = Math.abs(dx) >= Math.abs(dy)
-        ? (dx >= 0 ? 'right' : 'left')
-        : (dy >= 0 ? 'down' : 'up');
-      sendInput(ARROW_SEQ[dir]);
-      const gear = JOY_GEARS.findIndex((g) => dist <= g.maxDist);
-      if (gear !== j.gear) {
-        j.gear = gear;
-        try { navigator.vibrate?.(8); } catch { /* unsupported */ }
-      }
-      j.tickTimer = setTimeout(tick, JOY_GEARS[gear].intervalMs);
-    };
-    tick();
-  }, [sendInput]);
-  useEffect(() => () => fabJoyStop(), [fabJoyStop]);
   // Hardware-keyboard detection (Titan etc.): soft IMEs composite text and don't emit
   // keydowns with real codes, so the first trusted one that does means a physical keyboard
   // exists. Deliberately NOT limited to letters and digits: reaching a symbol on the Titan
@@ -627,7 +561,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // auto-caps logic runs blind and inverts. A detected physical keyboard
   // keeps a real "text" connection — its IME is a thin helper, not a
   // screen-covering Gboard, so the original problem doesn't apply.
-  const [softKbOn, setSoftKbOn] = useState(false);
   const softKbOnRef = useRef(false);
   const hwKeyboardRef = useRef(hwKeyboard);
   hwKeyboardRef.current = hwKeyboard;
@@ -637,7 +570,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   }, []);
   const applySoftKb = useCallback((on: boolean) => {
     softKbOnRef.current = on;
-    setSoftKbOn(on);
     const term = terminalRef.current;
     const ta = term?.textarea;
     if (!ta) return;
@@ -657,6 +589,9 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     const mode = resolveInputMode(softKbOnRef.current);
     if (ta.inputMode === mode) return;
     ta.inputMode = mode;
+    // Only cycle a terminal that had focus: the first key typed into the
+    // palette or the composer flips detection and must stay there.
+    if (document.activeElement !== ta) return;
     ta.blur();
     term?.focus();
   }, [hwKeyboard, hwImeCompat, resolveInputMode]);
@@ -685,24 +620,6 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // Trailing scroll events (OS wheel inertia, in-flight touch momentum) right
   // after a jump would re-arm the button — ignore re-arms briefly.
   const suppressRearmUntilRef = useRef(0);
-  const [showKeyBar, setShowKeyBar] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('persalink-show-keybar') === 'true';
-  });
-  const toggleKeyBar = () => {
-    setShowKeyBar((v) => {
-      const next = !v;
-      try { localStorage.setItem('persalink-show-keybar', String(next)); } catch { /* private mode */ }
-      return next;
-    });
-  };
-  const voice = useVoiceInput(useCallback((text: string) => {
-    sendInput(text);
-  }, [sendInput]));
-  useEffect(() => {
-    if (!voice.error) return;
-    useAppStore.getState().pushNotification('error', voice.error, 'voice');
-  }, [voice.error]);
   // Android share sheet landed text in this app → offer it to the session the
   // user just attached. Tap-to-insert (never auto-typed — shared text can
   // contain newlines, which a shell would execute).
@@ -830,12 +747,349 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     }
   };
 
+  // ------------------------------------------------------------------
+  // Phone shell state: the header's second line, the answer bar, the key
+  // row and the dock, and the slide between sessions.
+  // ------------------------------------------------------------------
+  const rttMs = useAppStore((s) => s.rttMs);
+  const k = liveAttached ? stateKey(liveAttached) : null;
+  const title = attachedSession ? sessionTitle(attachedSession) : '';
+
+  // A short confirmation in the header's second line ("Sent to Olive").
+  const [flash, setFlash] = useState<{ text: string; id: number } | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const say = useCallback((text: string) => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setFlash({ text, id: Date.now() });
+    flashTimer.current = setTimeout(() => setFlash(null), 2000);
+  }, []);
+  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+
+  // The numbered question on screen, read shortly after output settles, and
+  // only while this session's agent waits.
+  const [prompt, setPrompt] = useState<ClaudePrompt | null>(null);
+  const watchPromptRef = useRef(false);
+  const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readPrompt = useCallback(() => {
+    const t = terminalRef.current;
+    const next = t && watchPromptRef.current ? promptOnScreen(t) : null;
+    setPrompt((cur) => {
+      const same = cur && next && cur.question === next.question && cur.options.length === next.options.length
+        && cur.options.every((o, i) => o.key === next.options[i].key && o.label === next.options[i].label);
+      return same ? cur : next;
+    });
+  }, []);
+  const schedulePromptRef = useRef<() => void>(() => {});
+  schedulePromptRef.current = () => {
+    if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+    promptTimerRef.current = setTimeout(readPrompt, 180);
+  };
+  useEffect(() => () => { if (promptTimerRef.current) clearTimeout(promptTimerRef.current); }, []);
+  const watching = k === 'waiting' && !isEnded;
+  useEffect(() => {
+    watchPromptRef.current = watching;
+    if (watching) schedulePromptRef.current();
+    else setPrompt(null);
+  }, [watching, attachedSession?.id]);
+
+  // One send rule: a chip sends at once; line 2 says "Answered: Yes · Stop" for 3s.
+  const { answer: sendAnswer, confirmation } = useAnswerSend(sendInput);
+
+  // The composer, opened by Dictate, the reply chip, or Alt+M.
+  const canDictate = useMemo(() => voiceSupported(), []);
+  const recentLines = useCallback((n: number): string[] => {
+    const t = terminalRef.current;
+    if (!t) return [];
+    const b = t.buffer.active;
+    const out: string[] = [];
+    for (let i = b.baseY + b.cursorY; i >= 0 && out.length < n; i--) {
+      const text = b.getLine(i)?.translateToString(true) ?? '';
+      const trimmed = text.trim();
+      // Skip blank rows, box frames and a bare prompt: what is left is what the session last said.
+      if (!trimmed || /^[╭╰│─]/.test(trimmed) || /^[>❯$%#]\s*$/.test(trimmed)) continue;
+      out.unshift(text.replace(/\s+$/, ''));
+    }
+    return out;
+  }, []);
+  const openComposer = useCallback((opts: { listen: boolean; redirectKey?: string }) => {
+    const s = useAppStore.getState().sessions.find((x) => x.id === attachedSession?.id) ?? attachedSession;
+    const p = watchPromptRef.current ? prompt : null;
+    let context: ComposerContext | null = null;
+    if (s && p && stateKey(s) === 'waiting') {
+      context = { kind: 'question', head: `${sessionTitle(s)} asks · ${stateWord(s)}`, question: p.question || 'Waiting for you' };
+    } else {
+      context = { kind: 'lines', label: `Last lines in ${s ? sessionTitle(s) : 'the session'}`, lines: recentLines(3) };
+    }
+    setComposer({ listen: opts.listen && canDictate, redirectKey: opts.redirectKey, context });
+  }, [attachedSession, prompt, canDictate, recentLines]);
+  // Reply in your own words. On a permission prompt that IS "No, and tell
+  // Claude what to do differently": Send presses that option first.
+  const openReply = useCallback(() => {
+    const redirect = prompt?.options.find(isRedirectOption);
+    openComposer({ listen: true, redirectKey: redirect?.key });
+  }, [prompt, openComposer]);
+
+  const answer = useCallback((o: PromptOption) => {
+    if (isRedirectOption(o)) { openReply(); return; }
+    sendAnswer(o);
+    setPrompt(null);
+    // Look again once the agent has had time to move on: if the question is
+    // still there (the key did not take), the bar comes back.
+    setTimeout(() => { if (watchPromptRef.current) readPrompt(); }, 1500);
+  }, [openReply, sendAnswer, readPrompt]);
+
+  const deliverText = useCallback((text: string, enter: boolean, redirectKey?: string) => {
+    const go = () => {
+      const bracketed = terminalRef.current?.modes.bracketedPasteMode ?? false;
+      sendInput(wrapForPaste(text, bracketed));
+      if (enter) setTimeout(() => sendInput('\r'), 60);
+    };
+    if (redirectKey) {
+      // Pick "No, and tell Claude..." and give its text field a moment to open.
+      sendInput(redirectKey);
+      setPrompt(null);
+      setTimeout(go, 300);
+    } else {
+      go();
+    }
+    say(enter ? `Sent to ${title}` : 'Inserted · press Enter to send');
+  }, [sendInput, say, title]);
+
+  // Claude: answer the question in full, or copy the last reply.
+  const [claudeTab, setClaudeTab] = useState<ClaudeTab | null>(null);
+  useEffect(() => {
+    // Copy from Claude asked for elsewhere (Alt+Y): show it.
+    if (claudeReply !== null && claudeTab === null) setClaudeTab('copy');
+  }, [claudeReply, claudeTab]);
+  const closeClaude = useCallback(() => { setClaudeTab(null); clearClaudeReply(); }, [clearClaudeReply]);
+
+  // Keys: the key row, and on a touch phone the soft keyboard with it. The
+  // keyboard's real presence comes from the visual viewport, so the dock
+  // folds away only while a soft keyboard actually covers the screen.
+  const [keysOn, setKeysOn] = useState(() => {
+    try { return localStorage.getItem('persalink-show-keybar') === 'true'; } catch { return false; }
+  });
+  const persistKeys = useCallback((on: boolean) => {
+    setKeysOn(on);
+    try { localStorage.setItem('persalink-show-keybar', String(on)); } catch { /* private mode */ }
+  }, []);
+  const [kbVisible, setKbVisible] = useState(false);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    let base = vv.height;
+    let width = window.innerWidth;
+    let shown = false;
+    const check = () => {
+      if (window.innerWidth !== width) { width = window.innerWidth; base = vv.height; }
+      base = Math.max(base, vv.height);
+      const now = base - vv.height > 120;
+      if (now === shown) return;
+      shown = now;
+      setKbVisible(now);
+      // Put away by the system (Back): the key row goes with it.
+      if (!now && softKbOnRef.current) {
+        applySoftKb(false);
+        persistKeys(false);
+      }
+    };
+    vv.addEventListener('resize', check);
+    return () => vv.removeEventListener('resize', check);
+  }, [applySoftKb, persistKeys]);
+  const keysShown = keysOn || kbVisible;
+  const toggleKeys = useCallback(() => {
+    const next = !keysShown;
+    persistKeys(next);
+    applySoftKb(next);
+  }, [keysShown, persistKeys, applySoftKb]);
+  const hideKeyboard = useCallback(() => {
+    persistKeys(false);
+    applySoftKb(false);
+  }, [persistKeys, applySoftKb]);
+
+  // ------------------------------------------------------------------
+  // Switching sessions slides. The outgoing terminal's own canvas is kept
+  // on screen (moved into the ghost layer) until the incoming session has
+  // painted, then it drops out in 90ms while the new one slides 24px in
+  // over 200ms. Never through an empty frame. Input is live at once.
+  // ------------------------------------------------------------------
+  const ghostRef = useRef<HTMLDivElement>(null);
+  const ghostTermRef = useRef<{ term: Terminal; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const slideDirRef = useRef(0);
+  const [titleSlide, setTitleSlide] = useState(0);
+  const revealRef = useRef<(() => void) | null>(null);
+  const headerTitleRef = useRef<HTMLDivElement>(null);
+  const swipedRef = useRef(false);
+  const swipeResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ringRef = useRef<string[]>([]);
+  const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /** The swipe order: frozen as sessions appear, so a position never moves under you. */
+  const ring = useCallback((): string[] => {
+    const list = useAppStore.getState().sessions;
+    const ids = new Set(list.map((s) => s.id));
+    const cur = ringRef.current.filter((id) => ids.has(id));
+    for (const s of orderSessions(list)) if (!cur.includes(s.id)) cur.push(s.id);
+    ringRef.current = cur;
+    return cur;
+  }, []);
+
+  const clearSwipeVisual = useCallback((animate: boolean) => {
+    const els = [headerTitleRef.current?.querySelector<HTMLElement>('.pl-ph-t'), termRef.current];
+    for (const el of els) {
+      if (!el || !el.style.transform) continue;
+      const from = el.style.transform;
+      const fromOpacity = el.style.opacity || '1';
+      el.style.transform = '';
+      el.style.opacity = '';
+      if (animate && !reducedMotion()) {
+        el.animate([{ transform: from, opacity: fromOpacity }, { transform: 'none', opacity: 1 }], { duration: 160, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
+      }
+    }
+  }, []);
+
+  const switchTo = useCallback((id: string, dir?: number) => {
+    const app = useAppStore.getState();
+    if (!id || id === app.attachedSession?.id) return;
+    const list = ring();
+    const d = dir ?? (list.indexOf(id) > list.indexOf(app.attachedSession?.id ?? '') ? 1 : -1);
+    slideDirRef.current = d;
+    setTitleSlide(d);
+    setFlash(null);
+    app.attachSession(id);
+    // An attach that never answers must not leave the screen pulled aside.
+    if (swipeResetRef.current) clearTimeout(swipeResetRef.current);
+    swipeResetRef.current = setTimeout(() => clearSwipeVisual(true), 1500);
+  }, [ring, clearSwipeVisual]);
+
+  const stepSession = useCallback((d: number): boolean => {
+    const list = ring();
+    const cur = useAppStore.getState().attachedSession?.id ?? '';
+    if (list.length < 2) return false;
+    const i = list.indexOf(cur);
+    const j = i < 0 ? 0 : (i + d + list.length) % list.length;
+    switchTo(list[j], d);
+    return true;
+  }, [ring, switchTo]);
+
+  const swipeMove = useCallback((dx: number) => {
+    if (reducedMotion()) return;
+    const t = headerTitleRef.current?.querySelector<HTMLElement>('.pl-ph-t');
+    if (t) t.style.transform = `translateX(${dx * 0.4}px)`;
+    const c = termRef.current;
+    if (c) {
+      c.style.transform = `translateX(${dx * 0.15}px)`;
+      c.style.opacity = String(1 - Math.min(Math.abs(dx) / 400, 0.35));
+    }
+  }, []);
+  const swipeEnd = useCallback((dx: number, threshold: number) => {
+    swipedRef.current = true;
+    setTimeout(() => { swipedRef.current = false; }, 60);
+    if (Math.abs(dx) > threshold && stepSession(dx < 0 ? 1 : -1)) return;
+    clearSwipeVisual(true);
+  }, [stepSession, clearSwipeVisual]);
+  const swipeRef = useRef({ move: swipeMove, end: swipeEnd });
+  swipeRef.current = { move: swipeMove, end: swipeEnd };
+
+  // The title swipes too (pointer events; the terminal's touch engine has its own).
+  useEffect(() => {
+    const el = headerTitleRef.current;
+    if (!el) return;
+    let x0 = 0; let y0 = 0; let dx = 0; let id: number | null = null; let lock: 'x' | 'y' | null = null;
+    const down = (e: PointerEvent) => {
+      if (e.button) return;
+      x0 = e.clientX; y0 = e.clientY; dx = 0; lock = null; id = e.pointerId;
+    };
+    const move = (e: PointerEvent) => {
+      if (id !== e.pointerId) return;
+      const ddx = e.clientX - x0;
+      const ddy = e.clientY - y0;
+      if (!lock) {
+        if (Math.abs(ddx) > 12 && Math.abs(ddx) > Math.abs(ddy) * 1.5) {
+          lock = 'x';
+          try { el.setPointerCapture(e.pointerId); } catch { /* optional */ }
+        } else if (Math.abs(ddy) > 10) lock = 'y';
+      }
+      if (lock !== 'x') return;
+      dx = ddx;
+      swipeRef.current.move(dx);
+    };
+    const up = (e: PointerEvent) => {
+      if (id !== e.pointerId) return;
+      id = null;
+      if (lock === 'x') swipeRef.current.end(dx, 56);
+      lock = null;
+    };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+    };
+  }, []);
+
+  // A new session on screen: the old one's sheets and drafts never follow it.
+  useEffect(() => {
+    setComposer(null);
+    setPrompt(null);
+    setClaudeTab(null);
+    if (swipeResetRef.current) { clearTimeout(swipeResetRef.current); swipeResetRef.current = null; }
+    const t = headerTitleRef.current?.querySelector<HTMLElement>('.pl-ph-t');
+    if (t) { t.style.transform = ''; t.style.opacity = ''; }
+  }, [attachedSession?.id]);
+
+  /** Drop the ghost and slide the new terminal in. */
+  const reveal = useCallback((dir: number) => {
+    const entry = ghostTermRef.current;
+    ghostTermRef.current = null;
+    const ghost = ghostRef.current;
+    const live = termRef.current;
+    const rm = reducedMotion();
+    const dx = dir * 24;
+    if (ghost && entry) {
+      const from = { transform: ghost.style.transform || 'none', opacity: ghost.style.opacity || '1' };
+      const anim = rm
+        ? ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 90, fill: 'forwards' })
+        : ghost.animate([
+          { opacity: Number(from.opacity), transform: from.transform },
+          { opacity: 0.12, transform: `translateX(${-dx * 0.5}px)`, offset: 0.3 },
+          { opacity: 0, transform: `translateX(${-dx}px)`, offset: 0.6 },
+          { opacity: 0, transform: `translateX(${-dx}px)` },
+        ], { duration: 90, easing: 'linear', fill: 'forwards' });
+      setTimeout(() => {
+        clearTimeout(entry.timer);
+        entry.term.dispose();
+        if (ghostRef.current === ghost && !ghostTermRef.current) {
+          ghost.replaceChildren();
+          ghost.style.transform = '';
+          ghost.style.opacity = '';
+        }
+        anim.cancel();
+      }, 100);
+    }
+    if (live) {
+      live.animate(
+        rm || !dx
+          ? [{ opacity: 0.4 }, { opacity: 1 }]
+          : [{ opacity: 0.4, transform: `translateX(${dx}px)` }, { opacity: 1, transform: 'none' }],
+        { duration: rm ? 120 : dx ? 200 : 160, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+      );
+    }
+  }, []);
+
   // Handle output events — only write if sessionId matches, otherwise buffer
   // until the matching terminal mounts (covers the attach handshake window).
   const handleOutput = useCallback((e: Event) => {
     const { data, sessionId } = (e as CustomEvent).detail;
     if (terminalRef.current && sessionId === sessionIdRef.current) {
-      terminalRef.current.write(data);
+      // The first paint of a session just switched to retires the ghost.
+      const fire = revealRef.current;
+      if (fire) terminalRef.current.write(data, () => requestAnimationFrame(fire));
+      else terminalRef.current.write(data);
     } else {
       const buf = pendingOutputRef.current;
       buf.push({ data, sessionId });
@@ -952,6 +1206,24 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     // Send initial size to server
     resize(term.cols, term.rows);
 
+    // Came from another session: hold its frame (the ghost) until this one
+    // paints its first output, or 450ms at most.
+    let revealTimer: ReturnType<typeof setTimeout> | null = null;
+    if (ghostTermRef.current) {
+      const dir = slideDirRef.current;
+      slideDirRef.current = 0;
+      let done = false;
+      const fire = () => {
+        if (done) return;
+        done = true;
+        if (revealTimer) clearTimeout(revealTimer);
+        if (revealRef.current === fire) revealRef.current = null;
+        reveal(dir);
+      };
+      revealRef.current = fire;
+      revealTimer = setTimeout(fire, 450);
+    }
+
     // Live-apply style changes (theme swatch taps, pinch-zoom font size…)
     // without re-attaching. Mirrors TerminalPane's subscription.
     const unsubStyle = useTerminalStyleStore.subscribe((next, prev) => {
@@ -982,12 +1254,16 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     terminalRef.current = term;
     if (pendingOutputRef.current.length > 0) {
       const targetId = sessionIdRef.current;
+      let wrote = false;
       for (const entry of pendingOutputRef.current) {
         if (entry.sessionId === targetId) {
           term.write(entry.data);
+          wrote = true;
         }
       }
       pendingOutputRef.current = [];
+      const fire = revealRef.current;
+      if (wrote && fire) term.write('', () => requestAnimationFrame(fire));
     }
 
     // Auto-copy on select. Modern API works on https/localhost; insecure
@@ -1315,6 +1591,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     const writeParsedDisp = term.onWriteParsed(() => {
       if (suggTimer) clearTimeout(suggTimer);
       suggTimer = setTimeout(updateSuggestions, 120);
+      if (watchPromptRef.current) schedulePromptRef.current();
     });
 
     // ------------------------------------------------------------------
@@ -1402,6 +1679,11 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     let pinching = false;
     let pinchStartDist = 0;
     let pinchStartSize = 0;
+    // A sideways drag slides to the next or previous session. It locks after
+    // 14px when clearly horizontal; a vertical drag stays a scroll.
+    let swipeLock: 'x' | 'y' | null = null;
+    let swipeDx = 0;
+    const SWIPE_COMMIT_PX = 72;
 
     // Pending tap-away keyboard dismiss (see the tap handler below).
     let kbDismissTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1442,6 +1724,8 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       }
       touchStartY = e.touches[0].clientY;
       touchStartX = e.touches[0].clientX;
+      swipeLock = null;
+      swipeDx = 0;
       lastMoveY = touchStartY;
       lastMoveTime = performance.now();
       touchStartTime = lastMoveTime;
@@ -1480,6 +1764,19 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       const t = e.touches[0];
       const y = t.clientY;
 
+      if (!swipeLock) {
+        const ddx = t.clientX - touchStartX;
+        const ddy = y - touchStartY;
+        if (Math.abs(ddx) > 14 && Math.abs(ddx) > Math.abs(ddy) * 1.5) swipeLock = 'x';
+        else if (Math.abs(ddy) > 10) swipeLock = 'y';
+      }
+      if (swipeLock === 'x') {
+        if (tapCandidate) { tapCandidate = false; disarmReader(); }
+        swipeDx = t.clientX - touchStartX;
+        swipeRef.current.move(swipeDx);
+        return;
+      }
+
       if (tapCandidate
         && Math.hypot(t.clientX - touchStartX, y - touchStartY) > TAP_SLOP_PX) {
         tapCandidate = false;
@@ -1507,6 +1804,12 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         return;
       }
       cancelLongPress();
+      if (swipeLock === 'x') {
+        swipeLock = null;
+        velocity = 0;
+        swipeRef.current.end(swipeDx, SWIPE_COMMIT_PX);
+        return;
+      }
       // The OS selection may have landed before its selectionchange task ran
       // — check directly so this lift isn't mistaken for a tap or a fling.
       syncReader();
@@ -1745,23 +2048,50 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
       if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
       if (compositionWatchdog) clearTimeout(compositionWatchdog);
       cancelKbDismiss();
+      if (revealTimer) clearTimeout(revealTimer);
+      revealRef.current = null;
       terminalRef.current = null;
-      term.dispose();
+      // Switching to another session (the screen stays): keep this frame on
+      // screen as the ghost until the next one paints. Unmounting: just go.
+      const ghost = ghostRef.current;
+      const el = term.element;
+      if (ghost && ghost.isConnected && el) {
+        const prev = ghostTermRef.current;
+        if (prev) { clearTimeout(prev.timer); prev.term.dispose(); }
+        ghost.getAnimations().forEach((a) => a.cancel());
+        ghost.replaceChildren(el);
+        ghost.style.transform = container.style.transform;
+        ghost.style.opacity = container.style.opacity;
+        container.style.transform = '';
+        container.style.opacity = '';
+        // Safety net: a reveal that never comes still frees the old terminal.
+        ghostTermRef.current = { term, timer: setTimeout(() => { if (ghostTermRef.current?.term === term) reveal(0); }, 1500) };
+      } else {
+        term.dispose();
+      }
     };
   }, [attachedSession?.id]);
 
   // The palette and the keyboard reach this terminal through pane commands
   // (lib/paneCommands), addressed to PHONE_TERMINAL.
+  const paneRef = useRef({ answer, openComposer, stepSession });
+  paneRef.current = { answer, openComposer, stepSession };
   useEffect(() => {
     const onCommand = (e: Event) => {
       const { paneId, command, data } = (e as CustomEvent<PaneCommandDetail>).detail;
       if (paneId !== PHONE_TERMINAL) return;
       const app = useAppStore.getState();
+      if (command === 'step') {
+        // Alt+[ / Alt+]: the same ring and the same slide as a swipe.
+        if (!paneRef.current.stepSession(data === '-1' ? -1 : 1)) return;
+        e.preventDefault();
+        return;
+      }
       if (!app.attachedSession || app.endedSession) return;
       switch (command) {
-        case 'composer': setComposerOpen(true); break;
+        case 'composer': paneRef.current.openComposer({ listen: false }); break;
         case 'links': requestLinks(); break;
-        case 'claude': requestClaudeReply(); break;
+        case 'claude': setClaudeTab('copy'); break;
         case 'upload': if (filesDisabled) return; fileInputRef.current?.click(); break;
         case 'snippets': setShowSnippets(true); break;
         case 'find': setShowSearch(true); break;
@@ -1774,9 +2104,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
         case 'answer': {
           const option = data && terminalRef.current ? promptOnScreen(terminalRef.current)?.options.find((o) => o.key === data) : undefined;
           if (!option) return;
-          sendInput(option.key);
-          app.pushNotification('info', `Answered: ${chipLabel(option)}`);
-          terminalRef.current?.focus();
+          paneRef.current.answer(option);
           break;
         }
         default: return;
@@ -1785,7 +2113,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     };
     window.addEventListener(PANE_COMMAND_EVENT, onCommand);
     return () => window.removeEventListener(PANE_COMMAND_EVENT, onCommand);
-  }, [requestLinks, requestClaudeReply, sendInput, filesDisabled]);
+  }, [requestLinks, sendInput, filesDisabled]);
 
   // A hardware keyboard (the Titan) gets the invisible Alt set and digit
   // answers; nothing is drawn for it.
@@ -1794,9 +2122,21 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
   // More: the terminal's less frequent tools, and the one place the phone
   // lists its keyboard shortcuts.
   const [showMore, setShowMore] = useState(false);
+  const openTextView = () => {
+    const r = readerRef.current;
+    if (!r) return;
+    if (r.active) r.dispose();
+    else if (r.open()) terminalRef.current?.blur();
+  };
   const moreItems: MenuItem[] = [
     { id: 'palette', icon: <Search />, label: 'Search everything', run: () => openPalette() },
+    { id: 'copy', icon: <ClipboardCopy />, label: 'Copy from Claude', run: () => setClaudeTab('copy') },
+    { id: 'upload', icon: <Upload />, label: 'Upload a file', sub: title ? `into ${title}` : undefined, hidden: filesDisabled, run: () => fileInputRef.current?.click() },
+    { id: 'paste', icon: <ClipboardPaste />, label: 'Paste', run: () => { void pasteFromClipboard(); } },
+    { id: 'links', icon: <Link />, label: 'Links in this session', run: () => requestLinks() },
+    { id: 'textview', icon: <TextCursor />, label: 'Select text', sub: 'hold a word, like a web page', run: openTextView },
     { id: 'find', icon: <TextSearch />, label: 'Find in output', run: () => setShowSearch(true) },
+    { id: 'window', icon: <SquarePlus />, label: 'New window', sub: 'in this session', run: () => createWindow() },
     { id: 'tsettings', icon: <SlidersHorizontal />, label: 'Terminal settings', run: () => setShowStyleSheet(true) },
     { id: 'shortcuts', icon: <Keyboard />, label: 'Keyboard shortcuts', sub: 'for a phone with keys', run: () => openShortcuts() },
   ];
@@ -1806,161 +2146,86 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
     if (isEnded) terminalRef.current?.blur();
   }, [isEnded]);
 
+  // ------------------------------------------------------------------ render
+  const r = readout(connectionState, rttMs);
+  const glyphState = isEnded ? 'exited' : liveAttached ? stateKey(liveAttached, { offline: !online }) : 'idle';
+  let line2: ReactNode;
+  if (confirmation) {
+    line2 = (
+      <HeaderFlash action={(
+        <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={confirmation.stop} title="Press Esc in the session to interrupt what was just approved">
+          Stop
+        </button>
+      )}>
+        {confirmation.text}
+      </HeaderFlash>
+    );
+  } else if (flash) {
+    line2 = <HeaderFlash key={flash.id}>{flash.text}</HeaderFlash>;
+  } else if (uploading) {
+    line2 = <HeaderFlash>Uploading…</HeaderFlash>;
+  } else if (isEnded) {
+    line2 = <span className="st k-exited">Ended</span>;
+  } else if (!online) {
+    line2 = <span className="st k-disconnected">{r.text === 'offline' ? 'Offline' : 'Reconnecting'}</span>;
+  } else if (liveAttached && k) {
+    line2 = (
+      <>
+        <span className={`st k-${k}`}>{stateWord(liveAttached, k)}</span>
+        <span className="sep" aria-hidden>·</span>
+        <span className={`shrink-0 font-mono text-micro tnum ${r.kind === 'slow' ? 'text-fg-1' : ''}`}>{r.text}</span>
+      </>
+    );
+  }
+
+  const answerShown = !!(prompt && watching && !confirmation);
+  const waitingElsewhere = waitingSessions(sessions).filter((s) => s.id !== attachedSession?.id).length;
+  const dockItems: DockItem[] = [
+    { id: 'sessions', icon: <Rows3 />, label: 'Sessions', badge: waitingElsewhere, onPress: () => setShowSwitcher(true) },
+    { id: 'keys', icon: <Keyboard />, label: 'Keys', on: keysShown, onPress: toggleKeys, aria: keysShown ? 'Hide the keys' : 'Show the keys' },
+    {
+      id: 'dictate',
+      icon: canDictate ? <Mic /> : <MessageSquare />,
+      label: canDictate ? 'Dictate' : 'Message',
+      // One accent per screen: while the answer bar shows, its first chip is it.
+      primary: !answerShown && !isEnded,
+      onPress: () => openComposer({ listen: canDictate }),
+    },
+    { id: 'snippets', icon: <Braces />, label: 'Snippets', onPress: () => setShowSnippets(true) },
+    { id: 'more', icon: <Ellipsis />, label: 'More', onPress: () => setShowMore(true) },
+  ];
+  const term = terminalRef.current;
+
   return (
-    <div className="flex flex-col h-full min-w-0 bg-[#09090b]">
-      {/* Top bar — fixed height prevents scrollbar jitter from resizing the terminal */}
-      <div className="shrink-0 flex items-center px-2 pt-[max(10px,env(safe-area-inset-top))] pb-1.5 bg-zinc-900 border-b border-zinc-800 gap-1 overflow-hidden">
-        {/* Back button — mobile only */}
-        {!sidebarVisible && (
-          <button
-            type="button"
-            onClick={detachSession}
-            aria-label="Home"
-            title="Home"
-            className="pl-ib shrink-0 w-9"
-          >
-            <ChevronLeft className="w-[18px] h-[18px]" strokeWidth={1.75} />
-          </button>
-        )}
+    <div className="flex flex-col h-full min-w-0 bg-bg-0">
+      <PhoneHeader
+        ref={headerTitleRef}
+        onBack={detachSession}
+        glyph={liveAttached ? <StateGlyph state={glyphState} live label={isEnded ? 'Ended' : undefined} /> : undefined}
+        name={title}
+        line2={line2}
+        onTitle={() => { if (!swipedRef.current) setShowSwitcher(true); }}
+        titleLabel={attachedSession ? `Switch session. ${title}` : 'Switch session'}
+        titleKey={attachedSession?.id}
+        slide={titleSlide}
+        sessions={sessions}
+        currentId={attachedSession?.id ?? null}
+        onJumpWaiting={(s) => switchTo(s.id)}
+        onSearch={() => openPalette()}
+      />
 
-        {/* Mobile: tap the active session to open the quick switcher — jump
-            between live agents without a trip back to the home screen. */}
-        {!sidebarVisible && (
-          <button
-            onClick={() => setShowSwitcher(true)}
-            aria-label={attachedSession ? `Switch session. ${sessionTitle(attachedSession)}` : 'Switch session'}
-            className="flex items-center gap-1.5 flex-1 min-w-0 px-1.5 py-1 active:bg-bg-3 rounded-[6px] transition-colors"
-          >
-            {liveAttached && (
-              <StateGlyph
-                state={isEnded ? 'exited' : stateKey(liveAttached, { offline: !online })}
-                live
-                label={isEnded ? 'Ended' : undefined}
-              />
-            )}
-            {/* Line 1 the name; while the link is down, line 2 says
-                "reconnecting" (the glyph beside it already carries the dot). */}
-            <span className="flex flex-col items-start min-w-0">
-              <span className="max-w-full truncate text-body font-medium text-fg-1">
-                {attachedSession ? sessionTitle(attachedSession) : ''}
-              </span>
-              {!online && <ConnectionReadout dot={false} className="max-w-full leading-[14px]" />}
-            </span>
-          </button>
-        )}
-
-        {/* Desktop: show active session name + spacer */}
-        {sidebarVisible && (
-          <div className="flex-1 px-2 text-xs text-zinc-500 truncate">
-            {attachedSession?.profileName || attachedSession?.name || ''}
-          </div>
-        )}
-
-        {/* Connection health — only shown when not fully connected. On the
-            phone it rides in the title (line 2) instead. */}
-        {sidebarVisible && !online && <ConnectionReadout className="shrink-0 px-1" />}
-
-        {/* Upload */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          onChange={handleFileUpload}
-          className="hidden"
-        />
-        <button
-          onPointerDown={(e) => e.preventDefault()}
-          onClick={() => openPalette()}
-          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Search sessions and commands"
-          aria-label="Search sessions and commands"
-        >
-          <Search className="w-4 h-4" strokeWidth={2} />
-        </button>
-        <button
-          onPointerDown={(e) => { e.preventDefault(); requestClaudeReply(); }}
-          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Copy from Claude — last reply and its code blocks"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-          </svg>
-        </button>
-        <button
-          onPointerDown={(e) => { e.preventDefault(); requestLinks(); }}
-          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Recent links — whole, even when wrapped"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.172 13.828a4 4 0 010-5.656l3-3a4 4 0 015.656 5.656l-1.5 1.5" />
-          </svg>
-        </button>
-        <button
-          onPointerDown={(e) => { e.preventDefault(); pasteFromClipboard(); }}
-          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Paste from clipboard"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-          </svg>
-        </button>
-        <button
-          onPointerDown={(e) => {
-            e.preventDefault();
-            const r = readerRef.current;
-            if (!r) return;
-            if (r.active) r.dispose();
-            else if (r.open()) terminalRef.current?.blur();
-          }}
-          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Text view — hold a word to select, like a web page"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h10M4 14h16M4 18h10" />
-          </svg>
-        </button>
-        <button
-          onPointerDown={(e) => { e.preventDefault(); toggleKeyBar(); }}
-          className={`shrink-0 px-2 py-2 transition-colors ${
-            showKeyBar ? 'text-zinc-200' : 'text-zinc-500 active:text-zinc-300'
-          }`}
-          title="Terminal keys bar (arrows, Esc, Tab, Ctrl)"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <rect x="2" y="6" width="20" height="12" rx="2" />
-            <path strokeLinecap="round" d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h12" />
-          </svg>
-        </button>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-          hidden={filesDisabled}
-          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="Upload file"
-        >
-          {uploading ? (
-            <span className="w-4 h-4 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin inline-block" />
-          ) : (
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-            </svg>
-          )}
-        </button>
-        <button
-          onPointerDown={(e) => e.preventDefault()}
-          onClick={() => setShowMore(true)}
-          className="shrink-0 px-2 py-2 text-zinc-500 active:text-zinc-300 transition-colors"
-          title="More"
-          aria-label="More"
-        >
-          <Ellipsis className="w-4 h-4" strokeWidth={2} />
-        </button>
-      </div>
+      {/* Upload (More, Alt+U) */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        onChange={handleFileUpload}
+        className="hidden"
+      />
 
       {/* Find-in-scrollback bar */}
       {showSearch && (
-        <div className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 bg-zinc-900 border-b border-zinc-800">
+        <div className="shrink-0 flex items-center gap-1 px-2 py-1.5 bg-bg-1 border-b border-line">
           <input
             value={searchQuery}
             onChange={(e) => runSearch(e.target.value, true)}
@@ -1969,64 +2234,50 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
               if (e.key === 'Escape') closeSearch();
             }}
             placeholder="Find in output…"
+            aria-label="Find in output"
             autoFocus
             autoCapitalize="none"
             autoCorrect="off"
-            className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
+            className="flex-1 min-w-0 h-9 px-3 bg-bg-term border border-line-2 rounded-[6px] text-body text-fg-1 placeholder:text-fg-3 outline-none focus:border-accent/45"
           />
-          <span className="shrink-0 text-[11px] text-zinc-500 w-12 text-center">
+          <span className="shrink-0 w-12 text-center text-micro text-fg-3 tnum">
             {searchCount ? `${searchCount.current}/${searchCount.total}` : searchQuery ? '0' : ''}
           </span>
-          <button
-            onPointerDown={(e) => { e.preventDefault(); searchAddonRef.current?.findPrevious(searchQuery, SEARCH_DECOR); }}
-            className="shrink-0 px-2 py-1.5 text-zinc-400 active:text-zinc-100"
-            title="Previous match"
-          >
-            ↑
-          </button>
-          <button
-            onPointerDown={(e) => { e.preventDefault(); searchAddonRef.current?.findNext(searchQuery, SEARCH_DECOR); }}
-            className="shrink-0 px-2 py-1.5 text-zinc-400 active:text-zinc-100"
-            title="Next match"
-          >
-            ↓
-          </button>
-          <button
-            onPointerDown={(e) => { e.preventDefault(); closeSearch(); }}
-            className="shrink-0 px-2 py-1.5 text-zinc-500 active:text-zinc-300"
-            title="Close search"
-          >
-            &times;
-          </button>
+          <IconButton label="Previous match" onPointerDown={(e) => e.preventDefault()} onClick={() => searchAddonRef.current?.findPrevious(searchQuery, SEARCH_DECOR)}>
+            <ChevronUp className="w-4 h-4" strokeWidth={1.75} />
+          </IconButton>
+          <IconButton label="Next match" onPointerDown={(e) => e.preventDefault()} onClick={() => searchAddonRef.current?.findNext(searchQuery, SEARCH_DECOR)}>
+            <ChevronDown className="w-4 h-4" strokeWidth={1.75} />
+          </IconButton>
+          <IconButton label="Close find" onPointerDown={(e) => e.preventDefault()} onClick={closeSearch}>
+            <X className="w-4 h-4" strokeWidth={1.75} />
+          </IconButton>
         </div>
       )}
 
       {/* Window tabs — only show when session has multiple windows */}
       {windows.length > 1 && (
-        <div className="shrink-0 flex items-center px-2 py-1 bg-zinc-900/50 border-b border-zinc-800/50 gap-1">
+        <div className="shrink-0 flex items-center px-2 py-1 bg-bg-1 border-b border-line gap-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
           {windows.map((w) => (
             <WindowTab key={w.index} w={w} windowCount={windows.length} />
           ))}
-          <button
-            onClick={() => createWindow()}
-            className="shrink-0 px-2.5 py-1.5 text-xs text-zinc-600 active:text-zinc-400 transition-colors"
-          >
-            +
-          </button>
+          <IconButton label="New window" onClick={() => createWindow()}>
+            <Plus className="w-4 h-4" strokeWidth={1.75} />
+          </IconButton>
         </div>
       )}
 
       {/* Terminal — absolute positioning gives xterm.js real pixel dimensions */}
       <div
-        className="flex-1 min-h-0 relative"
+        className="flex-1 min-h-0 relative overflow-hidden bg-bg-term"
         onClick={() => {
           // Ended: nothing to type into, so don't raise the keyboard.
           if (useAppStore.getState().endedSession) return;
-          const r = readerRef.current;
-          if (r?.active) {
+          const rd = readerRef.current;
+          if (rd?.active) {
             // A tap on the text page with nothing selected closes it; with a
             // selection the OS collapses it and selectionchange closes it.
-            if (!r.hasSelection()) r.dispose();
+            if (!rd.hasSelection()) rd.dispose();
             return;
           }
           terminalRef.current?.focus();
@@ -2036,43 +2287,32 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
           ref={termRef}
           className={`absolute inset-0 overflow-hidden transition-opacity duration-200 ${ended ? 'opacity-50' : ''}`}
         />
+        {/* The session just left, held until this one paints. */}
+        <div ref={ghostRef} className="pl-term-ghost" aria-hidden inert />
         {ended && <ExitedTombstone ended={ended} onRestart={restartEnded} onDismiss={dismissEnded} />}
-        {/* Next waiting — the agent that has waited longest for you, one tap
-            away. Floats at the top edge (old scrollback, never the prompt rows
-            at the bottom) until the phone header gets room for it. */}
-        {!sidebarVisible && (
-          <WaitPill
-            variant="phone"
-            sessions={sessions}
-            currentId={attachedSession?.id ?? null}
-            onJump={() => openNextWaiting()}
-            className="absolute top-2 right-2 z-20 shadow-(--e-2-shadow) bg-bg-2! motion-safe:animate-pop"
-          />
-        )}
         {/* Input-debug overlay — raw events, newest at the bottom */}
         {inputDebug && (
-          <div className="absolute left-2 top-2 z-40 pointer-events-none rounded-lg bg-black/80 px-2.5 py-2 font-mono text-[11px] leading-4 text-emerald-300 max-w-[75vw] break-words">
+          <div className="absolute left-2 top-2 z-40 pointer-events-none rounded-[10px] bg-black/80 px-2.5 py-2 font-mono text-[11px] leading-4 text-accent-hi max-w-[75vw] break-words">
             {debugLog.length === 0
-              ? <div className="text-zinc-500">input debug — waiting for events…</div>
+              ? <div className="text-fg-3">input debug — waiting for events…</div>
               : debugLog.map((l, i) => <div key={i}>{l.msg}{l.n > 1 ? ` ×${l.n}` : ''}</div>)}
           </div>
         )}
-        {/* Jump to live — escapes tmux copy-mode/scrollback back to the prompt.
-            Discoverable counterpart to typing (which auto-exits server-side). */}
+        {/* Jump to the newest output — escapes tmux copy-mode/scrollback back
+            to the prompt. Typing does the same (server-side). */}
         {scrolledUp && (
           <button
+            type="button"
             onPointerDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
               jumpToLive();
             }}
-            className="absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3.5 h-9 rounded-full bg-zinc-700/95 text-zinc-100 text-xs font-medium shadow-lg active:bg-zinc-600"
-            style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
+            className="pl-latest"
+            aria-label="Jump to the newest output"
+            title="Jump to the newest output"
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-            </svg>
-            Jump to live
+            <ArrowDown className="w-4 h-4" strokeWidth={1.75} />
           </button>
         )}
         {/* Paste catcher — the clipboard API refused (plain-http server or a
@@ -2082,13 +2322,12 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
             edited here. Keyboard suppressed so the sheet doesn't jump. */}
         {pasteCatcher && (
           <div
-            className="absolute inset-x-3 z-40 rounded-xl bg-zinc-800 border border-sky-500/60 shadow-2xl p-3"
-            style={{ top: 12 }}
+            className="absolute inset-x-3 top-3 z-40 rounded-[10px] bg-bg-2 border border-line-2 shadow-(--e-2-shadow) p-3"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="text-[11px] leading-snug text-zinc-400 mb-2">
-              This server is plain http, so the clipboard is locked to the page. Hold the box and choose <span className="text-zinc-200 font-medium">Paste</span>.
+            <div className="text-meta text-fg-2 mb-2">
+              This server is plain http, so the clipboard is locked to the page. Hold the box and choose <span className="text-fg-1 font-medium">Paste</span>.
             </div>
             <div
               ref={pasteCatcherRef}
@@ -2097,7 +2336,7 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
               inputMode="none"
               spellCheck={false}
               autoCapitalize="off"
-              className="min-h-11 rounded-lg bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 border border-zinc-700 outline-none focus:border-sky-500"
+              className="min-h-11 rounded-[6px] bg-bg-term px-3 py-2.5 font-mono text-[13px] text-fg-1 border border-line-2 outline-none focus:border-accent/45"
               onBeforeInput={(e) => e.preventDefault()}
               onPaste={(e) => {
                 e.preventDefault();
@@ -2108,230 +2347,120 @@ export function TerminalScreen({ sidebarVisible = false }: { sidebarVisible?: bo
               }}
             />
             <div className="flex justify-end mt-2">
-              <button
-                onClick={() => { setPasteCatcher(false); terminalRef.current?.focus(); }}
-                className="h-9 px-3.5 text-[13px] text-zinc-300 rounded-lg bg-zinc-700 active:bg-zinc-600"
-              >
+              <button type="button" className="pl-btn" onClick={() => { setPasteCatcher(false); terminalRef.current?.focus(); }}>
                 Cancel
               </button>
             </div>
           </div>
         )}
-        {/* Quick-actions dial — ONE floating button instead of keyboard + mic
-            side by side. Tap fans out keyboard / mic / paste / snippets plus
-            one-tap pills for the first few var-free snippets. While dictation
-            is live the collapsed FAB becomes the pulsing red mic (tap = stop),
-            same single-tap stop as the old dedicated button. Every control
-            preventDefaults pointer/mouse down so the terminal keeps focus
-            (the focus-steal that once killed desktop Ctrl+C). */}
         {/* A long link drop: the inline banner, docked over the bottom rows. */}
-        {!sidebarVisible && <ReconnectBanner docked />}
-        {fabOpen && (
-          <div className="fixed inset-0 z-10" onClick={() => setFabOpen(false)} />
-        )}
-        {fabOpen && (
-          <div
-            className="absolute right-3 z-20 flex flex-col items-end gap-2"
-            style={{ bottom: 'calc(max(12px, env(safe-area-inset-bottom)) + 3.5rem)' }}
-          >
-            {quickSnips.map((s, i) => (
-              <button
-                key={s.id}
-                onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => { sendInput(s.command); setFabOpen(false); }}
-                className="pl-fab-item max-w-[70vw] truncate px-3 py-2 rounded-full bg-zinc-800/95 border border-zinc-700 text-zinc-200 text-xs font-mono shadow-lg active:bg-zinc-700"
-                style={{ animationDelay: `${100 + (quickSnips.length - 1 - i) * 30}ms` }}
-                title={s.command}
-              >
-                {s.name || s.command}
-              </button>
-            ))}
-            <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '75ms' }}>
-              <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Snippets</span>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => { setShowSnippets(true); setFabOpen(false); }}
-                className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700 font-mono text-sm"
-                aria-label="Snippet library"
-              >
-                {'{}'}
-              </button>
-            </div>
-            <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '60ms' }}>
-              <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Message</span>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => { setComposerOpen(true); setFabOpen(false); }}
-                className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700"
-                aria-label="Write a message"
-              >
-                <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12c0 4.418-4.03 8-9 8a9.86 9.86 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
-              </button>
-            </div>
-            <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '50ms' }}>
-              <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Paste</span>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => { void pasteFromClipboard(); setFabOpen(false); }}
-                className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700"
-                aria-label="Paste from clipboard"
-              >
-                <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-              </button>
-            </div>
-            {voice.isSupported && (
-              <div className="pl-fab-item flex items-center gap-2" style={{ animationDelay: '25ms' }}>
-                <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Dictate</span>
-                <button
-                  onMouseDown={(e) => e.preventDefault()}
-                  onPointerDown={(e) => e.preventDefault()}
-                  onClick={() => { voice.toggle(); setFabOpen(false); }}
-                  className="w-10 h-10 rounded-full shadow-lg flex items-center justify-center bg-zinc-800/95 text-zinc-300 active:bg-zinc-700"
-                  aria-label="Start dictation"
-                >
-                  <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
-                  </svg>
-                </button>
-              </div>
-            )}
-            {/* Hidden on hardware-keyboard devices (Titan): Android suppresses
-                the soft keyboard there, so the toggle visibly does nothing. */}
-            {!sidebarVisible && !hwKeyboard && (
-              <div className="pl-fab-item flex items-center gap-2">
-                <span className="px-2 py-1 rounded-md bg-zinc-900/90 text-[11px] text-zinc-400 shadow">Soft keyboard</span>
-                <button
-                  onMouseDown={(e) => e.preventDefault()}
-                  onPointerDown={(e) => e.preventDefault()}
-                  onClick={() => { applySoftKb(!softKbOn); setFabOpen(false); }}
-                  className={`w-10 h-10 rounded-full shadow-lg flex items-center justify-center ${
-                    softKbOn ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/40' : 'bg-zinc-800/95 text-zinc-300 active:bg-zinc-700'
-                  }`}
-                  aria-label={softKbOn ? 'Hide soft keyboard' : 'Show soft keyboard'}
-                >
-                  <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <rect x="2" y="6" width="20" height="12" rx="2" />
-                    <path strokeLinecap="round" d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
-                  </svg>
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-        <button
-          onMouseDown={(e) => e.preventDefault()}
-          onPointerDown={(e) => { e.preventDefault(); fabJoyDown(e); }}
-          onPointerMove={fabJoyMove}
-          onPointerUp={fabJoyStop}
-          onPointerCancel={fabJoyStop}
-          onClick={() => {
-            if (fabJoyRef.current.suppressClick) { fabJoyRef.current.suppressClick = false; return; }
-            if (!fabOpen && voice.isListening) voice.toggle(); // red mic = tap to stop
-            else setFabOpen((v) => !v);
-          }}
-          className={`absolute right-3 z-20 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-colors ${
-            voice.isListening && !fabOpen
-              ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/50'
-              : softKbOn && !fabOpen && !hwKeyboard
-                ? 'bg-accent-soft text-accent-hi ring-1 ring-accent/40'
-                : 'bg-zinc-800/90 text-zinc-300 active:bg-zinc-700'
-          }`}
-          style={{ bottom: 'max(12px, env(safe-area-inset-bottom))', touchAction: 'none' }}
-          title={voice.isListening && !fabOpen ? 'Stop dictation' : fabOpen ? 'Close' : 'Quick actions (hold + drag = arrows)'}
-          aria-label={voice.isListening && !fabOpen ? 'Stop dictation' : fabOpen ? 'Close quick actions' : 'Quick actions'}
-        >
-          {voice.isListening && !fabOpen ? (
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
-            </svg>
-          ) : (
-            <svg
-              className={`w-5 h-5 transition-transform duration-150 ${fabOpen ? 'rotate-45' : ''}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-            >
-              <path strokeLinecap="round" d="M12 5v14M5 12h14" />
-            </svg>
-          )}
-        </button>
+        <ReconnectBanner docked />
       </div>
 
-      {/* Suggestion bar — tap a chip to complete the current command */}
-      {!sidebarVisible && sugg.items.length > 0 && (
-        <div className="shrink-0 flex gap-1.5 px-2 py-1.5 bg-zinc-900/90 border-t border-zinc-800 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-          {sugg.items.map((cmd) => (
-            <button
-              key={cmd}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                sendInput(cmd.slice(sugg.prefix.length));
-                setSugg({ prefix: '', items: [] });
-              }}
-              className="shrink-0 max-w-[75vw] truncate px-3 py-1.5 text-xs font-mono bg-zinc-800 text-zinc-300 rounded-full active:bg-zinc-600 select-none"
-            >
-              <span className="text-zinc-500">{sugg.prefix}</span>
-              {cmd.slice(sugg.prefix.length)}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Text-box composer — sends the message as one paste + Enter */}
-      {composerOpen && attachedSession && (
-        <Composer
-          variant="sheet"
-          onSend={(text) => {
-            const bracketed = terminalRef.current?.modes.bracketedPasteMode ?? false;
-            sendInput(wrapForPaste(text, bracketed));
-            setTimeout(() => sendInput('\r'), 60);
-          }}
-          onClose={() => setComposerOpen(false)}
+      {/* The question on screen and its answers, pinned above the keys. */}
+      {answerShown && prompt && (
+        <AnswerBar
+          name={title}
+          question={prompt.question}
+          options={prompt.options}
+          onAnswer={answer}
+          onReply={openReply}
+          onOpenQuestion={() => setClaudeTab('answer')}
         />
       )}
 
-      {/* Soft-keyboard helper bar — mobile only, toggled from top bar */}
-      {!sidebarVisible && showKeyBar && (
-        <KeyRow sendInput={sendInput} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl} onOpenSnippets={() => setShowSnippets(true)} />
+      {/* The key row: the keys a soft keyboard lacks, with the shell's
+          suggestions for what you are typing. Suggestions alone when the
+          keys are put away. */}
+      {(keysShown || sugg.items.length > 0) && (
+        <KeyRow
+          sendInput={sendInput}
+          ctrlArmed={ctrlArmed}
+          onToggleCtrl={toggleCtrl}
+          onOpenSnippets={() => setShowSnippets(true)}
+          suggestions={sugg}
+          onSuggest={(cmd) => {
+            sendInput(cmd.slice(sugg.prefix.length));
+            setSugg({ prefix: '', items: [] });
+          }}
+          keys={keysShown}
+          onHide={kbVisible ? hideKeyboard : undefined}
+        />
       )}
 
-      {/* Session quick-switcher — mobile only */}
-      {!sidebarVisible && showSwitcher && (
+      <Dock items={dockItems} hidden={kbVisible} />
+
+      {/* Composer: write or dictate, review, then send once. */}
+      {composer && attachedSession && (
+        <Composer
+          variant="sheet"
+          listen={composer.listen}
+          title={composer.redirectKey ? 'Tell Claude what to do instead' : 'Message'}
+          target={`to ${title}`}
+          context={composer.context}
+          hint={composer.redirectKey
+            ? 'Send picks "No, explain", then types your words'
+            : watching && prompt
+              ? `Sent as your answer to ${title}, then Enter`
+              : 'Sent as one message, then Enter'}
+          onSend={(text) => deliverText(text, true, composer.redirectKey)}
+          onInsert={(text) => deliverText(text, false, composer.redirectKey)}
+          onClose={() => setComposer(null)}
+        />
+      )}
+
+      {/* Session switcher */}
+      {showSwitcher && (
         <SessionSwitcher
           sessions={sessions}
           currentId={attachedSession?.id ?? null}
-          onPick={(id) => attachSession(id)}
+          onPick={(id) => switchTo(id)}
           onNew={() => { setShowSwitcher(false); setShowTabPicker(true); }}
           onClose={() => setShowSwitcher(false)}
         />
       )}
 
-      {/* Profile picker popup — mobile only */}
-      {!sidebarVisible && showTabPicker && <TabPicker onClose={() => setShowTabPicker(false)} />}
+      {/* New session from a profile */}
+      {showTabPicker && <TabPicker onClose={() => setShowTabPicker(false)} />}
 
       {/* Harvested links — opens when the server's session.links reply lands */}
       {sessionLinks !== null && <LinkSheet links={sessionLinks} onClose={clearSessionLinks} />}
 
-      {/* Copy from Claude — last reply + code blocks from the transcript */}
-      {claudeReply !== null && <ClaudeReplyPanel state={claudeReply} onClose={clearClaudeReply} variant="sheet" />}
+      {/* Claude: answer the question in full, or copy the last reply */}
+      {claudeTab && (
+        <ClaudeSheet
+          tab={claudeTab}
+          onTab={setClaudeTab}
+          name={title}
+          prompt={watching ? prompt : null}
+          waiting={watching && liveAttached ? stateWord(liveAttached, 'waiting') : null}
+          onAnswer={answer}
+          onReply={openReply}
+          reply={claudeReply}
+          onRequestReply={requestClaudeReply}
+          onClose={closeClaude}
+        />
+      )}
 
       {/* Terminal appearance sheet — live theme/font/size changes */}
       {showStyleSheet && <TerminalSettings variant="sheet" onClose={() => setShowStyleSheet(false)} />}
       {showMore && attachedSession && (
-        <MoreSheet title={sessionTitle(attachedSession)} items={moreItems} onClose={() => setShowMore(false)} />
+        <MoreSheet
+          title={attachedSession.name || title}
+          sub={attachedSession.profileName && attachedSession.profileName !== attachedSession.name ? attachedSession.profileName : undefined}
+          header={(
+            <>
+              {term && <span>Terminal <b className="font-medium text-fg-2 tnum">{term.cols} x {term.rows}</b></span>}
+              <ConnectionReadout server />
+            </>
+          )}
+          items={moreItems}
+          onClose={() => setShowMore(false)}
+        />
       )}
 
       {/* Snippet library — insert, run detached, or fan out across servers */}
       {showSnippets && <SnippetSheet onClose={() => setShowSnippets(false)} sendInput={sendInput} />}
-
     </div>
   );
 }

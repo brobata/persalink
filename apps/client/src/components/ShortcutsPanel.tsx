@@ -16,7 +16,7 @@ import { useEffect } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { useLayoutStore } from '../stores/layoutStore';
 import { useUiStore } from '../stores/uiStore';
-import { currentTerminal, sendPaneCommand, terminalHasFocus } from '../lib/paneCommands';
+import { currentTerminal, PHONE_TERMINAL, sendPaneCommand, terminalHasFocus } from '../lib/paneCommands';
 import { answerDigit, desktopAction, phoneAction, DESKTOP_KEYS, PHONE_KEYS, type KeyAction, type KeyRow } from '../lib/keymap';
 import { orderSessions } from '../lib/sessionOrder';
 import { deviceKind } from '../lib/device';
@@ -64,6 +64,8 @@ function cycle(dir: 1 | -1): void {
 /** Phone: the previous / next session in attention order (the order every
  *  list shows), wrapping at the ends. */
 function stepPhoneSession(dir: 1 | -1): void {
+  // The phone terminal steps through its own swipe ring, with the slide.
+  if (sendPaneCommand(PHONE_TERMINAL, 'step', String(dir))) return;
   const { sessions, attachedSession, attachSession } = useAppStore.getState();
   const list = orderSessions(sessions);
   if (list.length === 0) return;
