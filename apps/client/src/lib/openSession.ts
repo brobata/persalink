@@ -12,6 +12,7 @@ import { useAppStore } from '../stores/appStore';
 import { useLayoutStore } from '../stores/layoutStore';
 import { deviceKind } from './device';
 import { getInitialDims } from './terminalDims';
+import { currentTerminal, sendPaneCommand } from './paneCommands';
 
 /** Open a session wherever you are: the focused pane on desktop (or the pane
  *  already showing it), the terminal on a phone. Another server's session on
@@ -50,3 +51,22 @@ export function startProfile(profileId: string): void {
   app.createSession(profileId, cols, rows);
 }
 
+
+/**
+ * Open a session with the composer up, to answer in your own words (the
+ * reply chip and "No, explain" on a Needs-you card). The composer belongs
+ * to the terminal, which exists only once the session is open, so the
+ * command is retried briefly until a terminal takes it.
+ */
+export function openSessionToReply(id: string): void {
+  openSession(id, null);
+  let tries = 0;
+  const attempt = () => {
+    tries++;
+    const app = useAppStore.getState();
+    const ready = deviceKind() === 'desktop' || (app.view === 'terminal' && app.attachedSession?.id === id);
+    if (ready && sendPaneCommand(currentTerminal(), 'composer')) return;
+    if (tries < 12) setTimeout(attempt, 150);
+  };
+  setTimeout(attempt, 120);
+}

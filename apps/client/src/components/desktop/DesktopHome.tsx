@@ -3,8 +3,9 @@
  * @description The desktop Home tab: the three-second answer to "what needs
  *   me". It leads with "N agents need you", one line naming the longest
  *   wait, and one solid "Open next waiting" (only when two or more wait;
- *   with one, that card's Open is the accent). Then a card per waiting
- *   agent (at most three, then "+N more waiting · Show all"), the Working
+ *   with one, that card's first answer is the accent). Then the shared
+ *   Needs-you card per waiting agent, with its answers inline (at most
+ *   three, then "+N more waiting · Show all"), the Working
  *   list, Quiet and Ended folded to one line each, the profiles as tiles
  *   (click opens its session or starts one; hold or Shift+click starts a
  *   new one) and the servers. The sidebar steps back to a rail here.
@@ -12,40 +13,20 @@
 
 import { useState } from 'react';
 import { ArrowRight, ChevronRight, Plus } from 'lucide-react';
-import type { Profile, SessionInfo } from '@persalink/shared/protocol';
+import type { Profile } from '@persalink/shared/protocol';
 import { useAppStore, type ServerEntry } from '../../stores/appStore';
 import { useAttentionOrder, waitAge } from '../../lib/sessionOrder';
 import { countStates, groupSessions, needsSentence, previewLine, sessionTitle, stateKey, stateWord } from '../../lib/sessionState';
-import { openSession, startProfile } from '../../lib/openSession';
+import { openSession, openSessionToReply, startProfile } from '../../lib/openSession';
+import { sentSentence } from '../../lib/statusLine';
+import { useUiStore } from '../../stores/uiStore';
+import { WaitCard } from '../ui/WaitCard';
 import { useLongPress } from '../../lib/useLongPress';
 import { readout } from '../../lib/readout';
 import { StateGlyph } from '../ui/StateGlyph';
 import { ProfileTile } from '../ui/ProfileTile';
 
 const CAP = 3;
-
-function WaitCard({ s, accent }: { s: SessionInfo; accent: boolean }) {
-  const k = stateKey(s);
-  const q = previewLine(s, k);
-  return (
-    <article className="pl-home-card wait px-4 py-3.5 motion-safe:animate-rise">
-      <div className="flex items-center gap-2.5">
-        <StateGlyph state={k} size={12} label={stateWord(s, k)} />
-        <span className="text-title font-semibold text-fg-1 truncate">{sessionTitle(s)}</span>
-        {s.profileName && s.profileName !== sessionTitle(s) && (
-          <span className="text-meta text-fg-3 truncate">{s.profileName}</span>
-        )}
-        <span className="ml-auto shrink-0 text-meta font-mono tnum text-st-waiting">{k === 'error' ? 'Error' : waitAge(s)}</span>
-      </div>
-      {q && <p className="mt-1.5 text-body text-fg-1 line-clamp-2">{q}</p>}
-      <div className="mt-3 flex items-center gap-2">
-        <button type="button" className={`pl-btn sm${accent ? ' pri' : ''}`} onClick={() => openSession(s.id, null)}>
-          Open and answer<ArrowRight className="w-3.5 h-3.5" strokeWidth={2} />
-        </button>
-      </div>
-    </article>
-  );
-}
 
 function ProfileCard({ p }: { p: Profile }) {
   const sessions = useAppStore((s) => s.sessions);
@@ -137,7 +118,20 @@ export function DesktopHome() {
 
         {needs.length > 0 && (
           <section className="mt-6 space-y-2.5" aria-label="Needs you">
-            {shownNeeds.map((s) => <WaitCard key={s.id} s={s} accent={needs.length === 1} />)}
+            {shownNeeds.map((s) => (
+              <WaitCard
+                key={s.id}
+                session={s}
+                variant="desktop"
+                accent={needs.length === 1}
+                onOpen={(x) => openSession(x.id, null)}
+                onReply={(x) => openSessionToReply(x.id)}
+                onSent={(x, label) => useUiStore.getState().say(sentSentence(label, sessionTitle(x)))}
+                onNotSent={(x, why) => why === 'changed'
+                  ? useUiStore.getState().say(`${sessionTitle(x)} is no longer asking that. Nothing was typed.`)
+                  : useAppStore.getState().pushNotification('error', `Could not reach ${sessionTitle(x)}. Nothing was typed; open it to answer.`)}
+              />
+            ))}
             {more > 0 && (
               <button type="button" className="pl-more" onClick={() => setAll(true)}>
                 <StateGlyph state="waiting" size={10} /><span>+{more} more waiting</span><span className="sa">Show all</span>

@@ -1,313 +1,301 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ConnectionReadout } from './ui/ConnectionReadout';
-import { useAppStore } from '../stores/appStore';
+/**
+ * @file HomeScreen
+ * @description Phone Home, the agent inbox (the Titan runs the same screen,
+ *   tightened by html.pl-square). First glance answers "what needs me":
+ *   "N agents need you" and who waited longest, then one card per waiting
+ *   agent with its answers inline (at most three, then "+N more waiting"),
+ *   Working as one-line rows, Quiet and Ended folded to a summary line,
+ *   profiles as a chip rail (tap opens, hold starts a new one), and the
+ *   servers last and quiet. On the Titan the headline moves into the header
+ *   ("2 need you · 2 working") so both waiting cards fit above the dock.
+ *   The shared phone header, dock, sheets and rows come from components/ui.
+ */
+
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ChevronRight, Ellipsis, FolderOpen, Pencil, Plus, Rows3, Settings, SquareTerminal, X } from 'lucide-react';
+import type { SessionInfo } from '@persalink/shared/protocol';
+import { useAppStore, type ServerEntry } from '../stores/appStore';
+import { useUiStore } from '../stores/uiStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
-import { useLongPress } from '../lib/useLongPress';
-import { orderSessions, useAttentionOrder } from '../lib/sessionOrder';
-import { stateKey, sessionTitle, countStates, needsSentence } from '../lib/sessionState';
+import { useAttentionOrder, waitAge } from '../lib/sessionOrder';
+import { countStates, groupSessions, needsSentence, sessionTitle, stateKey, type GroupId } from '../lib/sessionState';
+import { openSession, openSessionToReply } from '../lib/openSession';
+import { readout } from '../lib/readout';
+import { sentSentence } from '../lib/statusLine';
+import { PhoneHeader, HeaderFlash } from './ui/PhoneHeader';
+import { ConnectionReadout } from './ui/ConnectionReadout';
+import { Dock, type DockItem } from './ui/Dock';
+import { WaitCard } from './ui/WaitCard';
 import { SessionRow } from './ui/SessionRow';
 import { StateGlyph } from './ui/StateGlyph';
-import { ProfileTile } from './ui/ProfileTile';
 import { IconButton } from './ui/IconButton';
-import { Pencil, Search, X } from 'lucide-react';
-import { useUiStore } from '../stores/uiStore';
-import type { Profile, SessionInfo } from '@persalink/shared/protocol';
+import { ProfileRail } from './ui/ProfileRail';
+import { SessionSwitcher, NewSessionSheet } from './ui/SessionSwitcher';
+import { MoreSheet } from './ui/MoreSheet';
+import { Sheet, useSheetClose } from './ui/Sheet';
 
-// ============================================================================
-// Reorder helpers
-// ============================================================================
+const CAP = 3;
+const FOLD_KEY = 'persalink-home-fold';
 
-function moveProfile(profiles: Profile[], profileId: string, direction: 'up' | 'down'): string[] {
-  const ids = profiles.map(p => p.id);
-  const idx = ids.indexOf(profileId);
-  if (idx < 0) return ids;
-  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-  if (swapIdx < 0 || swapIdx >= ids.length) return ids;
-  [ids[idx], ids[swapIdx]] = [ids[swapIdx], ids[idx]];
-  return ids;
+function readFold(): Record<'quiet' | 'ended', boolean> {
+  try {
+    const v = JSON.parse(localStorage.getItem(FOLD_KEY) || 'null') as Partial<Record<'quiet' | 'ended', boolean>> | null;
+    return { quiet: v?.quiet ?? true, ended: v?.ended ?? true };
+  } catch {
+    return { quiet: true, ended: true };
+  }
 }
 
-// ============================================================================
-// Session Pill (compact inline for live sessions bar)
-// ============================================================================
-
-function SessionPill({ session }: { session: SessionInfo }) {
-  const { attachSession, killSession, renameSession } = useAppStore();
-  const [confirmKill, setConfirmKill] = useState(false);
-
-  // An armed "Kill?" must not linger — a stale confirm sitting under a later
-  // absent-minded tap is how sessions die by accident. Auto-disarm.
+function useSquare(): boolean {
+  const [sq, setSq] = useState(() => document.documentElement.classList.contains('pl-square'));
   useEffect(() => {
-    if (!confirmKill) return;
-    const t = setTimeout(() => setConfirmKill(false), 3000);
-    return () => clearTimeout(t);
-  }, [confirmKill]);
-  // Explicit pencil-button rename — mobile had NO way to rename a session
-  // (desktop panes use double-click; gestures are undiscoverable anyway).
-  const [editing, setEditing] = useState(false);
-  const [editName, setEditName] = useState('');
+    const el = document.documentElement;
+    const mo = new MutationObserver(() => setSq(el.classList.contains('pl-square')));
+    mo.observe(el, { attributes: true, attributeFilter: ['class'] });
+    return () => mo.disconnect();
+  }, []);
+  return sq;
+}
 
-  const commitEdit = () => {
-    const trimmed = editName.trim();
-    if (trimmed && trimmed !== session.name) renameSession(session.id, trimmed);
-    setEditing(false);
-  };
+/**
+ * Rows that change group move there instead of jumping (FLIP, 200ms), and a
+ * row that arrives glows once. Reads [data-flip] positions inside `root`
+ * after every render; reduced motion skips it.
+ */
+function useFlip(root: React.RefObject<HTMLElement | null>, dep: unknown) {
+  const last = useRef<Map<string, number>>(new Map());
+  useLayoutEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const base = el.getBoundingClientRect().top;
+    const next = new Map<string, number>();
+    el.querySelectorAll<HTMLElement>('[data-flip]').forEach((n) => {
+      const id = n.dataset.flip!;
+      const top = n.getBoundingClientRect().top - base;
+      next.set(id, top);
+      const was = last.current.get(id);
+      if (reduce || last.current.size === 0) return;
+      if (was === undefined) {
+        n.classList.remove('pl-arrived');
+        void n.offsetWidth;
+        n.classList.add('pl-arrived');
+      } else if (Math.abs(was - top) > 1) {
+        n.animate([{ transform: `translateY(${was - top}px)` }, { transform: 'none' }], { duration: 200, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
+      }
+    });
+    last.current = next;
+  }, [root, dep]);
+}
 
-  if (editing) {
-    return (
-      <div className="flex items-center gap-2.5 min-h-(--pl-row-h) px-2.5 rounded-[10px] bg-bg-3">
-        <StateGlyph state={stateKey(session)} />
-        <input
-          value={editName}
-          onChange={(e) => setEditName(e.target.value)}
-          onBlur={commitEdit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commitEdit();
-            if (e.key === 'Escape') setEditing(false);
-          }}
-          aria-label="Session name"
-          className="flex-1 min-w-0 h-9 px-2.5 bg-bg-1 border border-line-2 rounded-[6px] text-body text-fg-1 outline-none focus:border-line-3"
-          autoFocus
-        />
-      </div>
-    );
-  }
-
+function ServerButton({ e }: { e: ServerEntry }) {
+  const activeServerId = useAppStore((s) => s.activeServerId);
+  const state = useAppStore((s) => s.connectionState);
+  const rttMs = useAppStore((s) => s.rttMs);
+  const active = e.id === activeServerId;
+  const r = readout(state, rttMs);
   return (
-    <SessionRow
-      session={session}
-      detail="auto"
-      onOpen={() => attachSession(session.id)}
-      trailing={(
-        <>
-          <IconButton
-            label={`Rename ${sessionTitle(session)}`}
-            onClick={(e) => { e.stopPropagation(); setEditName(session.name || session.profileName || ''); setEditing(true); }}
-          >
-            <Pencil className="w-3.5 h-3.5" strokeWidth={1.75} />
-          </IconButton>
-          {confirmKill ? (
-            <button
-              type="button"
-              onClick={() => { killSession(session.id); setConfirmKill(false); }}
-              onBlur={() => setConfirmKill(false)}
-              className="h-11 px-3 rounded-[6px] text-meta font-semibold text-danger active:bg-danger-soft"
-            >
-              Kill?
-            </button>
-          ) : (
-            <IconButton label={`Kill ${sessionTitle(session)}`} onClick={(e) => { e.stopPropagation(); setConfirmKill(true); }}>
-              <X className="w-4 h-4" strokeWidth={1.75} />
-            </IconButton>
-          )}
-        </>
-      )}
-    />
+    <button
+      type="button"
+      className={`pl-srv${active && r.kind === 'slow' ? ' slow' : ''}${active ? '' : ' off'}`}
+      onClick={() => (active ? useAppStore.getState().openServers() : useAppStore.getState().selectServer(e.id))}
+      title={active ? 'Servers' : `Switch to ${e.serverName || e.label}`}
+    >
+      <i className="dot" aria-hidden />
+      <b>{e.serverName || e.label}</b>
+      <span className="ms tnum">{active ? r.text : 'Switch'}</span>
+    </button>
   );
 }
 
-// ============================================================================
-// Profile Card
-// ============================================================================
-
-function ProfileCard({ profile, isLive, reordering, onMove }: {
-  profile: Profile; isLive: boolean; reordering: boolean;
-  onMove?: (direction: 'up' | 'down') => void;
-}) {
-  const { createSession, attachSession, sessions, healthStatuses, editProfile } = useAppStore();
-
-  const health = healthStatuses.find(h => h.profileId === profile.id);
-  const liveSessions = sessions.filter(s => s.profileId === profile.id);
-  const liveCount = liveSessions.length;
-  // The most urgent live instance's state, so a card says something wants
-  // you without opening the list. Static glyph; nothing loops.
-  const lead = orderSessions(liveSessions)[0];
-
-  // Same gesture contract as the desktop sidebar: tap opens the existing
-  // session (or starts one if none is live); long-press always starts a new
-  // instance. Desktop additionally accepts shift/alt-click for the latter.
-  const handleTap = useCallback(() => {
-    const existing = liveSessions[0];
-    if (existing) attachSession(existing.id);
-    else createSession(profile.id);
-  }, [liveSessions, attachSession, createSession, profile.id]);
-  const handleNewInstance = useCallback(() => {
-    createSession(profile.id);
-  }, [createSession, profile.id]);
-  const press = useLongPress(handleNewInstance, handleTap);
-
-  const handleEdit = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    editProfile(profile);
-  };
-
+function RenameSheet({ s, onClose }: { s: SessionInfo; onClose: () => void }) {
+  const [name, setName] = useState(s.name || s.profileName || '');
   return (
-    <div className="flex items-center gap-0 bg-zinc-900 border border-zinc-800 rounded-xl">
-      {reordering && onMove && (
-        <div className="flex flex-col shrink-0 border-r border-zinc-800">
-          <button
-            onClick={(e) => { e.stopPropagation(); onMove('up'); }}
-            className="px-2 py-1.5 text-zinc-500 active:text-zinc-200 transition-colors text-xs"
-          >
-            ▲
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onMove('down'); }}
-            className="px-2 py-1.5 text-zinc-500 active:text-zinc-200 transition-colors text-xs"
-          >
-            ▼
-          </button>
-        </div>
-      )}
-      <button
-        {...press}
-        title={liveCount > 0 ? 'Tap to open. Hold for a new instance.' : profile.name}
-        className={`flex items-center gap-3 flex-1 min-w-0 px-4 py-3.5 select-none
-                   active:bg-zinc-800 transition-colors text-left ${reordering ? '' : 'rounded-l-xl'}`}
-        style={{ WebkitTouchCallout: 'none' }}
-      >
-        <ProfileTile name={profile.name} color={profile.color} size={28} />
-        <span className="flex-1 text-sm font-medium truncate">{profile.name}</span>
-        <div className="flex items-center gap-2 shrink-0">
-          {health && !health.healthy && (
-            <span className="text-micro font-medium text-danger" title="Health check failing">Unhealthy</span>
-          )}
-          {lead && (
-            <span className="flex items-center gap-1.5 text-micro text-fg-3 tnum" title={`${liveCount} live`}>
-              <StateGlyph state={stateKey(lead)} />
-              {liveCount > 1 ? `${liveCount} live` : 'Live'}
-            </span>
-          )}
-        </div>
+    <Sheet title="Rename session" sub={s.id} onClose={onClose}>
+      <RenameBody s={s} name={name} setName={setName} />
+    </Sheet>
+  );
+}
+
+function RenameBody({ s, name, setName }: { s: SessionInfo; name: string; setName: (v: string) => void }) {
+  const close = useSheetClose();
+  const save = () => {
+    const t = name.trim();
+    if (t && t !== s.name) useAppStore.getState().renameSession(s.id, t);
+    close();
+  };
+  return (
+    <form className="px-2 pb-2 space-y-3" onSubmit={(e) => { e.preventDefault(); save(); }}>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        aria-label="Session name"
+        autoFocus
+        className="w-full h-11 px-3 bg-bg-1 border border-line-2 rounded-[8px] text-[16px] text-fg-1 outline-none focus:border-line-3"
+      />
+      <button type="submit" className="pl-btn pri w-full">Save</button>
+    </form>
+  );
+}
+
+function KillSheet({ s, onClose }: { s: SessionInfo; onClose: () => void }) {
+  return (
+    <Sheet title={`Kill ${sessionTitle(s)}?`} sub="Stops the tmux session and everything running in it." onClose={onClose}>
+      <KillBody s={s} />
+    </Sheet>
+  );
+}
+
+function KillBody({ s }: { s: SessionInfo }) {
+  const close = useSheetClose();
+  return (
+    <div className="flex gap-2 px-2 pb-2">
+      <button type="button" className="pl-btn flex-1" onClick={close}>Keep it</button>
+      <button type="button" className="pl-btn flex-1 !text-danger !border-[rgba(242,85,90,0.35)]" onClick={() => { useAppStore.getState().killSession(s.id); close(); }}>
+        <X className="w-4 h-4" strokeWidth={1.75} />Kill session
       </button>
-      {!reordering && (
-        <button
-          onClick={handleEdit}
-          className="shrink-0 px-3 py-3.5 text-zinc-600 active:text-zinc-300
-                     transition-colors border-l border-zinc-800 rounded-r-xl"
-          title="Edit profile"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-            <path d="m15 5 4 4"/>
-          </svg>
-        </button>
-      )}
     </div>
   );
 }
 
-// ============================================================================
-// Home Screen
-// ============================================================================
-
 export function HomeScreen() {
-  const { sessions, profiles, openSettings, openServers, openFiles, discoverProfiles, createSession, editProfile, reorderProfiles, refresh } = useAppStore();
+  const sessions = useAppStore((s) => s.sessions);
+  const profiles = useAppStore((s) => s.profiles);
+  const servers = useAppStore((s) => s.servers);
   const filesDisabled = useAppStore((s) => s.filesDisabled);
+  const refresh = useAppStore((s) => s.refresh);
+  const ordered = useAttentionOrder(sessions);
+  const square = useSquare();
 
-  // Attention order (waiting first, longest wait on top), held still while a
-  // finger is down and briefly after: a live re-sort once moved a row under
-  // a mid-tap kill confirm and a different session ate the tap.
-  const orderedSessions = useAttentionOrder(sessions);
-  const [reordering, setReordering] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const [fold, setFold] = useState(readFold);
+  const [sheet, setSheet] = useState<null | 'switcher' | 'new'>(null);
+  const [menu, setMenu] = useState<SessionInfo | null>(null);
+  const [rename, setRename] = useState<SessionInfo | null>(null);
+  const [kill, setKill] = useState<SessionInfo | null>(null);
+  const [flash, setFlash] = useState<{ text: string; id: number } | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+  const say = useCallback((text: string) => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setFlash({ text, id: Date.now() });
+    flashTimer.current = setTimeout(() => setFlash(null), 2400);
+  }, []);
+
+  const toggleFold = (g: 'quiet' | 'ended') => setFold((f) => {
+    const next = { ...f, [g]: !f[g] };
+    try { localStorage.setItem(FOLD_KEY, JSON.stringify(next)); } catch { /* per-viewer nicety only */ }
+    return next;
+  });
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const onRefresh = useCallback(() => refresh(), [refresh]);
   const { pullDistance, phase, triggerDistance } = usePullToRefresh(scrollRef, onRefresh);
-
   const pullProgress = Math.min(1, pullDistance / triggerDistance);
-  const indicatorActive = phase === 'refreshing' || pullDistance >= triggerDistance;
   const animatePull = phase !== 'pulling';
 
-  const groupedProfiles = useMemo(() => {
-    const groups = new Map<string, Profile[]>();
-    const pinned: Profile[] = [];
+  const groups = groupSessions(ordered);
+  const needs = groups[0].items;
+  const working = groups[1].items;
+  const quiet = groups[2].items;
+  const ended = groups[3].items;
+  const c = countStates(sessions);
+  const shownNeeds = showAll ? needs : needs.slice(0, CAP);
+  const more = needs.length - shownNeeds.length;
+  useFlip(listRef, ordered.map((s) => `${s.id}:${stateKey(s)}`).join('|'));
 
-    for (const profile of profiles) {
-      if (profile.pinned) {
-        pinned.push(profile);
-        continue;
-      }
-      const group = profile.group || 'Other';
-      if (!groups.has(group)) groups.set(group, []);
-      groups.get(group)!.push(profile);
-    }
+  const first = needs[0];
+  const headline = needs.length === 1 ? `${sessionTitle(first)} needs you` : needsSentence(needs.length);
+  const lead = first
+    ? <><b>{sessionTitle(first)}</b> has waited longest, <span className="tnum">{waitAge(first)}</span>{c.working ? ` · ${c.working} working` : ''}</>
+    : c.working ? `${c.working} working · the rest is quiet`
+    : sessions.length ? 'Everything is quiet.'
+    : 'Nothing is running. Start something from a profile.';
 
-    return { pinned, groups };
-  }, [profiles]);
+  let line2;
+  if (flash) line2 = <HeaderFlash key={flash.id}>{flash.text}</HeaderFlash>;
+  else if (square && needs.length) {
+    line2 = (
+      <span className="truncate">
+        <span className="text-st-waiting font-medium">{needs.length} need{needs.length === 1 ? 's' : ''} you</span>
+        {c.working ? ` · ${c.working} working` : ''}
+      </span>
+    );
+  } else {
+    line2 = (
+      <>
+        <span className="tnum">{sessions.length} live</span>
+        <span className="sep" aria-hidden>·</span>
+        <ConnectionReadout server />
+      </>
+    );
+  }
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <header className="shrink-0 px-4 pt-[max(16px,env(safe-area-inset-top))] pb-3 border-b border-zinc-800">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold">PersaLink</h1>
-            {/* Server chip — tap to open the Servers screen and switch machines */}
-            <button
-              onClick={openServers}
-              className="flex items-center gap-1.5 text-xs text-zinc-500 active:text-zinc-300 transition-colors"
-              title="Switch server"
-            >
-              {/* Server + round trip; says "reconnecting" while the link is down. */}
-              <ConnectionReadout server />
-              <svg className="w-3 h-3 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
-              </svg>
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <IconButton label="Search sessions and commands" onClick={() => useUiStore.getState().openPalette()}>
-              <Search className="w-[18px] h-[18px]" strokeWidth={1.75} />
-            </IconButton>
-            <button
-              onClick={() => setReordering(!reordering)}
-              className={`px-4 py-2 text-sm rounded-lg transition-colors ${
-                reordering
-                  ? 'bg-bg-4 text-fg-1 font-medium'
-                  : 'bg-zinc-800 text-zinc-400 active:bg-zinc-700'
-              }`}
-            >
-              {reordering ? 'Done' : 'Reorder'}
-            </button>
-            <button
-              onClick={discoverProfiles}
-              className="px-4 py-2 text-sm bg-zinc-800 text-zinc-400 rounded-lg
-                         active:bg-zinc-700 transition-colors"
-              title="Discover projects"
-            >
-              Scan
-            </button>
-            <button
-              onClick={openFiles}
-              hidden={filesDisabled}
-              className="px-3 py-2 text-sm bg-zinc-800 text-zinc-400 rounded-lg
-                         active:bg-zinc-700 transition-colors"
-              title="Browse this server's files"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-              </svg>
-            </button>
-            <button
-              onClick={openSettings}
-              className="px-4 py-2 text-sm bg-zinc-800 text-zinc-400 rounded-lg
-                         active:bg-zinc-700 transition-colors"
-            >
-              Settings
-            </button>
+  const onSent = useCallback((s: SessionInfo, label: string) => say(sentSentence(label, sessionTitle(s))), [say]);
+  const onNotSent = useCallback((s: SessionInfo, why: 'changed' | 'failed') => {
+    useAppStore.getState().pushNotification(
+      why === 'changed' ? 'info' : 'error',
+      why === 'changed'
+        ? `${sessionTitle(s)} is no longer asking that. Nothing was typed.`
+        : `Could not reach ${sessionTitle(s)}. Nothing was typed; open it to answer.`,
+    );
+  }, []);
+
+  const rowMenu = (s: SessionInfo) => (
+    <IconButton label={`Actions for ${sessionTitle(s)}`} onClick={(e) => { e.stopPropagation(); setMenu(s); }}>
+      <Ellipsis className="w-4 h-4" strokeWidth={1.75} />
+    </IconButton>
+  );
+
+  const folded = (id: Extract<GroupId, 'quiet' | 'ended'>, label: string, items: SessionInfo[]) => {
+    if (!items.length) return null;
+    const shut = fold[id];
+    const fresh = items.filter((s) => stateKey(s) === 'done');
+    const sum = id === 'quiet'
+      ? (fresh.length ? `${fresh.map(sessionTitle).join(', ')} ${fresh.length === 1 ? 'has' : 'have'} new output` : items.map(sessionTitle).join(', '))
+      : `${items.length} ended or offline`;
+    return (
+      <section className="pl-hgrp quietish" data-sec={id}>
+        <button type="button" className="pl-gh fold" aria-expanded={!shut} onClick={() => toggleFold(id)}>
+          <ChevronRight className="chev w-3.5 h-3.5" strokeWidth={1.75} aria-hidden />
+          <span>{label}</span>
+          <span className="cnt tnum">{items.length}</span>
+          <span className="sum">{sum}</span>
+        </button>
+        <div className={`pl-fold${shut ? ' shut' : ''}`}>
+          <div inert={shut}>
+            <div className="pl-rows">
+              {items.map((s) => (
+                <div key={s.id} data-flip={s.id}>
+                  <SessionRow session={s} detail="auto" onOpen={() => openSession(s.id, null)} trailing={rowMenu(s)} />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </header>
+      </section>
+    );
+  };
 
-      {/* Content */}
+  const dockItems: DockItem[] = [
+    { id: 'sessions', icon: <Rows3 />, label: 'Sessions', onPress: () => setSheet('switcher') },
+    // One accent per screen: with someone waiting, the first card has it.
+    { id: 'new', icon: <Plus />, label: 'New', primary: needs.length === 0, onPress: () => setSheet('new') },
+    ...(filesDisabled ? [] : [{ id: 'files', icon: <FolderOpen />, label: 'Files', onPress: () => useAppStore.getState().openFiles() }]),
+    { id: 'settings', icon: <Settings />, label: 'Settings', onPress: () => useAppStore.getState().openSettings() },
+  ];
+
+  return (
+    <div className="flex flex-col h-full min-w-0 bg-bg-0">
+      <PhoneHeader name="Home" line2={line2} onSearch={() => useUiStore.getState().openPalette()} />
+
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto relative"
+        className="flex-1 min-h-0 overflow-y-auto relative"
         style={{ overscrollBehaviorY: 'contain', touchAction: 'pan-y' }}
       >
-        {/* Pull-to-refresh indicator — sits in the gap revealed by the
-            translated content below. Hidden at rest. */}
+        {/* Pull to refresh: a ring in the gap the content leaves. */}
         <div
           className="absolute left-0 right-0 top-0 flex items-center justify-center pointer-events-none"
           style={{
@@ -317,93 +305,110 @@ export function HomeScreen() {
           }}
         >
           <div
-            className={`w-5 h-5 rounded-full border-2 border-zinc-700 ${
-              phase === 'refreshing' ? 'border-t-zinc-200 animate-spin' : ''
-            }`}
-            style={{
-              transform: phase === 'refreshing' ? undefined : `rotate(${pullProgress * 270}deg)`,
-              borderTopColor: phase !== 'refreshing' && indicatorActive ? '#e4e4e7' : undefined,
-            }}
+            className={`w-5 h-5 rounded-full border-2 border-line-3 ${phase === 'refreshing' ? 'border-t-fg-1 motion-safe:animate-spin' : ''}`}
+            style={{ transform: phase === 'refreshing' ? undefined : `rotate(${pullProgress * 270}deg)` }}
           />
         </div>
 
         <div
-          className="px-4 py-4 space-y-6"
-          style={{
-            transform: `translateY(${pullDistance}px)`,
-            transition: animatePull ? 'transform 200ms ease-out' : 'none',
-          }}
+          ref={listRef}
+          className="pl-home"
+          style={{ transform: pullDistance ? `translateY(${pullDistance}px)` : undefined, transition: animatePull ? 'transform 200ms ease-out' : 'none' }}
         >
-        {/* Live Sessions — full-width rows matching profile card size */}
-        {sessions.length > 0 && (
-          <section>
-            <h2 className="text-meta font-semibold text-fg-2 mb-1.5 px-1 flex items-baseline gap-2">
-              Sessions
-              <span className="font-medium text-fg-3 tnum">{needsSentence(countStates(sessions).waiting)} · {sessions.length} live</span>
-            </h2>
-            <div className="space-y-0.5 -mx-1">
-              {orderedSessions.map((session) => (
-                <SessionPill key={session.id} session={session} />
-              ))}
-            </div>
-          </section>
-        )}
+          <header className="pl-hhead">
+            <h1>{headline}</h1>
+            <p>{lead}</p>
+          </header>
 
-        {/* Pinned Profiles */}
-        {groupedProfiles.pinned.length > 0 && (
-          <section>
-            <h2 className="text-meta font-semibold text-fg-2 mb-3">
-              Pinned
-            </h2>
-            <div className="space-y-2">
-              {groupedProfiles.pinned.map((profile) => (
-                <ProfileCard key={profile.id} profile={profile} isLive={sessions.some(s => s.profileId === profile.id)}
-                  reordering={reordering}
-                  onMove={(dir) => reorderProfiles(moveProfile(profiles, profile.id, dir))}
-                />
-              ))}
-            </div>
-          </section>
-        )}
+          {needs.length > 0 && (
+            <section className="pl-hgrp needs" data-sec="needs" aria-label="Needs you, longest wait first">
+              <div className="pl-wlist">
+                {shownNeeds.map((s, i) => (
+                  <WaitCard
+                    key={s.id}
+                    session={s}
+                    variant="touch"
+                    accent={i === 0}
+                    onOpen={(x) => openSession(x.id, null)}
+                    onReply={(x) => openSessionToReply(x.id)}
+                    onSent={onSent}
+                    onNotSent={onNotSent}
+                  />
+                ))}
+              </div>
+              {more > 0 && (
+                <button type="button" className="pl-morewait" onClick={() => setShowAll(true)}>
+                  <StateGlyph state="waiting" size={10} />
+                  <span>+{more} more waiting</span>
+                  <span className="sa">Show all</span>
+                </button>
+              )}
+            </section>
+          )}
 
-        {/* Profile Groups */}
-        {Array.from(groupedProfiles.groups.entries()).map(([group, profs]) => (
-          <section key={group}>
-            <h2 className="text-meta font-semibold text-fg-2 mb-3">
-              {group}
-            </h2>
-            <div className="space-y-2">
-              {profs.map((profile) => (
-                <ProfileCard key={profile.id} profile={profile} isLive={sessions.some(s => s.profileId === profile.id)}
-                  reordering={reordering}
-                  onMove={(dir) => reorderProfiles(moveProfile(profiles, profile.id, dir))}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
+          {working.length > 0 && (
+            <section className="pl-hgrp" data-sec="working">
+              <h2 className="pl-gh">Working<span className="cnt tnum">{working.length}</span></h2>
+              <div className="pl-rows">
+                {working.map((s) => (
+                  <div key={s.id} data-flip={s.id}>
+                    <SessionRow session={s} detail="auto" onOpen={() => openSession(s.id, null)} trailing={rowMenu(s)} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
-        {/* New Session / New Profile */}
-        <section className="space-y-2">
-          <button
-            onClick={() => createSession()}
-            className="w-full py-3 border border-dashed border-zinc-700 rounded-xl
-                       text-zinc-500 text-sm active:border-zinc-500 active:text-zinc-400
-                       transition-colors"
-          >
-            + New Session
-          </button>
-          <button
-            onClick={() => editProfile(null)}
-            className="w-full py-3 border border-dashed border-zinc-700 rounded-xl
-                       text-zinc-500 text-sm active:border-zinc-500 active:text-zinc-400
-                       transition-colors"
-          >
-            + New Profile
-          </button>
-        </section>
+          {folded('quiet', 'Quiet', quiet)}
+          {folded('ended', 'Ended', ended)}
+
+          {sessions.length === 0 && (
+            <div className="pl-calm">
+              <SquareTerminal className="w-4 h-4 text-accent" strokeWidth={1.75} aria-hidden />
+              <span className="flex-1 min-w-0">No sessions yet.</span>
+              <button type="button" className="pl-btn sm" onClick={() => setSheet('new')}>New session</button>
+            </div>
+          )}
+
+          <ProfileRail profiles={profiles} />
+
+          {servers.length > 0 && (
+            <section className="pl-hgrp servers" data-sec="servers">
+              <h2 className="pl-gh">Servers<span className="cnt tnum">{servers.length}</span></h2>
+              <div className="pl-srvline">
+                {servers.map((e) => <ServerButton key={e.id} e={e} />)}
+              </div>
+            </section>
+          )}
         </div>
       </div>
+
+      <Dock items={dockItems} />
+
+      {sheet === 'switcher' && (
+        <SessionSwitcher
+          sessions={sessions}
+          currentId={null}
+          onPick={(id) => openSession(id, null)}
+          onNew={() => setSheet('new')}
+          onClose={() => setSheet(null)}
+        />
+      )}
+      {sheet === 'new' && <NewSessionSheet onClose={() => setSheet(null)} />}
+      {menu && (
+        <MoreSheet
+          title={sessionTitle(menu)}
+          sub={menu.id}
+          onClose={() => setMenu(null)}
+          items={[
+            { id: 'open', icon: <SquareTerminal />, label: 'Open', run: () => openSession(menu.id, null) },
+            { id: 'rename', icon: <Pencil />, label: 'Rename', run: () => setRename(menu) },
+            { id: 'kill', icon: <X />, label: 'Kill session', run: () => setKill(menu) },
+          ]}
+        />
+      )}
+      {rename && <RenameSheet s={rename} onClose={() => setRename(null)} />}
+      {kill && <KillSheet s={kill} onClose={() => setKill(null)} />}
     </div>
   );
 }

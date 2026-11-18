@@ -22,6 +22,7 @@ import { isPublicDoor } from '../lib/door';
 import { promptOpen } from '../lib/linkOpen';
 import { APP_BASE, isDesktopViewport } from '../lib/platform';
 import { nextWaiting, opensFirst } from '../lib/sessionOrder';
+import { answeredBook } from '../lib/answered';
 
 export type ClaudeReplyMessage = Extract<ServerMessage, { type: 'claude.reply' }>;
 export type ClaudeReplyState = ClaudeReplyMessage | 'loading';
@@ -1099,7 +1100,9 @@ function handleServerMessage(
     case 'sessions.list': {
       // Drop sessions the user just killed — a stale snapshot from an
       // interleaved server handler can still list them (see recentlyKilled).
-      const live = filterKilled(msg.sessions);
+      // An answer typed from Home is not visible to the server yet; the
+      // book shows those agents as moving on until the server catches up.
+      const live = answeredBook.apply(filterKilled(msg.sessions));
       const previous = get().sessions;
       set({ sessions: live });
       // Authoritative reconcile: drop any persisted desktop pane assignment

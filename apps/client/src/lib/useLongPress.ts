@@ -12,19 +12,25 @@ import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent }
 interface Options {
   delay?: number;
   moveTolerance?: number;
+  /** True while a press is held and may still become a long-press (draw the fill). */
+  onPressChange?: (pressing: boolean) => void;
 }
 
 export function useLongPress(
   onLongPress: () => void,
   onClick: (e: ReactMouseEvent) => void,
-  { delay = 450, moveTolerance = 10 }: Options = {},
+  { delay = 450, moveTolerance = 10, onPressChange }: Options = {},
 ) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fired = useRef(false);
   const origin = useRef<{ x: number; y: number } | null>(null);
 
+  const pressChange = useRef(onPressChange);
+  pressChange.current = onPressChange;
+
   const clear = useCallback(() => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    if (origin.current) pressChange.current?.(false);
     origin.current = null;
   }, []);
 
@@ -32,9 +38,11 @@ export function useLongPress(
     if (e.button !== 0) return;
     fired.current = false;
     origin.current = { x: e.clientX, y: e.clientY };
+    pressChange.current?.(true);
     timer.current = setTimeout(() => {
       timer.current = null;
       fired.current = true;
+      pressChange.current?.(false);
       try { navigator.vibrate?.(30); } catch { /* unsupported */ }
       onLongPress();
     }, delay);
