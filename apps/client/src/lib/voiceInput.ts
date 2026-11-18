@@ -109,9 +109,18 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
   // battery / hold the wake lock) when you've stopped talking. TOUCH DEVICES
   // ONLY — see AUTO_STOP_ON_SILENCE above; on desktop this timer is never armed
   // because its speech-boundary heartbeat is unreliable and it cuts off live
-  // speech. Kept generous (15s) so a mid-sentence "thinking" pause on a phone
-  // doesn't trip it.
-  const SILENCE_MS = 15000;
+  // speech.
+  //
+  // The phone heartbeat is unreliable too: Chrome on Android fires speechstart
+  // only for the FIRST utterance of a continuous session, so after that the
+  // only thing that re-arms this timer is a finished phrase. One unbroken run
+  // of talking longer than the timer was cut off mid-sentence (Titan,
+  // 2026-11-15: Android logged start-of-speech at 07:17:12, the page never
+  // heard it, and stop() fired 15.0s after the 07:17:11 final). So the timer
+  // means "no finished phrase for 2 minutes": far longer than any single
+  // phrase the engine produces, so it never cuts live speech, and a mic left
+  // open by mistake still closes itself.
+  const SILENCE_MS = 120_000;
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopRef = useRef<() => void>(() => {});
   const clearSilenceTimer = useCallback(() => {
