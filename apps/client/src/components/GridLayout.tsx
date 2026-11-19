@@ -153,7 +153,7 @@ function SessionPicker({
                     onClick={() => onCreateFromProfile(p.id, pickServerId)}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors text-left"
                   >
-                    <ProfileTile name={p.name} color={p.color} size={20} />
+                    <ProfileTile name={p.name} icon={p.icon} color={p.color} size={20} />
                     <span className="flex-1 text-sm text-zinc-300 truncate">{p.name}</span>
                     <span className="text-[11px] text-zinc-600">new session</span>
                   </button>

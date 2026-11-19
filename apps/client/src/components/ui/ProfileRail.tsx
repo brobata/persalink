@@ -84,7 +84,7 @@ function RailChip({ p, onMany, onHeld }: { p: Profile; onMany: (p: Profile) => v
       title={`${p.name}${p.cwd ? ` · ${p.cwd}` : ''}\nTap opens${live.length ? ' its session' : ' a session'}. Hold for a new one.`}
       aria-label={`${p.name}. Tap to ${live.length ? 'open' : 'start'}, hold for a new instance.`}
     >
-      <ProfileTile name={p.name} color={p.color} size={28} />
+      <ProfileTile name={p.name} icon={p.icon} color={p.color} size={28} />
       <span className="tx">
         <span className="nm">{p.name}</span>
         <ProfileFact p={p} />
@@ -151,7 +151,7 @@ export function ProfileSheet({ profile: p, onClose }: { profile: Profile; onClos
   const live = orderSessions(sessions.filter((s) => s.profileId === p.id));
   return (
     <Sheet
-      title={<span className="flex items-center gap-2.5 min-w-0"><ProfileTile name={p.name} color={p.color} size={24} /><span className="truncate">{p.name}</span></span>}
+      title={<span className="flex items-center gap-2.5 min-w-0"><ProfileTile name={p.name} icon={p.icon} color={p.color} size={24} /><span className="truncate">{p.name}</span></span>}
       label={p.name}
       sub={p.cwd || undefined}
       onClose={onClose}
@@ -227,7 +227,7 @@ export function ProfilesSheet({ onClose }: { onClose: () => void }) {
   const manageRow = (p: Profile, i: number) => (
         <div key={p.id} className="flex items-center rounded-[10px] active:bg-bg-3">
           <button type="button" className="flex-1 min-w-0 flex items-center gap-3 min-h-(--pl-row-h) px-2.5 text-left" onClick={() => setOne(p)}>
-            <ProfileTile name={p.name} color={p.color} size={28} />
+            <ProfileTile name={p.name} icon={p.icon} color={p.color} size={28} />
             <span className="min-w-0 flex-1 flex flex-col">
               <span className="truncate text-[14px] font-medium text-fg-1">{p.name}</span>
               <span className="pl-mfact"><ProfileFact p={p} /></span>

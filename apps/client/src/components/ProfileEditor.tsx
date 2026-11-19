@@ -5,6 +5,13 @@ import { X } from 'lucide-react';
 import { ProfileTile } from './ui/ProfileTile';
 import { IconButton } from './ui/IconButton';
 
+// The owner's own profile icons (user data, shown next to every name)
+const ICON_OPTIONS = [
+  '📂', '💻', '🧠', '🚀', '🔧', '🎯', '📋', '🍽️', '👨‍🍳', '💰',
+  '📊', '✉️', '📟', '📁', '🔗', '🌐', '🔑', '🐳', '⚡', '🎨',
+  '🛠️', '📦', '🧪', '🔍', '📡', '🗄️', '🖥️', '🤖', '🏗️', '💡',
+];
+
 const COLOR_PRESETS = [
   '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4',
   '#3b82f6', '#8b5cf6', '#a855f7', '#ec4899', '#6b7280',
@@ -341,7 +348,7 @@ export function ProfileEditor() {
 
         {/* Preview */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex items-center gap-3">
-          <ProfileTile name={form.name || 'Untitled'} color={form.color} size={36} />
+          <ProfileTile name={form.name || 'Untitled'} icon={form.icon} color={form.color} size={36} />
           <div className="flex-1 min-w-0">
             <div className="font-medium truncate">{form.name || 'Untitled'}</div>
             <div className="text-xs text-zinc-500 truncate">
@@ -427,9 +434,25 @@ export function ProfileEditor() {
         <section className="space-y-3">
           <SectionHeader>Appearance</SectionHeader>
 
-          <Hint>
-            Profiles show as a monogram from the name, on a tint of the colour below.
-          </Hint>
+          <div>
+            <FieldLabel optional>Icon</FieldLabel>
+            <div className="flex flex-wrap gap-1.5">
+              {ICON_OPTIONS.map((icon) => (
+                <button
+                  key={icon}
+                  type="button"
+                  aria-pressed={form.icon === icon}
+                  onClick={() => patch({ icon: form.icon === icon ? undefined : icon })}
+                  className={`w-9 h-9 rounded-lg grid place-items-center text-base transition-colors duration-(--d-press) ${
+                    form.icon === icon ? 'bg-bg-4 ring-1 ring-accent' : 'bg-bg-3 hover:bg-bg-4'
+                  }`}
+                >
+                  {icon}
+                </button>
+              ))}
+            </div>
+            <Hint>No icon: the profile shows a monogram from its name.</Hint>
+          </div>
 
           <div>
             <FieldLabel optional>Color</FieldLabel>

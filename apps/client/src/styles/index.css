@@ -791,6 +791,8 @@ html.pl-phone .pl-pal-i:active { background: var(--color-bg-3); }
   position: relative;
   transition: background-color var(--d-press);
 }
+/* Session icon in the rail with its state as a small badge on the corner */
+.pl-railb-st { position: absolute; right: 3px; bottom: 3px; display: grid; place-items: center; width: 13px; height: 13px; border-radius: 999px; background: var(--color-bg-1); }
 .pl-railb:hover { background: rgba(255, 255, 255, 0.04); color: var(--color-fg-1); }
 .pl-railb.on { background: var(--color-bg-3); color: var(--color-fg-1); }
 .pl-railb.on::before { content: ""; position: absolute; left: -8px; top: 9px; bottom: 9px; width: 2px; border-radius: 2px; background: var(--color-accent); }

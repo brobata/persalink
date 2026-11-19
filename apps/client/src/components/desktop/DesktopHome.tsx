@@ -49,7 +49,7 @@ function ProfileCard({ p }: { p: Profile }) {
       title={`${p.name}${p.cwd ? ` · ${p.cwd}` : ''}\nClick: ${lead ? 'open its session' : 'start a session'}. Hold or Shift+click: a new one.`}
       className="pl-home-card h-14 flex items-center gap-3 px-3 text-left hover:border-line-3 transition-colors"
     >
-      <ProfileTile name={p.name} color={p.color} size={28} />
+      <ProfileTile name={p.name} icon={p.icon} color={p.color} size={28} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-body font-semibold text-fg-1">{p.name}</span>
         <span className={`flex items-center gap-1.5 text-meta ${down ? 'text-danger' : 'text-fg-3'}`}>

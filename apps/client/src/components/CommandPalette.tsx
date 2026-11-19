@@ -217,7 +217,7 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
     // In category order (pinned, then each group); the category is a quiet tag.
     for (const g of groupProfiles(profiles)) {
       for (const p of g.items) {
-        A(`new:${p.id}`, `New ${p.name} session`, <ProfileTile name={p.name} color={p.color} size={20} />, () => startProfile(p.id), {
+        A(`new:${p.id}`, `New ${p.name} session`, <ProfileTile name={p.name} icon={p.icon} color={p.color} size={20} />, () => startProfile(p.id), {
           sub: p.cwd, tag: g.label, alias: `new start profile ${p.name} ${p.group ?? ''}`, searchOnly: true,
         });
       }

@@ -13,6 +13,7 @@
 import type { ReactNode } from 'react';
 import type { SessionInfo } from '@persalink/shared/protocol';
 import { StateGlyph } from './StateGlyph';
+import { SessionIcon } from './ProfileTile';
 import { groupOf, previewLine, rowAge, sessionTitle, stateKey, stateWord, type StateKey } from '../../lib/sessionState';
 
 export interface SessionRowProps {
@@ -70,6 +71,7 @@ export function SessionRow({
           <StateGlyph state={k} size={12} live={!!current} label={stateWord(session, k)} />
         </span>
         <span className={`flex items-center gap-1.5 min-w-0 ${touch ? 'text-[14px] leading-5 font-medium' : 'text-body font-medium'} text-fg-1`}>
+          <SessionIcon session={session} size={touch ? 20 : 18} />
           <span className="truncate">{name}</span>
           {server && (
             <span className="shrink-0 px-1 rounded-[4px] border border-line-2 text-micro font-mono text-fg-3">{server}</span>

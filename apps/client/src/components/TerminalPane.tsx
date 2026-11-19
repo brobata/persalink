@@ -39,6 +39,7 @@ import { sentSentence } from '../lib/statusLine';
 import { sessionTitle, stateKey, stateWord } from '../lib/sessionState';
 import { useUiStore } from '../stores/uiStore';
 import { StateGlyph } from './ui/StateGlyph';
+import { SessionIcon } from './ui/ProfileTile';
 import { AnswerChips } from './ui/AnswerChips';
 import { IconButton } from './ui/IconButton';
 import { ClipboardCopy, Link2, MessageSquare, Mic, Paperclip, X } from 'lucide-react';
@@ -1023,6 +1024,7 @@ export function TerminalPane({
           <>
             <span className="ttl pl-slide" key={attachedSession.id}>
               {k && <StateGlyph state={k} size={12} live={isFocused} label={stateWord(attachedSession, k)} />}
+              <SessionIcon session={attachedSession} size={16} />
               {renamingSession ? (
                 <input
                   ref={sessionNameInputRef}

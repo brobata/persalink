@@ -191,7 +191,7 @@ export function NewSessionSheet({ onClose }: { onClose: () => void }) {
                 onClick={() => startProfile(p.id)}
                 className="w-full flex items-center gap-3 min-h-(--pl-row-h) px-2.5 rounded-[10px] text-left active:bg-bg-3 hover:bg-bg-3/60 transition-colors duration-(--d-press)"
               >
-                <ProfileTile name={p.name} color={p.color} />
+                <ProfileTile name={p.name} icon={p.icon} color={p.color} />
                 <span className="flex-1 min-w-0 truncate text-[14px] font-medium text-fg-1">{p.name}</span>
                 {live > 0 && <span className="shrink-0 text-micro text-fg-3 tnum">{live} live</span>}
               </button>

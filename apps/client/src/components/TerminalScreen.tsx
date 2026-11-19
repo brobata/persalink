@@ -14,6 +14,7 @@ import { isNativeShell } from '../lib/platform';
 import { hasPendingShare, SHARE_PENDING_OP } from '../lib/shareTarget';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
 import { TerminalSettings } from './TerminalSettings';
+import { SessionIcon } from './ui/ProfileTile';
 import { SnippetSheet } from './SnippetSheet';
 import { voiceSupported } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
@@ -2035,7 +2036,7 @@ export function TerminalScreen() {
       <PhoneHeader
         ref={headerTitleRef}
         onBack={detachSession}
-        glyph={liveAttached ? <StateGlyph state={glyphState} live label={isEnded ? 'Ended' : undefined} /> : undefined}
+        glyph={liveAttached ? <><StateGlyph state={glyphState} live label={isEnded ? 'Ended' : undefined} /><SessionIcon session={liveAttached} size={18} /></> : undefined}
         name={title}
         line2={line2}
         onTitle={() => { if (!swipedRef.current) setShowSwitcher(true); }}

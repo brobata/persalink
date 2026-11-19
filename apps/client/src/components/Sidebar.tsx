@@ -29,7 +29,7 @@ import { profileGroupFolded } from '../stores/uiStore';
 import { openSession, startProfile } from '../lib/openSession';
 import { readout } from '../lib/readout';
 import { SessionRow } from './ui/SessionRow';
-import { ProfileTile } from './ui/ProfileTile';
+import { ProfileTile, SessionIcon } from './ui/ProfileTile';
 import { StateGlyph } from './ui/StateGlyph';
 import { IconButton } from './ui/IconButton';
 
@@ -125,7 +125,7 @@ function ProfileRow({ profile, open, onToggle }: { profile: Profile; open: boole
         title={tip}
         className={`w-full h-8 flex items-center gap-2.5 px-2 rounded-[10px] text-left transition-colors ${open ? 'bg-bg-3/60' : 'hover:bg-bg-3/60'}`}
       >
-        <ProfileTile name={profile.name} color={profile.color} size={20} />
+        <ProfileTile name={profile.name} icon={profile.icon} color={profile.color} size={20} />
         <span className="flex-1 min-w-0 truncate text-body font-medium text-fg-1">{profile.name}</span>
         {down ? (
           <span className="shrink-0 text-micro font-medium text-danger">Down</span>
@@ -300,7 +300,14 @@ function Rail({ homeOnly }: { homeOnly: boolean }) {
                       aria-label={`${sessionTitle(s)}, ${stateWord(s, k)}`}
                       onClick={() => openSession(s.id, null)}
                     >
-                      <StateGlyph state={k} size={12} live={s.id === selectedId} />
+                      {s.profileId ? (
+                        <>
+                          <SessionIcon session={s} size={22} />
+                          <span className="pl-railb-st"><StateGlyph state={k} size={9} live={s.id === selectedId} /></span>
+                        </>
+                      ) : (
+                        <StateGlyph state={k} size={12} live={s.id === selectedId} />
+                      )}
                     </button>
                   );
                 })}
@@ -321,7 +328,7 @@ function Rail({ homeOnly }: { homeOnly: boolean }) {
                       else startProfile(p.id);
                     }}
                   >
-                    <ProfileTile name={p.name} color={p.color} size={22} />
+                    <ProfileTile name={p.name} icon={p.icon} color={p.color} size={22} />
                   </button>
                 ))}
               </div>
