@@ -16,3 +16,4 @@ dist-electron/
 .playwright-mcp/
 dist-release/
 dist-beta/
+dist-prev/
