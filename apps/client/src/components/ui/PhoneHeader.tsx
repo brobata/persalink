@@ -12,7 +12,7 @@
  */
 
 import { forwardRef, type CSSProperties, type ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, Search } from 'lucide-react';
+import { ChevronDown, ChevronLeft, Paperclip, Search } from 'lucide-react';
 import type { SessionInfo } from '@persalink/shared/protocol';
 import { IconButton } from './IconButton';
 import { WaitPill } from './WaitPill';
@@ -37,11 +37,14 @@ export interface PhoneHeaderProps {
   currentId?: string | null;
   onJumpWaiting?: (s: SessionInfo) => void;
   onSearch?: () => void;
+  /** Attach a file to the open session (upload, then type its path). */
+  onAttach?: () => void;
+  attachBusy?: boolean;
 }
 
 export const PhoneHeader = forwardRef<HTMLDivElement, PhoneHeaderProps>(function PhoneHeader({
   onBack, backLabel = 'Home', glyph, name, line2, onTitle, titleLabel, titleKey, slide = 0,
-  sessions, currentId = null, onJumpWaiting, onSearch,
+  sessions, currentId = null, onJumpWaiting, onSearch, onAttach, attachBusy,
 }, titleRef) {
   const slideStyle = { '--pl-dx': `${slide * 12}px` } as CSSProperties;
   return (
@@ -73,6 +76,16 @@ export const PhoneHeader = forwardRef<HTMLDivElement, PhoneHeaderProps>(function
       </div>
       {sessions && onJumpWaiting && (
         <WaitPill variant="phone" sessions={sessions} currentId={currentId} onJump={onJumpWaiting} />
+      )}
+      {onAttach && (
+        <IconButton
+          label={attachBusy ? 'Uploading…' : 'Attach a file: uploads it and types its path'}
+          disabled={attachBusy}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={onAttach}
+        >
+          <Paperclip className={`w-[18px] h-[18px]${attachBusy ? ' motion-safe:animate-pulse' : ''}`} strokeWidth={1.75} />
+        </IconButton>
       )}
       {onSearch && (
         <IconButton label="Search sessions and commands" onPointerDown={(e) => e.preventDefault()} onClick={onSearch}>

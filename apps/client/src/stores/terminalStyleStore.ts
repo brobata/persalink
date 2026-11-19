@@ -7,7 +7,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { persistName } from '../lib/platform';
+import { persistName, seedFromLive } from '../lib/platform';
 
 export interface XtermTheme {
   background: string;
@@ -319,6 +319,9 @@ export function getTheme(name: ThemeName | string): XtermTheme {
   return THEMES[name as ThemeName]?.theme ?? THEMES.persalink.theme;
 }
 
+// The preview build starts from the live app's theme, font and size.
+seedFromLive('persalink-terminal-style');
+
 export const useTerminalStyleStore = create<TerminalStyleState>()(
   persist(
     (set) => ({
@@ -358,3 +361,29 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
     }
   )
 );
+
+/** True for a theme with a light background (its frame keeps the chrome). */
+export function isLightTheme(name: ThemeName | string): boolean {
+  const hex = getTheme(name).background.replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(hex)) return false;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5;
+}
+
+/**
+ * The frame around a terminal follows its theme: the pane surround (the
+ * sliver xterm does not paint) always takes the theme's background, and on
+ * a dark theme so does the pane strip, so there is no mismatched border
+ * around the text. Light themes keep the chrome strip (its text is light).
+ * The rest of the app keeps its own tokens.
+ */
+function applyFrame(name: ThemeName): void {
+  if (typeof document === 'undefined') return;
+  const bg = getTheme(name).background;
+  const root = document.documentElement.style;
+  root.setProperty('--pl-term-bg', bg);
+  if (isLightTheme(name)) root.removeProperty('--pl-strip-bg');
+  else root.setProperty('--pl-strip-bg', bg);
+}
+applyFrame(useTerminalStyleStore.getState().theme);
+useTerminalStyleStore.subscribe((s, prev) => { if (s.theme !== prev.theme) applyFrame(s.theme); });

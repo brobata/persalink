@@ -1059,6 +1059,20 @@ export function TerminalPane({
                 <MessageSquare className={stripIcon} strokeWidth={1.75} />
               </IconButton>
             )}
+            {!collapsed && !filesDisabled && (
+              // Always visible: upload into ~/shared/persalink-uploads and
+              // type the path(s) into this session, to tell the agent about it.
+              <button
+                type="button"
+                className="pl-attach"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach a file: uploads it and types its path here (or drop it on the pane)"
+              >
+                <Paperclip className={stripIcon} strokeWidth={1.75} />
+                <span className="lb">Attach</span>
+              </button>
+            )}
             {!collapsed && (
               <span className="hov">
                 {!(isFocused && k === 'waiting') && (
@@ -1072,11 +1086,6 @@ export function TerminalPane({
                 <IconButton label="Links in this session (Ctrl+Shift+L)" pressed={paneLinks !== null} onClick={toggleLinks}>
                   <Link2 className={stripIcon} strokeWidth={1.75} />
                 </IconButton>
-                {!filesDisabled && (
-                  <IconButton label="Upload a file (or drop it on the pane)" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
-                    <Paperclip className={stripIcon} strokeWidth={1.75} />
-                  </IconButton>
-                )}
                 <IconButton label="Take the session out of this pane (it keeps running)" onClick={onClear}>
                   <X className={stripIcon} strokeWidth={1.75} />
                 </IconButton>

@@ -6,19 +6,23 @@
  *   starts a new instance, and says so: the chip fills along its bottom edge
  *   while held, and a one-line hint stays under the rail until the first
  *   hold (or "Got it"). Manage opens the full list (edit, reorder, quick
- *   actions, new profile, scan). Pinned profiles come first.
+ *   actions, new profile, scan). Profiles follow their categories
+ *   (lib/profileGroups): pinned first, a quiet label where each category
+ *   starts, Archive left off the rail (it is in Manage, folded).
  *   Also exports ProfileSheet (one profile: its sessions, New instance,
  *   quick actions, Edit) and ProfilesSheet (manage all).
  */
 
 import { useCallback, useState } from 'react';
-import { ArrowDown, ArrowUp, Pencil, Play, Plus, ScanSearch } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronRight, Pencil, Play, Plus, ScanSearch } from 'lucide-react';
 import type { Profile } from '@persalink/shared/protocol';
 import { useAppStore } from '../../stores/appStore';
 import { useUiStore } from '../../stores/uiStore';
 import { useLongPress } from '../../lib/useLongPress';
 import { orderSessions } from '../../lib/sessionOrder';
 import { stateKey } from '../../lib/sessionState';
+import { groupProfiles, isArchiveGroup, isFlat, type ProfileGroup } from '../../lib/profileGroups';
+import { profileGroupFolded } from '../../stores/uiStore';
 import { openSession, startProfile } from '../../lib/openSession';
 import { ProfileTile } from './ProfileTile';
 import { StateGlyph } from './StateGlyph';
@@ -35,9 +39,9 @@ function markHintSeen(): void {
   try { localStorage.setItem(HINT_KEY, '1'); } catch { /* per-viewer nicety only */ }
 }
 
-/** Pinned first, then the saved order. */
-export function railOrder(profiles: readonly Profile[]): Profile[] {
-  return [...profiles.filter((p) => p.pinned), ...profiles.filter((p) => !p.pinned)];
+/** The rail's categories: Archive stays off the rail. */
+function railGroups(profiles: readonly Profile[]): ProfileGroup[] {
+  return groupProfiles(profiles).filter((g) => !isArchiveGroup(g.label));
 }
 
 /** One fact under a profile's name: health when it is failing, else live count, else "Start". */
@@ -94,7 +98,9 @@ export function ProfileRail({ profiles }: { profiles: readonly Profile[] }) {
   const [manage, setManage] = useState(false);
   const [hint, setHint] = useState(() => !hintSeen());
   const dismissHint = useCallback(() => { markHintSeen(); setHint(false); }, []);
-  const ordered = railOrder(profiles);
+  const groups = railGroups(profiles);
+  const labelled = !isFlat(groups);
+  const ordered = groups.flatMap((g) => g.items);
 
   return (
     <section className="pl-hgrp" data-sec="profiles" aria-label="Profiles">
@@ -112,10 +118,17 @@ export function ProfileRail({ profiles }: { profiles: readonly Profile[] }) {
           </button>
         </div>
       ) : (
-        <div className="pl-rail" role="list">
-          {ordered.map((p) => (
-            <div role="listitem" key={p.id} className="contents">
-              <RailChip p={p} onMany={setMany} onHeld={dismissHint} />
+        <div className={`pl-rail${labelled ? ' grouped' : ''}`}>
+          {groups.map((g) => (
+            <div key={g.key} className="pl-rail-grp" role="group" aria-label={labelled ? g.label : 'Profiles'}>
+              {labelled && <span className="pl-rail-cat">{g.label}</span>}
+              <div className="pl-rail-row" role="list">
+                {g.items.map((p) => (
+                  <div role="listitem" key={p.id} className="contents">
+                    <RailChip p={p} onMany={setMany} onHeld={dismissHint} />
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>
@@ -209,30 +222,9 @@ export function ProfilesSheet({ onClose }: { onClose: () => void }) {
     [ids[i], ids[j]] = [ids[j], ids[i]];
     useAppStore.getState().reorderProfiles(ids);
   };
-  if (one) return <ProfileSheet profile={one} onClose={() => setOne(null)} />;
-  return (
-    <Sheet
-      title="Profiles"
-      sub={`${profiles.length} saved · pinned ones lead the rail`}
-      tall
-      onClose={onClose}
-      headExtra={(
-        <button type="button" className="pl-btn sm" aria-pressed={reorder} onClick={() => setReorder((v) => !v)}>
-          {reorder ? 'Done' : 'Reorder'}
-        </button>
-      )}
-      footer={(
-        <div className="flex gap-2 px-3 py-2.5 border-t border-line">
-          <button type="button" className="pl-btn flex-1" onClick={() => { onClose(); useAppStore.getState().editProfile(null); }}>
-            <Plus className="w-4 h-4" strokeWidth={1.75} />New profile
-          </button>
-          <button type="button" className="pl-btn flex-1" onClick={() => { useAppStore.getState().discoverProfiles(); onClose(); }}>
-            <ScanSearch className="w-4 h-4" strokeWidth={1.75} />Scan for projects
-          </button>
-        </div>
-      )}
-    >
-      {profiles.map((p, i) => (
+  const profileFolds = useUiStore((s) => s.profileFolds);
+  const toggleProfileGroup = useUiStore((s) => s.toggleProfileGroup);
+  const manageRow = (p: Profile, i: number) => (
         <div key={p.id} className="flex items-center rounded-[10px] active:bg-bg-3">
           <button type="button" className="flex-1 min-w-0 flex items-center gap-3 min-h-(--pl-row-h) px-2.5 text-left" onClick={() => setOne(p)}>
             <ProfileTile name={p.name} color={p.color} size={28} />
@@ -256,7 +248,51 @@ export function ProfilesSheet({ onClose }: { onClose: () => void }) {
             </IconButton>
           )}
         </div>
-      ))}
+      
+  );
+  if (one) return <ProfileSheet profile={one} onClose={() => setOne(null)} />;
+  return (
+    <Sheet
+      title="Profiles"
+      sub={`${profiles.length} saved · by category, pinned first`}
+      tall
+      onClose={onClose}
+      headExtra={(
+        <button type="button" className="pl-btn sm" aria-pressed={reorder} onClick={() => setReorder((v) => !v)}>
+          {reorder ? 'Done' : 'Reorder'}
+        </button>
+      )}
+      footer={(
+        <div className="flex gap-2 px-3 py-2.5 border-t border-line">
+          <button type="button" className="pl-btn flex-1" onClick={() => { onClose(); useAppStore.getState().editProfile(null); }}>
+            <Plus className="w-4 h-4" strokeWidth={1.75} />New profile
+          </button>
+          <button type="button" className="pl-btn flex-1" onClick={() => { useAppStore.getState().discoverProfiles(); onClose(); }}>
+            <ScanSearch className="w-4 h-4" strokeWidth={1.75} />Scan for projects
+          </button>
+        </div>
+      )}
+    >
+      {reorder || isFlat(groupProfiles(profiles))
+        ? profiles.map((p, i) => manageRow(p, i))
+        : groupProfiles(profiles).map((g) => {
+          const shut = profileGroupFolded(profileFolds, g.key, g.label);
+          return (
+            <section key={g.key} className="mt-1.5">
+              <button
+                type="button"
+                aria-expanded={!shut}
+                onClick={() => toggleProfileGroup(g.key, g.label)}
+                className="w-full h-9 flex items-center gap-1.5 px-2 text-left text-meta font-semibold text-fg-2"
+              >
+                <ChevronRight className={`w-3.5 h-3.5 text-fg-4 transition-transform duration-(--d-move) ${shut ? '' : 'rotate-90'}`} strokeWidth={1.75} />
+                <span>{g.label}</span>
+                <span className="font-medium text-fg-3 tnum">{g.items.length}</span>
+              </button>
+              {!shut && g.items.map((p) => manageRow(p, profiles.indexOf(p)))}
+            </section>
+          );
+        })}
     </Sheet>
   );
 }

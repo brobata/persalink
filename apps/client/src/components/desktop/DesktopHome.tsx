@@ -4,19 +4,22 @@
  *   me". It leads with "N agents need you", one line naming the longest
  *   wait, and one solid "Open next waiting" (only when two or more wait;
  *   with one, that card's first answer is the accent). Then the shared
- *   Needs-you card per waiting agent, with its answers inline (at most
- *   three, then "+N more waiting · Show all"), the Working
- *   list, Quiet and Ended folded to one line each, the profiles as tiles
- *   (click opens its session or starts one; hold or Shift+click starts a
- *   new one) and the servers. The sidebar steps back to a rail here.
+ *   one Active section: the Needs-you card per waiting agent, with its
+ *   answers inline (at most three, then "+N more waiting · Show all"), then
+ *   every other live session as one line in a stable order. Ended folds to
+ *   one line; the profiles as tiles in their categories (click opens its
+ *   session or starts one; hold or Shift+click starts a new one) and the
+ *   servers. The sidebar steps back to a rail here.
  */
 
 import { useState } from 'react';
 import { ArrowRight, ChevronRight, Plus } from 'lucide-react';
 import type { Profile } from '@persalink/shared/protocol';
 import { useAppStore, type ServerEntry } from '../../stores/appStore';
-import { useAttentionOrder, waitAge } from '../../lib/sessionOrder';
-import { countStates, groupSessions, needsSentence, previewLine, sessionTitle, stateKey, stateWord } from '../../lib/sessionState';
+import { useActiveOrder, waitAge } from '../../lib/sessionOrder';
+import { countStates, groupOf, needsSentence, sessionTitle, stateKey, stateWord } from '../../lib/sessionState';
+import { groupProfiles, isFlat } from '../../lib/profileGroups';
+import { profileGroupFolded } from '../../stores/uiStore';
 import { openSession, openSessionToReply, startProfile } from '../../lib/openSession';
 import { sentSentence } from '../../lib/statusLine';
 import { useUiStore } from '../../stores/uiStore';
@@ -83,12 +86,16 @@ export function DesktopHome() {
   const profiles = useAppStore((s) => s.profiles);
   const servers = useAppStore((s) => s.servers);
   const openNextWaiting = useAppStore((s) => s.openNextWaiting);
-  const ordered = useAttentionOrder(sessions);
+  const ordered = useActiveOrder(sessions);
+  const profileFolds = useUiStore((s) => s.profileFolds);
   const [all, setAll] = useState(false);
   const [unfold, setUnfold] = useState<Record<string, boolean>>({});
 
-  const groups = groupSessions(ordered);
-  const needs = groups[0].items;
+  const needs = ordered.filter((s) => groupOf(stateKey(s)) === 'needs');
+  const rest = ordered.filter((s) => { const g = groupOf(stateKey(s)); return g !== 'needs' && g !== 'ended'; });
+  const ended = ordered.filter((s) => groupOf(stateKey(s)) === 'ended');
+  const profileGroups = groupProfiles(profiles);
+  const flatProfiles = isFlat(profileGroups);
   const c = countStates(sessions);
   const first = needs[0];
   const shownNeeds = all ? needs : needs.slice(0, CAP);
@@ -116,82 +123,71 @@ export function DesktopHome() {
           )}
         </header>
 
-        {needs.length > 0 && (
-          <section className="mt-6 space-y-2.5" aria-label="Needs you">
-            {shownNeeds.map((s) => (
-              <WaitCard
-                key={s.id}
-                session={s}
-                variant="desktop"
-                accent={needs.length === 1}
-                onOpen={(x) => openSession(x.id, null)}
-                onReply={(x) => openSessionToReply(x.id)}
-                onSent={(x, label) => useUiStore.getState().say(sentSentence(label, sessionTitle(x)))}
-                onNotSent={(x, why) => why === 'changed'
-                  ? useUiStore.getState().say(`${sessionTitle(x)} is no longer asking that. Nothing was typed.`)
-                  : useAppStore.getState().pushNotification('error', `Could not reach ${sessionTitle(x)}. Nothing was typed; open it to answer.`)}
-              />
-            ))}
-            {more > 0 && (
-              <button type="button" className="pl-more" onClick={() => setAll(true)}>
-                <StateGlyph state="waiting" size={10} /><span>+{more} more waiting</span><span className="sa">Show all</span>
-              </button>
+        {needs.length + rest.length > 0 && (
+          <section className="mt-8" aria-label="Active sessions, waiting first">
+            <h2 className="flex items-baseline gap-2 text-title font-semibold text-fg-1">Active<span className="text-meta font-medium text-fg-3 tnum">{needs.length + rest.length}</span></h2>
+            {needs.length > 0 && (
+              <div className="mt-2.5 space-y-2.5">
+                {shownNeeds.map((s) => (
+                  <WaitCard
+                    key={s.id}
+                    session={s}
+                    variant="desktop"
+                    accent={needs.length === 1}
+                    onOpen={(x) => openSession(x.id, null)}
+                    onReply={(x) => openSessionToReply(x.id)}
+                    onSent={(x, label) => useUiStore.getState().say(sentSentence(label, sessionTitle(x)))}
+                    onNotSent={(x, why) => why === 'changed'
+                      ? useUiStore.getState().say(`${sessionTitle(x)} is no longer asking that. Nothing was typed.`)
+                      : useAppStore.getState().pushNotification('error', `Could not reach ${sessionTitle(x)}. Nothing was typed; open it to answer.`)}
+                  />
+                ))}
+                {more > 0 && (
+                  <button type="button" className="pl-more" onClick={() => setAll(true)}>
+                    <StateGlyph state="waiting" size={10} /><span>+{more} more waiting</span><span className="sa">Show all</span>
+                  </button>
+                )}
+              </div>
+            )}
+            {rest.length > 0 && (
+              <div className="mt-2.5 pl-home-card divide-y divide-line overflow-hidden">
+                {rest.map((s) => (
+                  <button key={s.id} type="button" onClick={() => openSession(s.id, null)} className="w-full h-10 flex items-center gap-2.5 px-4 text-left hover:bg-bg-2">
+                    <StateGlyph state={stateKey(s)} size={12} />
+                    <span className="min-w-0 truncate text-body font-medium text-fg-1">{sessionTitle(s)}</span>
+                    <span className="ml-auto shrink-0 text-micro font-mono tnum text-fg-3">{stateWord(s)}</span>
+                  </button>
+                ))}
+              </div>
             )}
           </section>
         )}
 
-        {groups[1].items.length > 0 && (
-          <section className="mt-9">
-            <h2 className="flex items-baseline gap-2 text-title font-semibold text-fg-1">Working<span className="text-meta font-medium text-fg-3 tnum">{groups[1].items.length}</span></h2>
-            <div className="mt-2.5 pl-home-card divide-y divide-line overflow-hidden">
-              {groups[1].items.map((s) => (
-                <button key={s.id} type="button" onClick={() => openSession(s.id, null)} className="w-full h-11 flex items-center gap-2.5 px-4 text-left hover:bg-bg-2">
-                  <StateGlyph state="working" size={12} />
-                  <span className="shrink-0 text-body font-medium text-fg-1">{sessionTitle(s)}</span>
-                  <span className="min-w-0 truncate text-meta text-fg-3">{previewLine(s)}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {groups.slice(2).some((g) => g.items.length > 0) && (
-          <section className="mt-6 space-y-1">
-            {groups.slice(2).filter((g) => g.items.length > 0).map((g) => {
-              const open = !!unfold[g.id];
-              const fresh = g.items.filter((s) => stateKey(s) === 'done');
-              const summary = g.id === 'quiet'
-                ? (fresh.length ? `${fresh.map(sessionTitle).slice(0, 2).join(', ')} ${fresh.length === 1 ? 'has' : 'have'} new output` : 'Idle at a prompt')
-                : 'Ended or offline';
-              return (
-                <div key={g.id}>
-                  <button
-                    type="button"
-                    aria-expanded={open}
-                    onClick={() => setUnfold((u) => ({ ...u, [g.id]: !u[g.id] }))}
-                    className="h-8 flex items-center gap-2 text-left"
-                  >
-                    <ChevronRight className={`w-3.5 h-3.5 text-fg-4 transition-transform duration-(--d-pop) ${open ? 'rotate-90' : ''}`} strokeWidth={1.75} />
-                    <span className="text-body font-semibold text-fg-1">{g.label}</span>
-                    <span className="text-meta text-fg-3 tnum">{g.items.length}</span>
-                    <span className="text-meta text-fg-3 truncate">{summary}</span>
-                  </button>
-                  <div className={`pl-fold${open ? '' : ' shut'}`}>
-                    <div inert={!open}>
-                      <div className="pl-home-card divide-y divide-line overflow-hidden mt-1 mb-2">
-                        {g.items.map((s) => (
-                          <button key={s.id} type="button" onClick={() => openSession(s.id, null)} className="w-full h-10 flex items-center gap-2.5 px-4 text-left hover:bg-bg-2">
-                            <StateGlyph state={stateKey(s)} size={12} />
-                            <span className="text-body text-fg-1">{sessionTitle(s)}</span>
-                            <span className="ml-auto text-micro font-mono tnum text-fg-3">{stateWord(s)}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+        {ended.length > 0 && (
+          <section className="mt-6">
+            <button
+              type="button"
+              aria-expanded={!!unfold.ended}
+              onClick={() => setUnfold((u) => ({ ...u, ended: !u.ended }))}
+              className="h-8 flex items-center gap-2 text-left"
+            >
+              <ChevronRight className={`w-3.5 h-3.5 text-fg-4 transition-transform duration-(--d-pop) ${unfold.ended ? 'rotate-90' : ''}`} strokeWidth={1.75} />
+              <span className="text-body font-semibold text-fg-1">Ended</span>
+              <span className="text-meta text-fg-3 tnum">{ended.length}</span>
+            </button>
+            <div className={`pl-fold${unfold.ended ? '' : ' shut'}`}>
+              <div inert={!unfold.ended}>
+                <div className="pl-home-card divide-y divide-line overflow-hidden mt-1 mb-2">
+                  {ended.map((s) => (
+                    <button key={s.id} type="button" onClick={() => openSession(s.id, null)} className="w-full h-10 flex items-center gap-2.5 px-4 text-left hover:bg-bg-2">
+                      <StateGlyph state={stateKey(s)} size={12} />
+                      <span className="text-body text-fg-1">{sessionTitle(s)}</span>
+                      <span className="ml-auto text-micro font-mono tnum text-fg-3">{stateWord(s)}</span>
+                    </button>
+                  ))}
                 </div>
-              );
-            })}
+              </div>
+            </div>
           </section>
         )}
 
@@ -202,9 +198,33 @@ export function DesktopHome() {
               <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />New profile
             </button>
           </div>
-          <div className="mt-2.5 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
-            {[...profiles].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((p) => <ProfileCard key={p.id} p={p} />)}
-          </div>
+          {flatProfiles ? (
+            <div className="mt-2.5 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
+              {profileGroups.flatMap((g) => g.items).map((p) => <ProfileCard key={p.id} p={p} />)}
+            </div>
+          ) : profileGroups.map((g) => {
+            const shut = profileGroupFolded(profileFolds, g.key, g.label);
+            return (
+              <div key={g.key} className="mt-3">
+                <button
+                  type="button"
+                  aria-expanded={!shut}
+                  onClick={() => useUiStore.getState().toggleProfileGroup(g.key, g.label)}
+                  className="h-7 flex items-center gap-1.5 text-left text-meta font-semibold text-fg-2 hover:text-fg-1"
+                >
+                  <ChevronRight className={`w-3.5 h-3.5 text-fg-4 transition-transform duration-(--d-pop) ${shut ? '' : 'rotate-90'}`} strokeWidth={1.75} />
+                  {g.label}<span className="font-medium text-fg-3 tnum">{g.items.length}</span>
+                </button>
+                <div className={`pl-fold${shut ? ' shut' : ''}`}>
+                  <div inert={shut}>
+                    <div className="mt-1.5 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
+                      {g.items.map((p) => <ProfileCard key={p.id} p={p} />)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </section>
 
         {servers.length > 0 && (

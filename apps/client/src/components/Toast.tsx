@@ -34,7 +34,7 @@ export function ToastStack({ desktop = false }: { desktop?: boolean }) {
   if (notifications.length === 0) return null;
 
   return (
-    <div className={desktop
+    <div data-panel-keep className={desktop
       ? 'pointer-events-none fixed right-3 bottom-8 z-[60] w-[380px] flex flex-col items-end gap-2'
       : 'pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 px-3 pb-[max(12px,env(safe-area-inset-bottom))]'}>
       {notifications.map((n) => (

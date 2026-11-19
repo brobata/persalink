@@ -15,7 +15,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import {
   ArrowUpCircle, Braces, ClipboardCopy, Columns2, FolderOpen, House, Keyboard, LayoutGrid, Link2,
-  MessageSquare, PanelLeft, Play, Plus, RefreshCw, Rows2, Search, Server, Settings, SlidersHorizontal, Square, TextSearch, Upload, X,
+  MessageSquare, Palette, PanelLeft, Play, Plus, RefreshCw, Rows2, Search, Server, Settings, SlidersHorizontal, Square, TextSearch, Upload, X,
 } from 'lucide-react';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
@@ -30,6 +30,8 @@ import { runKeyAction } from './ShortcutsPanel';
 import { openSession, startProfile } from '../lib/openSession';
 import { deviceKind } from '../lib/device';
 import { remoteSnapshot } from '../lib/remoteServer';
+import { useTerminalStyleStore, THEMES, type ThemeName } from '../stores/terminalStyleStore';
+import { groupProfiles } from '../lib/profileGroups';
 import { StateGlyph } from './ui/StateGlyph';
 import { ProfileTile } from './ui/ProfileTile';
 import { IconButton } from './ui/IconButton';
@@ -110,6 +112,7 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
   const focusedPaneId = useLayoutStore((s) => s.focusedPaneId);
   const layout = useLayoutStore((s) => s.layout);
   const deskHome = useLayoutStore((s) => s.home);
+  const theme = useTerminalStyleStore((s) => s.theme);
   const [remote, remoteVersion] = useRemoteSessions(open, servers, activeServerId);
 
   return useMemo(() => {
@@ -174,10 +177,23 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
       if (target === PHONE_TERMINAL) {
         A('find', 'Find in output', <TextSearch className={ICON} />, () => sendPaneCommand(target, 'find'), { alias: 'search scrollback' });
         A('snippets', 'Snippets', <Braces className={ICON} />, () => sendPaneCommand(target, 'snippets'), { alias: 'commands library' });
-        A('tsettings', 'Terminal settings', <SlidersHorizontal className={ICON} />, () => sendPaneCommand(target, 'terminal-settings'), { alias: 'theme font size appearance' });
+        A('tsettings', 'Appearance', <SlidersHorizontal className={ICON} />, () => sendPaneCommand(target, 'terminal-settings'), { sub: 'Theme, font and size', alias: 'theme font size terminal settings colors' });
       }
     }
     if (!filesDisabled) A('files', 'Files', <FolderOpen className={ICON} />, () => useAppStore.getState().openFiles(), { keys: chord('files'), alias: 'browse upload' });
+    if (!(target === PHONE_TERMINAL)) {
+      A('appearance', 'Appearance', <SlidersHorizontal className={ICON} />, () => {
+        useAppStore.getState().openSettings();
+        setTimeout(() => document.getElementById('appearance')?.scrollIntoView({ block: 'start' }), 60);
+      }, { sub: 'Theme, font and size', alias: 'theme font size terminal settings colors', searchOnly: true });
+    }
+    // Themes apply the moment they are picked.
+    for (const [key, t] of Object.entries(THEMES) as [ThemeName, { label: string }][]) {
+      const inUse = key === theme;
+      A(`theme:${key}`, `Theme: ${t.label}`, <Palette className={ICON} />, () => useTerminalStyleStore.getState().setTheme(key), {
+        tag: inUse ? 'In use' : undefined, alias: `theme ${t.label} color colour scheme appearance`, searchOnly: true,
+      });
+    }
     A('settings', 'Settings', <Settings className={ICON} />, () => useAppStore.getState().openSettings(), { keys: chord('settings'), alias: 'preferences notifications' });
     A('shortcuts', 'Keyboard shortcuts', <Keyboard className={ICON} />, () => useUiStore.getState().openShortcuts(), { keys: chord('shortcuts'), alias: 'keys help' });
     A('reload', 'Reload the app', <RefreshCw className={ICON} />, () => window.location.reload(), { sub: 'Sessions keep running; this page reconnects', alias: 'refresh restart', searchOnly: true });
@@ -198,10 +214,13 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
       A('servers', 'Servers', <Server className={ICON} />, () => useAppStore.getState().openServers(), { alias: 'switch machine add', searchOnly: true });
     }
     // Long lists: only once something is typed.
-    for (const p of profiles) {
-      A(`new:${p.id}`, `New ${p.name} session`, <ProfileTile name={p.name} color={p.color} size={20} />, () => startProfile(p.id), {
-        sub: p.cwd, alias: `new start profile ${p.name} ${p.group ?? ''}`, searchOnly: true,
-      });
+    // In category order (pinned, then each group); the category is a quiet tag.
+    for (const g of groupProfiles(profiles)) {
+      for (const p of g.items) {
+        A(`new:${p.id}`, `New ${p.name} session`, <ProfileTile name={p.name} color={p.color} size={20} />, () => startProfile(p.id), {
+          sub: p.cwd, tag: g.label, alias: `new start profile ${p.name} ${p.group ?? ''}`, searchOnly: true,
+        });
+      }
     }
     for (const p of profiles) {
       for (const a of p.actions ?? []) {
@@ -225,7 +244,7 @@ function useItems(open: boolean): { items: PaletteItem[]; checking: string[] } {
     }
     return { items, checking };
   }, [sessions, profiles, snippets, servers, activeServerId, view, attachedSession, endedSession, filesDisabled,
-    updateAvailable, panes, focusedPaneId, layout, deskHome, remote, remoteVersion]);
+    updateAvailable, panes, focusedPaneId, layout, deskHome, remote, remoteVersion, theme]);
 }
 
 // ---------------------------------------------------------------- view

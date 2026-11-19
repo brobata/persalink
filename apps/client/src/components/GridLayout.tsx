@@ -2,11 +2,10 @@
  * @file GridLayout
  * @description Desktop pane grid. Renders the live workspace's panes
  *   (single, split or 2x2) with 1px hairline gutters, tracks focus, and
- *   shows a session picker when an empty pane is filled. With a right panel
- *   open (Settings, Files, the profile editor; `panel`), the focused pane
- *   keeps the space and every other pane collapses to its 28px strip, still
- *   live; clicking a strip brings that pane up. The title bar and status bar
- *   live in components/desktop.
+ *   shows a session picker when an empty pane is filled. Side panels
+ *   (Settings, Files, the profile editor) slide over the grid from the left
+ *   and never resize it. The title bar and status bar live in
+ *   components/desktop.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -175,7 +174,7 @@ function gridClasses(layout: Layout): string {
   return 'grid-cols-2 grid-rows-2';
 }
 
-export function GridLayout({ panel = false }: { panel?: boolean }) {
+export function GridLayout() {
   const layout = useLayoutStore(s => s.layout);
   const panes = useLayoutStore(s => s.panes);
   const focusedPaneId = useLayoutStore(s => s.focusedPaneId);
@@ -206,21 +205,12 @@ export function GridLayout({ panel = false }: { panel?: boolean }) {
   };
 
   const multi = panes.length > 1;
-  // Panel mode: one column, the focused pane first and full, the rest as
-  // strips. Still a grid (only the template changes): switching the
-  // container to flex left Chromium with a stale zero-height layout inside
-  // the focused pane.
-  const panelStyle = panel && multi
-    ? { gridTemplateColumns: 'minmax(0, 1fr)', gridTemplateRows: `minmax(0, 1fr) ${'28px '.repeat(panes.length - 1).trim()}` }
-    : undefined;
-
   return (
     <div className="flex flex-col h-full min-h-0 bg-bg-0">
-      <div className={`pl-wsg flex-1 min-h-0 ${panelStyle ? '' : gridClasses(layout)}${multi ? ' multi' : ''}`} style={panelStyle}>
+      <div className={`pl-wsg flex-1 min-h-0 ${gridClasses(layout)}${multi ? ' multi' : ''}`}>
         {panes.map((slot, i) => {
           const r = resolvePane(slot.serverId);
           const focused = slot.id === focusedPaneId;
-          const collapsed = !!panelStyle && !focused;
           return (
             <TerminalPane
               key={`${workspaceId}:${slot.id}`}
@@ -231,8 +221,6 @@ export function GridLayout({ panel = false }: { panel?: boolean }) {
               authToken={r.token}
               serverBadge={r.isRemote ? (r.entry?.serverName || r.entry?.label || 'remote') : null}
               isFocused={focused}
-              collapsed={collapsed}
-              order={panelStyle ? (focused ? 0 : 1 + i) : undefined}
               onFocus={() => setFocusedPane(slot.id)}
               onClear={() => clearPane(slot.id)}
               onPickSession={() => setPickerPaneId(slot.id)}

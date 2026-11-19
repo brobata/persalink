@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import {
-  ArrowDownAZ, ArrowLeft, ArrowUp, Camera, Check, ClipboardPaste, Copy, Download, Eye, EyeOff, File as FileIcon, FileArchive,
+  ArrowDownAZ, ArrowUp, Camera, Check, ClipboardPaste, Copy, Download, Eye, EyeOff, File as FileIcon, FileArchive,
   FileAudio, FileCode, FilePlus, FileText, FileVideo, Folder, FolderInput, FolderPlus, FolderUp, Image as ImageIcon, LayoutGrid,
   Link2, List, MoreVertical, Pencil, RefreshCw, Scissors, Search, Star, Trash2, Upload, X,
 } from 'lucide-react';
@@ -23,6 +23,8 @@ import {
   fileAction, fmtDate, fmtSize, joinPath, kindOf, listFolder, loadPrefs, rawUrl, savePrefs, startDownload, tildePath, uploadOne, zipUrl,
 } from '../../lib/files';
 import { FileViewer } from './FileViewer';
+import { SendFileBlock } from './SendFileBlock';
+import { IconButton } from '../ui/IconButton';
 
 const finePointer = () => typeof window !== 'undefined' && window.matchMedia('(pointer: fine)').matches;
 
@@ -486,6 +488,9 @@ export function FilesScreen() {
   // ---- keyboard (desktop) -------------------------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Esc closes the innermost thing first: a viewer, dialog, menu or
+      // selection keeps the Files panel itself open (it checks this flag).
+      if (e.key === 'Escape' && (viewer !== null || dialog || menu || selected.size > 0 || sortOpen || addOpen)) e.preventDefault();
       if (viewer !== null || dialog) return;
       const t = e.target as HTMLElement;
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') {
@@ -498,7 +503,7 @@ export function FilesScreen() {
       else if (mod && e.key.toLowerCase() === 'c' && sel.length) { e.preventDefault(); toClip('copy', sel); }
       else if (mod && e.key.toLowerCase() === 'x' && sel.length && !readOnly) { e.preventDefault(); toClip('move', sel); }
       else if (mod && e.key.toLowerCase() === 'v' && clip && !readOnly) { e.preventDefault(); paste(); }
-      else if (e.key === 'Escape') { setMenu(null); setSelected(new Set()); }
+      else if (e.key === 'Escape') { setMenu(null); setSelected(new Set()); setSortOpen(false); setAddOpen(false); }
       else if ((e.key === 'Delete' || (e.key === 'Backspace' && mod)) && sel.length && !readOnly) { e.preventDefault(); remove(sel); }
       else if (e.key === 'F2' && sel.length === 1 && !readOnly) { e.preventDefault(); setDialog({ kind: 'rename', entry: sel[0] }); }
       else if (e.key === 'Enter' && sel.length === 1) { e.preventDefault(); open(sel[0]); }
@@ -576,9 +581,17 @@ export function FilesScreen() {
       onDrop={(e) => onDropTarget(e, dir)}
     >
       {/* Header */}
-      <header className="shrink-0 px-2 pt-[max(10px,env(safe-area-inset-top))] pb-2 border-b border-zinc-800 space-y-2">
+      <div className="shrink-0 px-3 pt-[max(10px,env(safe-area-inset-top))] border-b border-zinc-800">
+        <div className="flex items-center gap-2 h-11">
+          <h1 className="flex-1 min-w-0 text-lg font-bold">Files</h1>
+          <IconButton label="Close files (Esc)" onClick={goBack} className="-mr-2">
+            <X className="w-5 h-5" strokeWidth={1.75} />
+          </IconButton>
+        </div>
+        <SendFileBlock conn={conn} onBrowse={(p) => void load(p)} refreshKey={uploads.length} />
+      </div>
+      <header className="shrink-0 px-2 pt-2 pb-2 border-b border-zinc-800 space-y-2">
         <div className="flex items-center gap-1">
-          <ToolButton onClick={goBack} title="Back"><ArrowLeft className="w-5 h-5" /></ToolButton>
           <ToolButton onClick={() => listing?.parent && void load(listing.parent)} disabled={!listing?.parent} title="Up one folder">
             <ArrowUp className="w-5 h-5" />
           </ToolButton>
@@ -684,7 +697,7 @@ export function FilesScreen() {
             <button
               onClick={() => setAddOpen((o) => !o)}
               disabled={!dir || readOnly}
-              className="ml-1 flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-accent-ink bg-accent rounded-lg active:bg-accent-lo hover:bg-accent-hi disabled:opacity-40"
+              className="ml-1 flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-fg-1 border border-line-2 rounded-lg hover:bg-bg-3 active:bg-bg-3 disabled:opacity-40"
             >
               <Upload className="w-4 h-4" /> <span className="hidden sm:inline">Add</span>
             </button>

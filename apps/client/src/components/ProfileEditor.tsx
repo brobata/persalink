@@ -1,7 +1,9 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useAppStore } from '../stores/appStore';
 import type { Profile, QuickAction, HealthCheck } from '@persalink/shared/protocol';
+import { X } from 'lucide-react';
 import { ProfileTile } from './ui/ProfileTile';
+import { IconButton } from './ui/IconButton';
 
 const COLOR_PRESETS = [
   '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4',
@@ -313,14 +315,10 @@ export function ProfileEditor() {
       {/* Header */}
       <header className="shrink-0 px-4 pt-[max(16px,env(safe-area-inset-top))] pb-3 border-b border-zinc-800">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => closeOverlay()}
-              className="px-2.5 py-1 text-xs bg-zinc-800 text-zinc-400 rounded-md
-                         active:bg-zinc-700 transition-colors"
-            >
-              &larr; Back
-            </button>
+          <div className="flex items-center gap-1 min-w-0">
+            <IconButton label="Close without saving (Esc)" onClick={() => closeOverlay()} className="-my-1 -ml-2">
+              <X className="w-5 h-5" strokeWidth={1.75} />
+            </IconButton>
             <h1 className="text-lg font-bold">{isNew ? 'New Profile' : 'Edit Profile'}</h1>
           </div>
           <button

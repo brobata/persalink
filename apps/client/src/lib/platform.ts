@@ -54,6 +54,23 @@ export function persistName(name: string): string {
   return APP_BASE === '/' ? name : `${name}:beta`;
 }
 
+/**
+ * First run of the preview: copy the live app's saved copy of a store into
+ * the preview's own key, once, so the preview starts where the person
+ * already is (their theme, font, size). Only READS the live key. A marker
+ * makes it happen once; after that the preview's copy is its own.
+ */
+export function seedFromLive(name: string): void {
+  if (APP_BASE === '/') return;
+  try {
+    const marker = `${name}:beta-seeded`;
+    if (localStorage.getItem(marker)) return;
+    const live = localStorage.getItem(name);
+    if (live !== null) localStorage.setItem(persistName(name), live);
+    localStorage.setItem(marker, '1');
+  } catch { /* storage blocked: start from defaults */ }
+}
+
 /** Width at which the client switches to the desktop sidebar + grid layout. */
 export const DESKTOP_MQ = '(min-width: 768px)';
 

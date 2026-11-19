@@ -63,7 +63,7 @@ export function StatusBar() {
   );
 
   return (
-    <footer className="pl-stb" aria-label="Status">
+    <footer className="pl-stb" aria-label="Status" data-panel-keep>
       <span className="it" title={others.length ? `Other servers: ${others.join(', ')}` : undefined}>
         <ConnectionReadout server />
       </span>

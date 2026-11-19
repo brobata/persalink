@@ -12,9 +12,9 @@ import { ChevronRight, Pencil, Plus, SquareTerminal } from 'lucide-react';
 import { getInitialDims } from '../../lib/terminalDims';
 import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 import { useAppStore } from '../../stores/appStore';
-import { useAttentionOrder } from '../../lib/sessionOrder';
+import { useActiveOrder } from '../../lib/sessionOrder';
 import { startProfile } from '../../lib/openSession';
-import { countStates, groupSessions, needsSentence, sessionTitle, stateKey } from '../../lib/sessionState';
+import { countStates, groupOf, needsSentence, sessionTitle, stateKey } from '../../lib/sessionState';
 import { Sheet } from './Sheet';
 import { SessionRow } from './SessionRow';
 import { StateGlyph } from './StateGlyph';
@@ -63,7 +63,8 @@ function SwitcherRow({ s, active, onPick }: {
     <SessionRow
       session={s}
       current={active}
-      detail="auto"
+      // One line per row; a waiting agent keeps its question.
+      detail={groupOf(stateKey(s)) === 'needs' ? 'auto' : 'never'}
       onOpen={() => onPick(s.id)}
       trailing={(
         <IconButton label={`Rename ${sessionTitle(s)}`} onClick={() => { setEditName(s.name || s.profileName || ''); setEditing(true); }}>
@@ -74,9 +75,9 @@ function SwitcherRow({ s, active, onPick }: {
   );
 }
 
-// Quick session switcher: every live session in the named groups (Needs you,
-// Working, Quiet, Ended), longest wait first, so you can hop between agents
-// without going home. Quiet and Ended fold to their header.
+// Quick session switcher: every live session in one Active list (waiting
+// first, then newest started first, so rows stay put while agents flip
+// between working and quiet), and Ended folded under it.
 export function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }: {
   sessions: SessionInfo[];
   currentId: string | null;
@@ -84,8 +85,11 @@ export function SessionSwitcher({ sessions, currentId, onPick, onNew, onClose }:
   onNew: () => void;
   onClose: () => void;
 }) {
-  const ordered = useAttentionOrder(sessions);
-  const groups = groupSessions(ordered).filter((g) => g.items.length > 0);
+  const ordered = useActiveOrder(sessions);
+  const groups = [
+    { id: 'active', label: 'Active', items: ordered.filter((s) => groupOf(stateKey(s)) !== 'ended') },
+    { id: 'ended', label: 'Ended', items: ordered.filter((s) => groupOf(stateKey(s)) === 'ended') },
+  ].filter((g) => g.items.length > 0);
   const c = countStates(sessions);
   return (
     <Sheet

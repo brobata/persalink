@@ -2,14 +2,17 @@
  * @file DesktopShell
  * @description The desktop frame, one spatial model: the title bar on top;
  *   left = where (the sidebar inbox or its rail); centre = the work (the
- *   pane grid, or the Home tab); right = details on demand (Settings, Files
- *   and the profile editor slide over the right edge as a 480px panel while
- *   the panes stay live, the unfocused ones folded to their strips); the
- *   status bar at the bottom carries every confirmation. Window-level
- *   surfaces (palette, shortcuts, PUBLIC badge) come in as children.
+ *   pane grid, or the Home tab); the status bar at the bottom carries every
+ *   confirmation. Settings, Files and the profile editor open where they are
+ *   clicked: a panel slides out from the sidebar's right edge over the left
+ *   of the work area. The panes behind it keep their size (nothing
+ *   collapses or re-fits). Its X, Esc, a second click on its sidebar button
+ *   or a click anywhere outside it closes it (not the profile editor, which
+ *   holds unsaved typing: X, Save or Esc only). Window-level surfaces
+ *   (palette, shortcuts, PUBLIC badge) come in as children.
  */
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useAppStore } from '../../stores/appStore';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { Sidebar } from '../Sidebar';
@@ -23,17 +26,47 @@ import { TitleBar } from './TitleBar';
 import { StatusBar } from './StatusBar';
 import { DesktopHome } from './DesktopHome';
 
-function RightPanel({ children, label }: { children: ReactNode; label: string }) {
-  const closeOverlay = useAppStore((s) => s.closeOverlay);
+/** Clicks here never count as "outside the panel": the panel's own toggle
+ *  buttons (they toggle it themselves), and dialogs, sheets and toasts that
+ *  float above everything. */
+const KEEP_OPEN = '[data-panel-toggle],[role="dialog"],[data-panel-keep]';
+
+function SidePanel({ children, label, closeOnOutside }: { children: ReactNode; label: string; closeOnOutside: boolean }) {
+  const ref = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const close = () => useAppStore.getState().closeOverlay();
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!closeOnOutside) return;
+      if (!t || !t.isConnected || ref.current?.contains(t) || t.closest(KEEP_OPEN)) return;
+      close();
+    };
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const t = e.target as Element | null;
+      // Esc in a text field belongs to the field (clear a search, cancel a
+      // rename); Esc in a terminal belongs to the program in it.
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+      if (t?.closest?.('.xterm, [role="dialog"]')) return;
+      // Decide after every listener ran: a screen that used this Esc for
+      // something inner (close a menu, clear a selection) marks it handled.
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; if (!e.defaultPrevented) close(); }, 0);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+      if (timer) clearTimeout(timer);
+    };
+  }, [closeOnOutside]);
+
   return (
-    <aside className="pl-rp" aria-label={label}>
-      {/* Each screen's own Back closes it, and so does Esc. */}
-      <div
-        className="flex-1 min-h-0 overflow-hidden flex flex-col"
-        onKeyDown={(e) => { if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) closeOverlay(); }}
-      >
-        {children}
-      </div>
+    <aside ref={ref} className="pl-lp" aria-label={label}>
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">{children}</div>
     </aside>
   );
 }
@@ -49,16 +82,18 @@ export function DesktopShell({ children }: { children?: ReactNode }) {
       <TitleBar />
       <div className="flex-1 min-h-0 flex">
         <Sidebar />
-        <main className="flex-1 min-w-0 min-h-0 flex">
+        <main className="flex-1 min-w-0 min-h-0 flex relative">
           <div className="flex-1 min-w-0 min-h-0">
-            {home ? <DesktopHome /> : <GridLayout panel={panel} />}
+            {home ? <DesktopHome /> : <GridLayout />}
           </div>
           {panel && (
-            <RightPanel key={view} label={panelLabel}>
+            // The profile editor holds unsaved typing: only its X, Save or
+            // Esc close it, never a stray click on a terminal.
+            <SidePanel key={view} label={panelLabel} closeOnOutside={view !== 'profile-editor'}>
               {view === 'settings' && <SettingsScreen />}
               {view === 'profile-editor' && <ProfileEditor />}
               {view === 'files' && <FilesScreen />}
-            </RightPanel>
+            </SidePanel>
           )}
         </main>
       </div>

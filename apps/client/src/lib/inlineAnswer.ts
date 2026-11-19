@@ -40,6 +40,26 @@ export function sendKeyCommand(id: string, key: string): string | null {
   return `tmux send-keys -t ${target(id)} -l '${key}'`;
 }
 
+/** A path as the shell should read it: anything outside the plain set (a
+ *  space, a quote, a parenthesis) is backslash-escaped. `~` stays bare so
+ *  it still expands. */
+export function shellPath(p: string): string {
+  return p.replace(/[^A-Za-z0-9._~/+@:=,%-]/g, (c) => `\\${c}`);
+}
+
+/**
+ * Type a line of text into the session literally, no Enter (the Files
+ * panel's "Send a file to ..." pastes uploaded paths this way when the
+ * session is not on screen). Control characters are refused so nothing can
+ * press Enter or Esc on the person's behalf; quotes are escaped for sh.
+ */
+export function typeTextCommand(id: string, text: string): string | null {
+  if (!isAnswerableSession(id) || !text || text.length > 4000) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(text)) return null;
+  return `tmux send-keys -t ${target(id)} -l '${text.replace(/'/g, `'\\''`)}'`;
+}
+
 /** The numbered prompt at the bottom of captured pane text, or null. */
 export function promptFromCapture(text: string): ClaudePrompt | null {
   const lines = text.replace(/\r/g, '').split('\n');

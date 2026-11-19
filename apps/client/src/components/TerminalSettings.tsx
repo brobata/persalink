@@ -1,8 +1,10 @@
 /**
  * @file TerminalSettings
- * @description Popover UI for adjusting xterm font and color theme. Lives
- *   behind the gear button in the GridLayout top bar. Changes apply live to
- *   every mounted TerminalPane via the terminalStyleStore.
+ * @description The one Appearance control set: color theme swatches, font,
+ *   weight, size, history and gestures. Three shells for the same controls:
+ *   the desktop title bar popover, the phone sheet (More > Appearance) and
+ *   inline in Settings. Changes apply live to every mounted terminal via the
+ *   terminalStyleStore (and the pane surround follows the theme).
  */
 
 import { useEffect, useRef } from 'react';
@@ -13,10 +15,10 @@ import {
 } from '../stores/terminalStyleStore';
 
 interface TerminalSettingsProps {
-  onClose: () => void;
-  /** 'popover' anchors under the grid gear (desktop); 'sheet' renders as a
-   *  mobile bottom sheet — same controls, different shell. */
-  variant?: 'popover' | 'sheet';
+  onClose?: () => void;
+  /** 'popover' anchors under the title bar button (desktop); 'sheet' renders
+   *  as a phone bottom sheet; 'inline' sits in Settings. Same controls. */
+  variant?: 'popover' | 'sheet' | 'inline';
 }
 
 export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSettingsProps) {
@@ -25,7 +27,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
 
   useEffect(() => {
     // The sheet variant gets dismiss and Esc from the shared Sheet.
-    if (variant === 'sheet') return;
+    if (variant !== 'popover' || !onClose) return;
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
@@ -53,6 +55,38 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
 
   const controls = (
     <>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-meta font-semibold text-fg-2">Color theme</label>
+          <span className="text-[11px] text-zinc-400">{THEMES[style.theme]?.label}</span>
+        </div>
+        {/* Swatch grid — bg chip + accent dots per theme, name on hover/press.
+            Scales to the full theme pack where a select + strip couldn't. */}
+        <div className="grid grid-cols-4 gap-1.5">
+          {(Object.entries(THEMES) as [ThemeName, { label: string; theme: { background: string; foreground: string; green: string; blue: string; magenta: string } }][]).map(
+            ([key, { label, theme }]) => (
+              <button
+                key={key}
+                onClick={() => style.setTheme(key)}
+                className={`h-9 rounded-md border transition-colors ${
+                  style.theme === key ? 'border-zinc-200 ring-1 ring-zinc-200' : 'border-zinc-700 hover:border-zinc-500'
+                }`}
+                style={{ backgroundColor: theme.background }}
+                title={label}
+                aria-label={label}
+              >
+                <div className="flex items-center justify-center gap-[3px] h-full">
+                  <span style={{ backgroundColor: theme.foreground }} className="w-1.5 h-1.5 rounded-full" />
+                  <span style={{ backgroundColor: theme.green }} className="w-1.5 h-1.5 rounded-full" />
+                  <span style={{ backgroundColor: theme.blue }} className="w-1.5 h-1.5 rounded-full" />
+                  <span style={{ backgroundColor: theme.magenta }} className="w-1.5 h-1.5 rounded-full" />
+                </div>
+              </button>
+            )
+          )}
+        </div>
+      </div>
+
       <div className="space-y-1.5">
         <label className="text-meta font-semibold text-fg-2">Font</label>
         <select
@@ -118,38 +152,6 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
         </p>
       </div>
 
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <label className="text-meta font-semibold text-fg-2">Color theme</label>
-          <span className="text-[11px] text-zinc-400">{THEMES[style.theme]?.label}</span>
-        </div>
-        {/* Swatch grid — bg chip + accent dots per theme, name on hover/press.
-            Scales to the full theme pack where a select + strip couldn't. */}
-        <div className="grid grid-cols-4 gap-1.5">
-          {(Object.entries(THEMES) as [ThemeName, { label: string; theme: { background: string; foreground: string; green: string; blue: string; magenta: string } }][]).map(
-            ([key, { label, theme }]) => (
-              <button
-                key={key}
-                onClick={() => style.setTheme(key)}
-                className={`h-9 rounded-md border transition-colors ${
-                  style.theme === key ? 'border-zinc-200 ring-1 ring-zinc-200' : 'border-zinc-700 hover:border-zinc-500'
-                }`}
-                style={{ backgroundColor: theme.background }}
-                title={label}
-                aria-label={label}
-              >
-                <div className="flex items-center justify-center gap-[3px] h-full">
-                  <span style={{ backgroundColor: theme.foreground }} className="w-1.5 h-1.5 rounded-full" />
-                  <span style={{ backgroundColor: theme.green }} className="w-1.5 h-1.5 rounded-full" />
-                  <span style={{ backgroundColor: theme.blue }} className="w-1.5 h-1.5 rounded-full" />
-                  <span style={{ backgroundColor: theme.magenta }} className="w-1.5 h-1.5 rounded-full" />
-                </div>
-              </button>
-            )
-          )}
-        </div>
-      </div>
-
       <div className="flex items-center justify-between pt-1">
         <div>
           <label htmlFor="double-tap-tab" className="text-xs text-zinc-300">Double-tap sends Tab</label>
@@ -198,9 +200,21 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
     </>
   );
 
+  if (variant === 'inline') {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between -mt-1">
+          <span className="text-[11px] text-zinc-500">Changes apply live to every terminal</span>
+          {reset}
+        </div>
+        {controls}
+      </div>
+    );
+  }
+
   if (variant === 'sheet') {
     return (
-      <Sheet title="Terminal appearance" sub="Changes apply live" onClose={onClose} headExtra={reset}>
+      <Sheet title="Appearance" sub="Theme, font and size. Changes apply live" onClose={onClose ?? (() => {})} headExtra={reset}>
         <div className="px-2 pb-2 space-y-3">{controls}</div>
       </Sheet>
     );
@@ -212,7 +226,7 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
       className="absolute top-full right-0 mt-1 z-50 w-[300px] bg-bg-2 border border-line-2 rounded-[10px] shadow-(--e-2-shadow) p-3 space-y-3 motion-safe:animate-pop"
     >
       <div className="flex items-center justify-between">
-        <span className="text-meta font-semibold text-fg-1">Terminal appearance</span>
+        <span className="text-meta font-semibold text-fg-1">Appearance</span>
         {reset}
       </div>
       {controls}

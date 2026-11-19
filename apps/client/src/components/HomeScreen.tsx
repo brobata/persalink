@@ -2,9 +2,12 @@
  * @file HomeScreen
  * @description Phone Home, the agent inbox (the Titan runs the same screen,
  *   tightened by html.pl-square). First glance answers "what needs me":
- *   "N agents need you" and who waited longest, then one card per waiting
- *   agent with its answers inline (at most three, then "+N more waiting"),
- *   Working as one-line rows, Quiet and Ended folded to a summary line,
+ *   "N agents need you" and who waited longest, then one Active section
+ *   with every live session: a card per waiting agent with its answers
+ *   inline (at most three, then "+N more waiting"), then every other session
+ *   as a one-line row in a stable order (newest started first, so rows do
+ *   not jump when an agent flips between working and quiet). Ended folds
+ *   to a summary line,
  *   profiles as a chip rail (tap opens, hold starts a new one), and the
  *   servers last and quiet. On the Titan the headline moves into the header
  *   ("2 need you · 2 working") so both waiting cards fit above the dock.
@@ -17,8 +20,8 @@ import type { SessionInfo } from '@persalink/shared/protocol';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
 import { useUiStore } from '../stores/uiStore';
 import { usePullToRefresh } from '../lib/usePullToRefresh';
-import { useAttentionOrder, waitAge } from '../lib/sessionOrder';
-import { countStates, groupSessions, needsSentence, sessionTitle, stateKey, type GroupId } from '../lib/sessionState';
+import { useActiveOrder, waitAge } from '../lib/sessionOrder';
+import { countStates, groupOf, needsSentence, sessionTitle, stateKey } from '../lib/sessionState';
 import { openSession, openSessionToReply } from '../lib/openSession';
 import { readout } from '../lib/readout';
 import { sentSentence } from '../lib/statusLine';
@@ -37,12 +40,12 @@ import { Sheet, useSheetClose } from './ui/Sheet';
 const CAP = 3;
 const FOLD_KEY = 'persalink-home-fold';
 
-function readFold(): Record<'quiet' | 'ended', boolean> {
+function readFold(): Record<'ended', boolean> {
   try {
-    const v = JSON.parse(localStorage.getItem(FOLD_KEY) || 'null') as Partial<Record<'quiet' | 'ended', boolean>> | null;
-    return { quiet: v?.quiet ?? true, ended: v?.ended ?? true };
+    const v = JSON.parse(localStorage.getItem(FOLD_KEY) || 'null') as Partial<Record<'ended', boolean>> | null;
+    return { ended: v?.ended ?? true };
   } catch {
-    return { quiet: true, ended: true };
+    return { ended: true };
   }
 }
 
@@ -164,7 +167,7 @@ export function HomeScreen() {
   const servers = useAppStore((s) => s.servers);
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const refresh = useAppStore((s) => s.refresh);
-  const ordered = useAttentionOrder(sessions);
+  const ordered = useActiveOrder(sessions);
   const square = useSquare();
 
   const [showAll, setShowAll] = useState(false);
@@ -182,7 +185,7 @@ export function HomeScreen() {
     flashTimer.current = setTimeout(() => setFlash(null), 2400);
   }, []);
 
-  const toggleFold = (g: 'quiet' | 'ended') => setFold((f) => {
+  const toggleFold = (g: 'ended') => setFold((f) => {
     const next = { ...f, [g]: !f[g] };
     try { localStorage.setItem(FOLD_KEY, JSON.stringify(next)); } catch { /* per-viewer nicety only */ }
     return next;
@@ -195,11 +198,10 @@ export function HomeScreen() {
   const pullProgress = Math.min(1, pullDistance / triggerDistance);
   const animatePull = phase !== 'pulling';
 
-  const groups = groupSessions(ordered);
-  const needs = groups[0].items;
-  const working = groups[1].items;
-  const quiet = groups[2].items;
-  const ended = groups[3].items;
+  const needs = ordered.filter((s) => groupOf(stateKey(s)) === 'needs');
+  const rest = ordered.filter((s) => { const g = groupOf(stateKey(s)); return g !== 'needs' && g !== 'ended'; });
+  const ended = ordered.filter((s) => groupOf(stateKey(s)) === 'ended');
+  const live = needs.length + rest.length;
   const c = countStates(sessions);
   const shownNeeds = showAll ? needs : needs.slice(0, CAP);
   const more = needs.length - shownNeeds.length;
@@ -248,13 +250,10 @@ export function HomeScreen() {
     </IconButton>
   );
 
-  const folded = (id: Extract<GroupId, 'quiet' | 'ended'>, label: string, items: SessionInfo[]) => {
+  const folded = (id: 'ended', label: string, items: SessionInfo[]) => {
     if (!items.length) return null;
     const shut = fold[id];
-    const fresh = items.filter((s) => stateKey(s) === 'done');
-    const sum = id === 'quiet'
-      ? (fresh.length ? `${fresh.map(sessionTitle).join(', ')} ${fresh.length === 1 ? 'has' : 'have'} new output` : items.map(sessionTitle).join(', '))
-      : `${items.length} ended or offline`;
+    const sum = `${items.length} ended or offline`;
     return (
       <section className="pl-hgrp quietish" data-sec={id}>
         <button type="button" className="pl-gh fold" aria-expanded={!shut} onClick={() => toggleFold(id)}>
@@ -320,22 +319,25 @@ export function HomeScreen() {
             <p>{lead}</p>
           </header>
 
-          {needs.length > 0 && (
-            <section className="pl-hgrp needs" data-sec="needs" aria-label="Needs you, longest wait first">
-              <div className="pl-wlist">
-                {shownNeeds.map((s, i) => (
-                  <WaitCard
-                    key={s.id}
-                    session={s}
-                    variant="touch"
-                    accent={i === 0}
-                    onOpen={(x) => openSession(x.id, null)}
-                    onReply={(x) => openSessionToReply(x.id)}
-                    onSent={onSent}
-                    onNotSent={onNotSent}
-                  />
-                ))}
-              </div>
+          {live > 0 && (
+            <section className="pl-hgrp" data-sec="active" aria-label="Active sessions, waiting first">
+              <h2 className="pl-gh">Active<span className="cnt tnum">{live}</span></h2>
+              {needs.length > 0 && (
+                <div className="pl-wlist">
+                  {shownNeeds.map((s, i) => (
+                    <WaitCard
+                      key={s.id}
+                      session={s}
+                      variant="touch"
+                      accent={i === 0}
+                      onOpen={(x) => openSession(x.id, null)}
+                      onReply={(x) => openSessionToReply(x.id)}
+                      onSent={onSent}
+                      onNotSent={onNotSent}
+                    />
+                  ))}
+                </div>
+              )}
               {more > 0 && (
                 <button type="button" className="pl-morewait" onClick={() => setShowAll(true)}>
                   <StateGlyph state="waiting" size={10} />
@@ -343,23 +345,18 @@ export function HomeScreen() {
                   <span className="sa">Show all</span>
                 </button>
               )}
+              {rest.length > 0 && (
+                <div className={`pl-rows${needs.length ? ' mt-2' : ''}`}>
+                  {rest.map((s) => (
+                    <div key={s.id} data-flip={s.id}>
+                      <SessionRow session={s} detail="never" onOpen={() => openSession(s.id, null)} trailing={rowMenu(s)} />
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
           )}
 
-          {working.length > 0 && (
-            <section className="pl-hgrp" data-sec="working">
-              <h2 className="pl-gh">Working<span className="cnt tnum">{working.length}</span></h2>
-              <div className="pl-rows">
-                {working.map((s) => (
-                  <div key={s.id} data-flip={s.id}>
-                    <SessionRow session={s} detail="auto" onOpen={() => openSession(s.id, null)} trailing={rowMenu(s)} />
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {folded('quiet', 'Quiet', quiet)}
           {folded('ended', 'Ended', ended)}
 
           {sessions.length === 0 && (

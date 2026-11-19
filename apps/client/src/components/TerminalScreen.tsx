@@ -35,7 +35,7 @@ import { ReconnectBanner } from './ui/Reconnect';
 import { sessionTitle, stateKey, stateWord } from '../lib/sessionState';
 import {
   ArrowDown, Braces, Check, ChevronDown, ChevronUp, ClipboardCopy, ClipboardPaste, Copy, Ellipsis, Keyboard, Link,
-  MessageSquare, Mic, Plus, Rows3, Search, SlidersHorizontal, SquarePlus, TextCursor, TextSearch, Upload, X,
+  MessageSquare, Mic, Palette, Paperclip, Plus, Rows3, Search, SquarePlus, TextCursor, TextSearch, X,
 } from 'lucide-react';
 import { PANE_COMMAND_EVENT, PHONE_TERMINAL, type PaneCommandDetail } from '../lib/paneCommands';
 import { isRedirectOption, promptOnScreen, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
@@ -1963,15 +1963,15 @@ export function TerminalScreen() {
     else if (r.open()) terminalRef.current?.blur();
   };
   const moreItems: MenuItem[] = [
+    { id: 'upload', icon: <Paperclip />, label: 'Attach a file', sub: title ? `uploads it and types the path into ${title}` : undefined, hidden: filesDisabled, run: () => fileInputRef.current?.click() },
     { id: 'palette', icon: <Search />, label: 'Search everything', run: () => openPalette() },
     { id: 'copy', icon: <ClipboardCopy />, label: 'Copy from Claude', run: () => setClaudeTab('copy') },
-    { id: 'upload', icon: <Upload />, label: 'Upload a file', sub: title ? `into ${title}` : undefined, hidden: filesDisabled, run: () => fileInputRef.current?.click() },
     { id: 'paste', icon: <ClipboardPaste />, label: 'Paste', run: () => { void pasteFromClipboard(); } },
     { id: 'links', icon: <Link />, label: 'Links in this session', run: () => requestLinks() },
     { id: 'textview', icon: <TextCursor />, label: 'Select text', sub: 'hold a word, like a web page', run: openTextView },
     { id: 'find', icon: <TextSearch />, label: 'Find in output', run: () => setShowSearch(true) },
     { id: 'window', icon: <SquarePlus />, label: 'New window', sub: 'in this session', run: () => createWindow() },
-    { id: 'tsettings', icon: <SlidersHorizontal />, label: 'Terminal settings', run: () => setShowStyleSheet(true) },
+    { id: 'tsettings', icon: <Palette />, label: 'Appearance', sub: 'theme, font and size', run: () => setShowStyleSheet(true) },
     { id: 'shortcuts', icon: <Keyboard />, label: 'Keyboard shortcuts', sub: 'for a phone with keys', run: () => openShortcuts() },
   ];
 
@@ -2046,6 +2046,8 @@ export function TerminalScreen() {
         currentId={attachedSession?.id ?? null}
         onJumpWaiting={(s) => switchTo(s.id)}
         onSearch={() => openPalette()}
+        onAttach={filesDisabled || !liveAttached || isEnded ? undefined : () => fileInputRef.current?.click()}
+        attachBusy={uploading}
       />
 
       {/* Upload (More, Alt+U) */}
@@ -2103,7 +2105,7 @@ export function TerminalScreen() {
 
       {/* Terminal — absolute positioning gives xterm.js real pixel dimensions */}
       <div
-        className="flex-1 min-h-0 relative overflow-hidden bg-bg-term"
+        className="flex-1 min-h-0 relative overflow-hidden pl-term-surround"
         onClick={() => {
           // Ended: nothing to type into, so don't raise the keyboard.
           if (useAppStore.getState().endedSession) return;

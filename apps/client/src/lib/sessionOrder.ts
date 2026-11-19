@@ -6,8 +6,11 @@
  *   action. Order: waiting, error, working, done-unseen, quiet, exited.
  *   Inside "needs you" the session that has waited longest comes first, so
  *   every list and every next-waiting control agree; the rest are newest
- *   first. useAttentionOrder() holds the order still while a finger or mouse
- *   is down, so a row never moves under a tap.
+ *   first. activeOrder() is the calmer order of the one Active list: needs
+ *   you first, then everything else newest-started first, so a row never
+ *   moves when its agent flips between working and quiet. useAttentionOrder()
+ *   and useActiveOrder() hold their order still while a finger or mouse is
+ *   down, so a row never moves under a tap.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -52,6 +55,18 @@ function compare(a: SessionInfo, b: SessionInfo): number {
 /** A new array in attention order; the input is left alone. */
 export function orderSessions<T extends SessionInfo>(sessions: readonly T[]): T[] {
   return [...sessions].sort(compare);
+}
+
+/**
+ * The order of the one Active list (sidebar, phone Home, switcher): the
+ * sessions that need you first, longest wait first; then every other live
+ * session newest-started first. Start time never changes, so a row keeps its
+ * place while its agent flips between working, done and idle.
+ */
+export function activeOrder<T extends SessionInfo>(sessions: readonly T[]): T[] {
+  const needs = sessions.filter(needsYou).sort(compare);
+  const rest = sessions.filter((s) => !needsYou(s)).sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+  return [...needs, ...rest];
 }
 
 /** Sessions that need you, longest wait first. */
@@ -99,7 +114,16 @@ const HOLD_AFTER_RELEASE_MS = 3500;
  * the hold ends, then the list settles into the live order.
  */
 export function useAttentionOrder<T extends SessionInfo>(sessions: readonly T[]): T[] {
-  const live = useMemo(() => orderSessions(sessions), [sessions]);
+  return useHeldOrder(sessions, orderSessions);
+}
+
+/** activeOrder(), held still under a pointer the same way. */
+export function useActiveOrder<T extends SessionInfo>(sessions: readonly T[]): T[] {
+  return useHeldOrder(sessions, activeOrder);
+}
+
+function useHeldOrder<T extends SessionInfo>(sessions: readonly T[], order: (list: readonly T[]) => T[]): T[] {
+  const live = useMemo(() => order(sessions), [sessions, order]);
   const latest = useRef(live);
   latest.current = live;
   const [held, setHeld] = useState<string[] | null>(null);

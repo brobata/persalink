@@ -86,9 +86,10 @@ export function runKeyAction(action: KeyAction): void {
       return;
     case 'files':
       if (app.filesDisabled) app.pushNotification('info', 'Files are turned off for this connection');
+      else if (app.view === 'files') app.closeOverlay();
       else app.openFiles();
       return;
-    case 'settings': app.openSettings(); return;
+    case 'settings': if (app.view === 'settings') app.closeOverlay(); else app.openSettings(); return;
     case 'home':
       if (deviceKind() === 'desktop') { app.closeOverlay(); useLayoutStore.getState().showHome(); return; }
       if (app.view !== 'home') app.goBack();

@@ -1,13 +1,14 @@
 /**
  * @file Sidebar
- * @description The desktop sidebar: a calm inbox, left of the panes. Named
- *   groups in a fixed order (Needs you, Working, Quiet, Ended, Profiles,
- *   Servers), one line per row; only the selected row (the focused pane's
- *   session) says its question, and Working rows carry one activity line.
- *   Needs you shows at most three rows, then "+N more waiting · Show all".
- *   Quiet, Ended and Profiles start folded with a count; a folded group still
- *   shows the selected row so the sidebar always says where you are. No
- *   answer chips here: the focused pane strip is the one answer surface.
+ * @description The desktop sidebar: a calm inbox, left of the panes. One
+ *   Active section holds every live session (waiting first, then the rest
+ *   newest-started first, so rows stay put while agents flip between working
+ *   and quiet), one line per row with its state glyph and age; only the
+ *   selected row (the focused pane's session) says its question. Then Ended
+ *   (folded), Profiles in their categories (pinned first, Archive folded,
+ *   fold state remembered) and Servers. A folded section still shows the
+ *   selected row. No answer chips here: the focused pane strip is the one
+ *   answer surface. The footer's Files and Settings toggle their left panel.
  *   Ctrl+Alt+B folds the sidebar to a 52px rail of glyphs and monograms. On
  *   the desktop Home tab it is always the rail, holding Home, Files and
  *   Settings only (Home already lists everything).
@@ -21,8 +22,10 @@ import type { Profile, SessionInfo } from '@persalink/shared/protocol';
 import { useAppStore, type ServerEntry } from '../stores/appStore';
 import { useLayoutStore } from '../stores/layoutStore';
 import { useUiStore, type SidebarGroup } from '../stores/uiStore';
-import { useAttentionOrder } from '../lib/sessionOrder';
-import { groupSessions, groupOf, sessionTitle, stateKey, stateWord, type GroupId } from '../lib/sessionState';
+import { useActiveOrder } from '../lib/sessionOrder';
+import { groupOf, sessionTitle, stateKey, stateWord } from '../lib/sessionState';
+import { groupProfiles, isFlat } from '../lib/profileGroups';
+import { profileGroupFolded } from '../stores/uiStore';
 import { openSession, startProfile } from '../lib/openSession';
 import { readout } from '../lib/readout';
 import { SessionRow } from './ui/SessionRow';
@@ -30,7 +33,6 @@ import { ProfileTile } from './ui/ProfileTile';
 import { StateGlyph } from './ui/StateGlyph';
 import { IconButton } from './ui/IconButton';
 
-const NEEDS_CAP = 3;
 const ICON = 'w-4 h-4';
 
 /** The session in the focused pane, when that pane is on the active server. */
@@ -48,6 +50,15 @@ function useInView(): Set<string> {
   return useMemo(() => new Set(panes.map((p) => p.sessionId).filter((x): x is string => !!x)), [panes]);
 }
 
+/** Files and Settings open where they are clicked, and a second click
+ *  closes them (clicking the other one swaps). */
+export function togglePanel(which: 'files' | 'settings'): void {
+  const app = useAppStore.getState();
+  if (app.view === which) app.closeOverlay();
+  else if (which === 'files') app.openFiles();
+  else app.openSettings();
+}
+
 // ============================================================================
 // Rows
 // ============================================================================
@@ -55,16 +66,14 @@ function useInView(): Set<string> {
 function SidebarSession({ session, selected, inView }: { session: SessionInfo; selected: boolean; inView: boolean }) {
   const killSession = useAppStore((s) => s.killSession);
   const [confirmKill, setConfirmKill] = useState(false);
-  const g = groupOf(stateKey(session));
   return (
     <SessionRow
       session={session}
       density="compact"
       current={selected}
       selected={selected}
-      // Working rows always say what they are doing; every other row only
-      // when selected (the waiting question lives on the selected row).
-      detail={g === 'working' ? 'auto' : 'selected'}
+      // One line per row; only the selected row says its question.
+      detail="selected"
       hint={selected ? 'In the focused pane' : inView ? 'In a pane. Click to focus it.' : 'Open in the focused pane'}
       onOpen={() => openSession(session.id, null)}
       trailing={confirmKill ? (
@@ -252,9 +261,12 @@ function Rail({ homeOnly }: { homeOnly: boolean }) {
   const view = useAppStore((s) => s.view);
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const home = useLayoutStore((s) => s.home);
-  const ordered = useAttentionOrder(sessions);
+  const ordered = useActiveOrder(sessions);
   const selectedId = useSelectedId();
-  const groups = groupSessions(ordered).filter((g) => g.items.length > 0);
+  // Waiting glyphs, a hairline, then the rest: the Active list, in miniature.
+  const needs = ordered.filter((s) => groupOf(stateKey(s)) === 'needs');
+  const groups = [{ id: 'needs', items: needs }, { id: 'rest', items: ordered.filter((s) => groupOf(stateKey(s)) !== 'needs') }]
+    .filter((g) => g.items.length > 0);
   const pinned = profiles.filter((p) => p.pinned);
   const railProfiles = pinned.length > 0 ? pinned : profiles.slice(0, 6);
 
@@ -319,11 +331,11 @@ function Rail({ homeOnly }: { homeOnly: boolean }) {
       </div>
       <div className="shrink-0 flex flex-col items-center gap-1 py-2 border-t border-line">
         {!filesDisabled && (
-          <button type="button" className={`pl-railb${view === 'files' ? ' on' : ''}`} title="Files (Ctrl+Alt+F)" aria-label="Files" onClick={() => useAppStore.getState().openFiles()}>
+          <button type="button" className={`pl-railb${view === 'files' ? ' on' : ''}`} title="Files (Ctrl+Alt+F)" aria-label="Files" aria-pressed={view === 'files'} data-panel-toggle onClick={() => togglePanel('files')}>
             <FolderOpen className={ICON} strokeWidth={1.75} />
           </button>
         )}
-        <button type="button" className={`pl-railb${view === 'settings' ? ' on' : ''}`} title="Settings (Ctrl+Alt+,)" aria-label="Settings" onClick={() => useAppStore.getState().openSettings()}>
+        <button type="button" className={`pl-railb${view === 'settings' ? ' on' : ''}`} title="Settings (Ctrl+Alt+,)" aria-label="Settings" aria-pressed={view === 'settings'} data-panel-toggle onClick={() => togglePanel('settings')}>
           <Settings className={ICON} strokeWidth={1.75} />
         </button>
       </div>
@@ -342,25 +354,29 @@ export function Sidebar() {
   const view = useAppStore((s) => s.view);
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const mode = useUiStore((s) => s.sidebar);
+  const profileFolds = useUiStore((s) => s.profileFolds);
+  const toggleProfileGroup = useUiStore((s) => s.toggleProfileGroup);
   const home = useLayoutStore((s) => s.home);
-  const ordered = useAttentionOrder(sessions);
+  const ordered = useActiveOrder(sessions);
   const selectedId = useSelectedId();
   const inView = useInView();
-  const [showAllWaiting, setShowAllWaiting] = useState(false);
   const [openProfile, setOpenProfile] = useState<string | null>(null);
 
   // On Home the groups are already the page: the sidebar steps back to a rail.
   const onHome = home;
   const rail = mode === 'rail' || onHome;
 
-  const groups = useMemo(() => groupSessions(ordered), [ordered]);
-  const sortedProfiles = useMemo(
-    () => [...profiles].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)),
-    [profiles],
-  );
+  const active = useMemo(() => ordered.filter((s) => groupOf(stateKey(s)) !== 'ended'), [ordered]);
+  const ended = useMemo(() => ordered.filter((s) => groupOf(stateKey(s)) === 'ended'), [ordered]);
+  const waiting = active.filter((s) => groupOf(stateKey(s)) === 'needs').length;
+  const profileGroups = useMemo(() => groupProfiles(profiles), [profiles]);
+  const flat = isFlat(profileGroups);
 
   const row = (s: SessionInfo) => (
     <SidebarSession key={s.id} session={s} selected={s.id === selectedId} inView={inView.has(s.id)} />
+  );
+  const profileRow = (p: Profile) => (
+    <ProfileRow key={p.id} profile={p} open={openProfile === p.id} onToggle={() => setOpenProfile((cur) => (cur === p.id ? null : p.id))} />
   );
 
   return (
@@ -368,48 +384,27 @@ export function Sidebar() {
       {rail ? <Rail homeOnly={onHome} /> : (
         <>
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 pt-2 pb-2">
-            {groups.map((g) => {
-              if (g.id === 'needs' && g.items.length === 0) {
-                return (
-                  <section key="needs" className="pb-1">
-                    <div className="pl-sbh"><span className="gh calm"><Check className="w-3.5 h-3.5 text-accent" strokeWidth={2} />Nothing needs you</span></div>
-                  </section>
-                );
-              }
-              if (g.items.length === 0) return null;
-              const id = g.id as GroupId & SidebarGroup;
-              let items = g.items;
-              let more = 0;
-              if (g.id === 'needs' && !showAllWaiting && items.length > NEEDS_CAP) {
-                more = items.length - NEEDS_CAP;
-                items = items.slice(0, NEEDS_CAP);
-              }
-              const sel = g.items.find((s) => s.id === selectedId);
-              return (
-                <Section
-                  key={g.id}
-                  id={id}
-                  label={g.label}
-                  count={g.items.length}
-                  tone={g.id === 'needs' ? 'needs' : undefined}
-                  pin={sel ? <div className="pb-1">{row(sel)}</div> : undefined}
-                >
-                  {items.map(row)}
-                  {more > 0 && (
-                    <button type="button" className="pl-more" onClick={() => setShowAllWaiting(true)}>
-                      <StateGlyph state="waiting" size={10} />
-                      <span>+{more} more waiting</span>
-                      <span className="sa">Show all</span>
-                    </button>
-                  )}
-                  {g.id === 'needs' && showAllWaiting && g.items.length > NEEDS_CAP && (
-                    <button type="button" className="pl-more" onClick={() => setShowAllWaiting(false)}>
-                      <span className="sa ml-0">Show fewer</span>
-                    </button>
-                  )}
-                </Section>
-              );
-            })}
+            {active.length > 0 ? (
+              <Section
+                id="active"
+                label="Active"
+                count={active.length}
+                extra={waiting > 0 ? <span className="pl-sbwait" title={`${waiting} waiting for you`}><StateGlyph state="waiting" size={9} />{waiting}</span> : undefined}
+                pin={(() => { const sel = active.find((s) => s.id === selectedId); return sel ? <div className="pb-1">{row(sel)}</div> : undefined; })()}
+              >
+                {active.map(row)}
+              </Section>
+            ) : (
+              <section className="pb-1">
+                <div className="pl-sbh"><span className="gh calm"><Check className="w-3.5 h-3.5 text-accent" strokeWidth={2} />No live sessions</span></div>
+              </section>
+            )}
+
+            {ended.length > 0 && (
+              <Section id="ended" label="Ended" count={ended.length}>
+                {ended.map(row)}
+              </Section>
+            )}
 
             <Section
               id="profiles"
@@ -426,9 +421,28 @@ export function Sidebar() {
                 </>
               )}
             >
-              {sortedProfiles.map((p) => (
-                <ProfileRow key={p.id} profile={p} open={openProfile === p.id} onToggle={() => setOpenProfile((cur) => (cur === p.id ? null : p.id))} />
-              ))}
+              {flat
+                ? profileGroups.flatMap((g) => g.items).map(profileRow)
+                : profileGroups.map((g) => {
+                  const shut = profileGroupFolded(profileFolds, g.key, g.label);
+                  return (
+                    <div key={g.key} className="pb-0.5">
+                      <button
+                        type="button"
+                        className="pl-sbcat"
+                        aria-expanded={!shut}
+                        onClick={() => toggleProfileGroup(g.key, g.label)}
+                      >
+                        <ChevronRight className="chev w-3 h-3 shrink-0" strokeWidth={1.75} />
+                        <span className="truncate">{g.label}</span>
+                        <span className="n">{g.items.length}</span>
+                      </button>
+                      <div className={`pl-fold${shut ? ' shut' : ''}`}>
+                        <div inert={shut}><div className="space-y-px">{g.items.map(profileRow)}</div></div>
+                      </div>
+                    </div>
+                  );
+                })}
               {profiles.length === 0 && (
                 <button type="button" className="pl-more" onClick={() => useAppStore.getState().editProfile(null)}>
                   <Plus className="w-3.5 h-3.5" strokeWidth={1.75} /><span>New profile</span>
@@ -456,8 +470,9 @@ export function Sidebar() {
             {!filesDisabled && (
               <button
                 type="button"
-                onClick={() => useAppStore.getState().openFiles()}
+                onClick={() => togglePanel('files')}
                 aria-pressed={view === 'files'}
+                data-panel-toggle
                 title="Files (Ctrl+Alt+F)"
                 className={`h-8 flex items-center gap-2 px-2.5 rounded-[6px] text-body ${view === 'files' ? 'bg-bg-3 text-fg-1' : 'text-fg-2 hover:text-fg-1 hover:bg-bg-3/60'}`}
               >
@@ -466,8 +481,9 @@ export function Sidebar() {
             )}
             <button
               type="button"
-              onClick={() => useAppStore.getState().openSettings()}
+              onClick={() => togglePanel('settings')}
               aria-pressed={view === 'settings'}
+              data-panel-toggle
               title="Settings (Ctrl+Alt+,)"
               className={`h-8 flex items-center gap-2 px-2.5 rounded-[6px] text-body ${view === 'settings' ? 'bg-bg-3 text-fg-1' : 'text-fg-2 hover:text-fg-1 hover:bg-bg-3/60'}`}
             >

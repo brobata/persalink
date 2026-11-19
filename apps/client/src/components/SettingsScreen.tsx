@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { X } from 'lucide-react';
 import { StateGlyph } from './ui/StateGlyph';
+import { IconButton } from './ui/IconButton';
+import { TerminalSettings } from './TerminalSettings';
 import { useAppStore } from '../stores/appStore';
 import { useTerminalStyleStore } from '../stores/terminalStyleStore';
 import { isPushSupported, notificationPermission, pushIsLiveAppOnly } from '../lib/push';
@@ -80,14 +83,10 @@ export function SettingsScreen() {
     <div className="flex flex-col h-full">
       <header className="shrink-0 px-4 pt-[max(16px,env(safe-area-inset-top))] pb-3 border-b border-zinc-800">
         <div className="flex items-center gap-3">
-          <button
-            onClick={closeOverlay}
-            className="px-2.5 py-1 text-xs bg-zinc-800 text-zinc-400 rounded-md
-                       hover:bg-zinc-700 transition-colors"
-          >
-            &larr; Back
-          </button>
-          <h1 className="text-lg font-bold">Settings</h1>
+          <h1 className="flex-1 min-w-0 text-lg font-bold">Settings</h1>
+          <IconButton label="Close settings (Esc)" onClick={closeOverlay} className="-my-1 -mr-2">
+            <X className="w-5 h-5" strokeWidth={1.75} />
+          </IconButton>
         </div>
       </header>
 
@@ -263,10 +262,12 @@ export function SettingsScreen() {
               ))}
             </div>
           </div>
-          <p className="text-[11px] text-zinc-600 leading-snug">
-            Fonts, themes and gestures are in the session view — tap the palette icon
-            in a session&apos;s top bar.
-          </p>
+        </section>
+
+        {/* Appearance: the same controls as the terminal's own style popover. */}
+        <section id="appearance" className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-400">Appearance</h2>
+          <TerminalSettings variant="inline" />
         </section>
 
         {/* Danger Zone */}

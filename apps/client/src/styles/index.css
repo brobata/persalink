@@ -747,6 +747,13 @@ html.pl-phone .pl-pal-i:active { background: var(--color-bg-3); }
 .pl-sbh .gh .chev { color: var(--color-fg-4); transition: transform var(--d-pop) var(--ease-out); }
 .pl-sbh .gh[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .pl-sbh .gh.needs { color: var(--color-st-waiting); }
+.pl-sbwait { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--color-st-waiting-soft); color: var(--color-st-waiting); font: 600 11px/14px var(--font-sans); font-variant-numeric: tabular-nums; flex: none; }
+/* profile categories under Profiles: a quieter header than a section */
+.pl-sbcat { width: 100%; height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 6px; margin-top: 2px; border: 0; background: none; border-radius: var(--r-xs); text-align: left; cursor: pointer; font: 500 11.5px/14px var(--font-sans); color: var(--color-fg-3); letter-spacing: 0.01em; }
+.pl-sbcat:hover { color: var(--color-fg-1); background: rgba(255, 255, 255, 0.03); }
+.pl-sbcat .n { font-weight: 450; color: var(--color-fg-4); font-variant-numeric: tabular-nums; }
+.pl-sbcat .chev { color: var(--color-fg-4); transition: transform var(--d-pop) var(--ease-out); }
+.pl-sbcat[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .pl-sbh .gh.calm { cursor: default; color: var(--color-fg-3); font-weight: 500; }
 /* folding body: grid-rows trick, no measured heights */
 .pl-fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--d-move) var(--ease-out); }
@@ -797,7 +804,7 @@ html.pl-phone .pl-pal-i:active { background: var(--color-bg-3); }
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--color-bg-term);
+  background: var(--pl-term-bg, var(--color-bg-term));
   container-type: inline-size;
 }
 /* unfocused panes dim; the focused one gets the accent hairline */
@@ -821,7 +828,7 @@ html.pl-phone .pl-pal-i:active { background: var(--color-bg-3); }
   align-items: center;
   gap: 8px;
   padding: 0 4px 0 12px;
-  background: var(--color-bg-1);
+  background: var(--pl-strip-bg, var(--color-bg-1));
   border-bottom: 1px solid var(--color-line);
   min-width: 0;
   font: 500 13px/16px var(--font-sans);
@@ -839,7 +846,10 @@ html.pl-phone .pl-pal-i:active { background: var(--color-bg-3); }
 .pl-pane:hover .pl-pstrip .hov, .pl-pane.focused .pl-pstrip .hov, .pl-pstrip .hov:focus-within { opacity: 1; }
 .pl-pstrip .hov .pl-ib { width: 26px; height: 24px; color: var(--color-fg-3); }
 .pl-pstrip .hov .pl-ib:hover, .pl-pstrip .hov .pl-ib[aria-pressed="true"] { color: var(--color-fg-1); }
-@container (max-width: 520px) { .pl-pstrip .sv { display: none; } }
+.pl-pstrip .pl-attach { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border: 1px solid var(--color-line-2); border-radius: var(--r-xs); background: none; color: var(--color-fg-2); font: 500 12px/16px var(--font-sans); cursor: pointer; }
+.pl-pstrip .pl-attach:hover:not(:disabled) { color: var(--color-fg-1); border-color: var(--color-line-3); background: var(--color-bg-3); }
+.pl-pstrip .pl-attach:disabled { opacity: 0.5; cursor: default; }
+@container (max-width: 520px) { .pl-pstrip .sv { display: none; } .pl-pstrip .pl-attach .lb { display: none; } .pl-pstrip .pl-attach { padding: 0 5px; } }
 @container (max-width: 380px) { .pl-pstrip .hov { display: none; } }
 .pl-pane.collapsed .pl-pterm, .pl-pane.collapsed .pl-wtabs { height: 0; flex: 0 0 0; overflow: hidden; }
 .pl-pane.collapsed .pl-pstrip { border-bottom: 0; cursor: pointer; }
@@ -885,21 +895,26 @@ html.pl-phone .pl-pal-i:active { background: var(--color-bg-3); }
 }
 .pl-dropped .p { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--color-fg-1); }
 
-/* right panel: details on demand, slides over the right edge */
-.pl-rp {
-  width: min(480px, 46vw);
-  flex: none;
+/* side panel: Files, Settings, the profile editor open where they are
+   clicked, sliding out from the sidebar's right edge over the work area.
+   The panes behind keep their size. */
+.pl-lp {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: min(480px, calc(100% - 48px));
   display: flex;
   flex-direction: column;
   min-height: 0;
   background: var(--color-bg-2);
-  border-left: 1px solid var(--color-line-2);
-  box-shadow: -24px 0 48px rgba(0, 0, 0, 0.35);
-  animation: pl-rp-in var(--d-sheet) var(--ease-out) both;
-  position: relative;
-  z-index: 15;
+  border-right: 1px solid var(--color-line-2);
+  box-shadow: 24px 0 48px rgba(0, 0, 0, 0.35);
+  animation: pl-lp-in var(--d-sheet) var(--ease-out) both;
+  z-index: 40;
 }
-@keyframes pl-rp-in { from { opacity: 0; transform: translateX(24px); } }
+@keyframes pl-lp-in { from { opacity: 0; transform: translateX(-24px); } }
+@media (prefers-reduced-motion: reduce) { .pl-lp { animation: none; } }
 
 /* desktop Home */
 .pl-home-card {
@@ -1036,7 +1051,7 @@ html.pl-square .pl-dk .bdg { top: 2px; }
 .pl-latest::before { content: ""; position: absolute; inset: -6px; border-radius: 99px; }
 
 /* the terminal that is leaving during a session switch */
-.pl-term-ghost { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; background: var(--color-bg-term); }
+.pl-term-ghost { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; background: var(--pl-term-bg, var(--color-bg-term)); }
 .pl-term-ghost:empty { display: none; }
 
 /* sheet content: the Claude tabs, full options, the composer */
@@ -1247,3 +1262,23 @@ html.pl-square .pl-srv { height: 36px; }
 
 /* Desktop: the reconnect banner floats above the status bar. */
 html.pl-desktop .pl-rebanner:not(.docked) { bottom: 36px; }
+
+/* Files: "Send a file to <session>" and Recent uploads, above the browser */
+.pl-send { padding: 2px 0 12px; }
+.pl-send-note { margin-top: 6px; font: 450 12px/16px var(--font-sans); color: var(--color-fg-3); overflow-wrap: anywhere; }
+.pl-send-h { display: flex; align-items: center; margin-top: 12px; height: 24px; font: 600 12px/16px var(--font-sans); color: var(--color-fg-2); }
+.pl-send-h button { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 0; background: none; border-radius: var(--r-xs); color: var(--color-fg-3); font: 500 12px/16px var(--font-sans); cursor: pointer; }
+.pl-send-h button:hover { color: var(--color-fg-1); background: var(--color-bg-3); }
+.pl-send-list { margin-top: 2px; }
+.pl-send-list button { width: 100%; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 6px; border: 0; background: none; border-radius: var(--r-xs); text-align: left; cursor: pointer; color: var(--color-fg-1); }
+.pl-send-list button:hover:not(:disabled) { background: var(--color-bg-3); }
+.pl-send-list button:disabled { cursor: default; color: var(--color-fg-2); }
+.pl-send-list .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 450 12.5px/16px var(--font-mono); }
+.pl-send-list .age { flex: none; font: 450 11.5px/14px var(--font-sans); color: var(--color-fg-3); font-variant-numeric: tabular-nums; }
+@media (pointer: coarse) { .pl-send-list button { height: 44px; } }
+.pl-term-surround { background: var(--pl-term-bg, var(--color-bg-term)); }
+.pl-rail.grouped { gap: 16px; }
+.pl-rail-grp { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pl-rail-row { display: flex; gap: 8px; }
+html.pl-square .pl-rail-row { gap: 6px; }
+.pl-rail-cat { font: 600 11.5px/14px var(--font-sans); color: var(--color-fg-3); padding-left: 2px; white-space: nowrap; }
