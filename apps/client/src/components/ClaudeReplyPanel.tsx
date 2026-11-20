@@ -188,7 +188,12 @@ function AnswerTab({ name, prompt, waiting, onAnswer, onReply }: {
             className={`pl-qopt${i === 0 ? ' first' : ''}`}
             onClick={() => { close(); onAnswer(o); }}
           >
-            {o.label}
+            {o.detail ? (
+              <span className="flex flex-col items-start gap-0.5 text-left">
+                <span>{o.label}</span>
+                <span className="text-meta font-normal text-fg-3">{o.detail}</span>
+              </span>
+            ) : o.label}
           </button>
         ))}
         <button type="button" className="pl-qopt ghost" onClick={() => { close(); onReply(); }}>

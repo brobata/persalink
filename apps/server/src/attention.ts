@@ -21,13 +21,15 @@ export function classifyPane(raw: string, idleSeconds: number): Attention {
   // WAITING — blocked on the user's choice. Checked first: a paused Claude that
   // needs approval isn't "working". Matches Claude's permission dialog
   // (numbered Yes/No options, "Do you want to proceed/allow…") and common shell
-  // confirmation prompts.
+  // confirmation prompts, plus Claude's multiple-choice question form.
   if (
     /\bdo you want to (proceed|continue|create|run|make|allow|trust|overwrite)\b/i.test(text) ||
     (/❯\s*1\.\s/.test(text) && /\b(yes|no|allow|proceed)\b/i.test(lower)) ||
     (/\b1\.\s*yes\b/i.test(lower) && /(\b2\.\s*no|don'?t)\b/i.test(lower)) ||
     /\[y\/n\]|\(y\/n\)|\[yes\/no\]|\(yes\/no\)/i.test(lower) ||
-    /press (enter|any key) to (continue|proceed)/i.test(lower)
+    /press (enter|any key) to (continue|proceed)/i.test(lower) ||
+    // Claude's question form (AskUserQuestion) footer.
+    /enter to select\b.*\besc to cancel/i.test(lower)
   ) {
     return 'waiting';
   }
