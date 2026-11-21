@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseClaudePrompt, chipLabel, isRedirectOption, answerOptions, isTick, NEXT_KEY } from '../src/lib/claudePrompt.ts';
+import { parseClaudePrompt, chipLabel, isRedirectOption, answerOptions, displayOptions, isTick, NEXT_KEY } from '../src/lib/claudePrompt.ts';
 import { promptFromCapture } from '../src/lib/inlineAnswer.ts';
 import { classifyPane } from '../../server/src/attention.ts';
 
@@ -38,7 +38,8 @@ test('question form: all five options, descriptions joined, question found', () 
   assert.ok(p);
   assert.equal(p.question, 'How do people book a CaterOps walkthrough call?');
   assert.deepEqual(p.options.map((o) => o.key), ['1', '2', '3', '4', '5']);
-  assert.equal(p.options[0].label, 'Google Calendar booking page (Recommended)');
+  assert.equal(p.options[0].label, 'Google Calendar booking page');
+  assert.equal(p.options[0].recommended, true);
   assert.equal(p.options[0].detail,
     "A booking page on your Google Calendar (free), linked from cater-ops.com 'Book a walkthrough'. Short form first.");
   assert.equal(p.options[2].detail, 'Book a time, or leave details for a call back.');
@@ -143,4 +144,21 @@ test('only boxed options tick; Chat about this and Type something answer', () =>
   const p = parseClaudePrompt(MULTI)!;
   assert.deepEqual(p.options.map(isTick), [true, true, true, false, false]);
   assert.equal(parseClaudePrompt(FORM)!.options.some(isTick), false);
+});
+
+test('the recommended option shows first, keys unchanged', () => {
+  const lines = FORM.map((l) => l
+    .replace('Google Calendar booking page (Recommended)', 'Google Calendar booking page')
+    .replace('  3. Both', '  3. Both (Recommended)'));
+  const p = parseClaudePrompt(lines)!;
+  const shown = displayOptions(p);
+  assert.deepEqual(shown.map((o) => o.key), ['3', '1', '2', '4', '5']);
+  assert.equal(shown[0].label, 'Both');
+  assert.deepEqual(answerOptions(p).map((o) => o.key), ['3', '1', '2', '4', '5']);
+});
+
+test('"(Recommended)" in a plain reply list is left alone', () => {
+  const p = parseClaudePrompt(['Pick one:', '1. Fast (Recommended)', '2. Slow'])!;
+  assert.equal(p.options[0].label, 'Fast (Recommended)');
+  assert.equal(p.options[0].recommended, undefined);
 });

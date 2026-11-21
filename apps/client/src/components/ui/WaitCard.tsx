@@ -20,7 +20,7 @@ import { ArrowRight, ChevronRight, Mic } from 'lucide-react';
 import type { SessionInfo } from '@persalink/shared/protocol';
 import { AnswerChips } from './AnswerChips';
 import { SessionIcon } from './ProfileTile';
-import { chipLabel, type PromptOption } from '../../lib/claudePrompt';
+import { chipLabel, displayOptions, type PromptOption } from '../../lib/claudePrompt';
 import { peekKey } from '../../lib/inlineAnswer';
 import { cancelHeld, holdAnswer, useHeldAnswer } from '../../lib/heldAnswers';
 import { sendInlineAnswer, useWaitingPrompt } from '../../lib/useInlineAnswer';
@@ -132,7 +132,7 @@ export function WaitCard({ session: s, variant, accent, onOpen, onReply, onSent,
     answers = (
       <AnswerChips
         className="pl-wc-ans"
-        options={prompt.options}
+        options={displayOptions(prompt)}
         accent={accent}
         onAnswer={answer}
         onReply={() => onReply(s)}

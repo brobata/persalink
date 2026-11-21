@@ -66,6 +66,7 @@ function SwitcherRow({ s, active, onPick }: {
       // One line per row; a waiting agent keeps its question.
       detail={groupOf(stateKey(s)) === 'needs' ? 'auto' : 'never'}
       onOpen={() => onPick(s.id)}
+      onLongPress={() => { setEditName(s.name || s.profileName || ''); setEditing(true); }}
       trailing={(
         <IconButton label={`Rename ${sessionTitle(s)}`} onClick={() => { setEditName(s.name || s.profileName || ''); setEditing(true); }}>
           <Pencil className="w-3.5 h-3.5" strokeWidth={1.75} />

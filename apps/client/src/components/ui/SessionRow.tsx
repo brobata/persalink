@@ -13,6 +13,7 @@
 import type { ReactNode } from 'react';
 import type { SessionInfo } from '@persalink/shared/protocol';
 import { SessionIcon } from './ProfileTile';
+import { useLongPress } from '../../lib/useLongPress';
 import { groupOf, previewLine, rowAge, sessionTitle, stateKey, stateWord, type StateKey } from '../../lib/sessionState';
 
 export interface SessionRowProps {
@@ -33,11 +34,16 @@ export interface SessionRowProps {
   trailing?: ReactNode;
   /** Extra text for the tooltip. */
   hint?: string;
+  /** Hold the row: the same menu its trailing button opens. */
+  onLongPress?: () => void;
 }
 
+const noop = () => {};
+
 export function SessionRow({
-  session, onOpen, current, selected, detail = 'selected', server, state, density = 'touch', trailing, hint,
+  session, onOpen, current, selected, detail = 'selected', server, state, density = 'touch', trailing, hint, onLongPress,
 }: SessionRowProps) {
+  const press = useLongPress(onLongPress ?? noop, onOpen);
   const k = state ?? stateKey(session);
   const g = groupOf(k);
   const age = rowAge(session, k);
@@ -59,7 +65,7 @@ export function SessionRow({
     >
       <button
         type="button"
-        onClick={onOpen}
+        {...(onLongPress ? press : { onClick: onOpen })}
         title={tip}
         aria-current={current ? 'true' : undefined}
         className={`flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 text-left ${
@@ -83,7 +89,13 @@ export function SessionRow({
           </span>
         )}
       </button>
-      {trailing && <div className="flex items-center shrink-0 pr-1">{trailing}</div>}
+      {trailing && (
+        // On touch the trailing button gets the row's full height and a
+        // thumb-wide column, not just its 44px icon square.
+        <div className={touch ? 'flex items-stretch shrink-0 [&_.pl-ib]:h-auto [&_.pl-ib]:w-12' : 'flex items-center shrink-0 pr-1'}>
+          {trailing}
+        </div>
+      )}
     </div>
   );
 }

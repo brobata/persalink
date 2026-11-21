@@ -18,6 +18,8 @@ export interface PromptOption {
   detail?: string;
   /** Multi-select forms only: the option's box is ticked. */
   checked?: boolean;
+  /** Claude marked it "(Recommended)"; the label has that suffix removed. */
+  recommended?: boolean;
 }
 
 /** One question tab in a multi-question form ("☒ Color  ☐ Fruit  ✔ Submit"). */
@@ -121,6 +123,11 @@ export function parseClaudePrompt(lines: readonly string[], lookback = 16): Clau
         opt.label = label;
         opt.checked = box[1] !== ' ';
       }
+      const rec = /\s*\(Recommended\)$/i.exec(opt.label);
+      if (rec && anchored) {
+        opt.label = opt.label.slice(0, rec.index);
+        opt.recommended = true;
+      }
       options.push(opt);
       labelCol = unframed(lines[i]).indexOf(m[2]);
       continue;
@@ -185,9 +192,20 @@ export function isTick(o: PromptOption): boolean {
 /** The pseudo-option a multi-select's answer chips end with. */
 export const NEXT_OPTION: PromptOption = { key: NEXT_KEY, label: 'Next' };
 
+/**
+ * The options in the order to show them: Claude's recommended one first (it
+ * takes the accent), the rest in Claude's order. Keys are unchanged, so a
+ * tap still sends the number Claude drew.
+ */
+export function displayOptions(p: ClaudePrompt): PromptOption[] {
+  const rec = p.options.filter((o) => o.recommended);
+  return rec.length ? [...rec, ...p.options.filter((o) => !o.recommended)] : p.options;
+}
+
 /** The chips to offer for a prompt: a multi-select adds Next. */
 export function answerOptions(p: ClaudePrompt): PromptOption[] {
-  return p.multi ? [...p.options, NEXT_OPTION] : p.options;
+  const shown = displayOptions(p);
+  return p.multi ? [...shown, NEXT_OPTION] : shown;
 }
 
 export function isAlwaysOption(o: PromptOption): boolean {

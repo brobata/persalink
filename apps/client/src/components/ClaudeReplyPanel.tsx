@@ -18,7 +18,7 @@ import { Sheet, useSheetClose } from './ui/Sheet';
 import { StateGlyph } from './ui/StateGlyph';
 import { copyTextToClipboard } from '../lib/clipboardBridge';
 import { useAppStore } from '../stores/appStore';
-import { isTick, NEXT_OPTION, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
+import { displayOptions, isTick, NEXT_OPTION, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
 
 const PREVIEW_LINES = 6;
 
@@ -87,6 +87,11 @@ function CopyList({ state, copied, copy }: {
       })}
     </>
   );
+}
+
+/** Claude's own "(Recommended)", as a quiet tag after the label. */
+function RecTag() {
+  return <span className="ml-2 align-middle text-micro font-medium uppercase tracking-wide text-accent-hi/80">Recommended</span>;
 }
 
 export type ClaudeTab = 'answer' | 'copy';
@@ -192,7 +197,7 @@ function AnswerTab({ name, prompt, waiting, onAnswer, onReply }: {
       {prompt.question && <p className="pb-3 text-title font-semibold text-fg-1">{prompt.question}</p>}
       {prompt.multi && <p className="-mt-2 pb-2 text-meta text-fg-3">Tick any number, then Next.</p>}
       <div className="flex flex-col gap-1.5">
-        {prompt.options.map((o, i) => (
+        {displayOptions(prompt).map((o, i) => (
           <button
             key={o.key}
             type="button"
@@ -206,10 +211,10 @@ function AnswerTab({ name, prompt, waiting, onAnswer, onReply }: {
               : <Square className="w-4 h-4 shrink-0 text-fg-3" strokeWidth={1.75} aria-hidden />)}
             {o.detail ? (
               <span className="flex flex-col items-start gap-0.5 text-left">
-                <span>{o.label}</span>
+                <span>{o.label}{o.recommended && <RecTag />}</span>
                 <span className="text-meta font-normal text-fg-3">{o.detail}</span>
               </span>
-            ) : o.label}
+            ) : <span>{o.label}{o.recommended && <RecTag />}</span>}
           </button>
         ))}
         {prompt.multi && (

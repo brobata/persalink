@@ -267,7 +267,7 @@ export function HomeScreen() {
             <div className="pl-rows">
               {items.map((s) => (
                 <div key={s.id} data-flip={s.id}>
-                  <SessionRow session={s} detail="auto" onOpen={() => openSession(s.id, null)} trailing={rowMenu(s)} />
+                  <SessionRow session={s} detail="auto" onOpen={() => openSession(s.id, null)} onLongPress={() => setMenu(s)} trailing={rowMenu(s)} />
                 </div>
               ))}
             </div>
@@ -349,7 +349,7 @@ export function HomeScreen() {
                 <div className={`pl-rows${needs.length ? ' mt-2' : ''}`}>
                   {rest.map((s) => (
                     <div key={s.id} data-flip={s.id}>
-                      <SessionRow session={s} detail="never" onOpen={() => openSession(s.id, null)} trailing={rowMenu(s)} />
+                      <SessionRow session={s} detail="never" onOpen={() => openSession(s.id, null)} onLongPress={() => setMenu(s)} trailing={rowMenu(s)} />
                     </div>
                   ))}
                 </div>
