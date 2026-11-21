@@ -12,13 +12,13 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Check, Copy, Mic } from 'lucide-react';
+import { Check, Copy, Mic, Square, SquareCheck } from 'lucide-react';
 import type { ClaudeReplyState } from '../stores/appStore';
 import { Sheet, useSheetClose } from './ui/Sheet';
 import { StateGlyph } from './ui/StateGlyph';
 import { copyTextToClipboard } from '../lib/clipboardBridge';
 import { useAppStore } from '../stores/appStore';
-import type { ClaudePrompt, PromptOption } from '../lib/claudePrompt';
+import { isTick, NEXT_OPTION, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
 
 const PREVIEW_LINES = 6;
 
@@ -179,15 +179,31 @@ function AnswerTab({ name, prompt, waiting, onAnswer, onReply }: {
           {waiting}
         </div>
       )}
+      {prompt.steps && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 pb-2 text-meta text-fg-3" aria-label="Questions in this form">
+          {prompt.steps.map((st) => (
+            <span key={st.label} className={`inline-flex items-center gap-1 ${st.done ? 'text-fg-2' : ''}`}>
+              {st.done && <Check className="w-3 h-3 text-accent-hi" strokeWidth={2} aria-label="answered" />}
+              {st.label}
+            </span>
+          ))}
+        </div>
+      )}
       {prompt.question && <p className="pb-3 text-title font-semibold text-fg-1">{prompt.question}</p>}
+      {prompt.multi && <p className="-mt-2 pb-2 text-meta text-fg-3">Tick any number, then Next.</p>}
       <div className="flex flex-col gap-1.5">
         {prompt.options.map((o, i) => (
           <button
             key={o.key}
             type="button"
-            className={`pl-qopt${i === 0 ? ' first' : ''}`}
-            onClick={() => { close(); onAnswer(o); }}
+            className={`pl-qopt${!prompt.multi && i === 0 ? ' first' : ''}`}
+            aria-pressed={prompt.multi ? !!o.checked : undefined}
+            // A tick keeps the sheet open: the boxes update in place.
+            onClick={() => { if (!isTick(o)) close(); onAnswer(o); }}
           >
+            {prompt.multi && (o.checked
+              ? <SquareCheck className="w-4 h-4 shrink-0 text-accent-hi" strokeWidth={1.75} aria-hidden />
+              : <Square className="w-4 h-4 shrink-0 text-fg-3" strokeWidth={1.75} aria-hidden />)}
             {o.detail ? (
               <span className="flex flex-col items-start gap-0.5 text-left">
                 <span>{o.label}</span>
@@ -196,6 +212,11 @@ function AnswerTab({ name, prompt, waiting, onAnswer, onReply }: {
             ) : o.label}
           </button>
         ))}
+        {prompt.multi && (
+          <button type="button" className="pl-qopt first justify-center" onClick={() => { close(); onAnswer(NEXT_OPTION); }}>
+            Next
+          </button>
+        )}
         <button type="button" className="pl-qopt ghost" onClick={() => { close(); onReply(); }}>
           <Mic className="w-4 h-4 text-fg-3" strokeWidth={1.75} />
           Reply in your words

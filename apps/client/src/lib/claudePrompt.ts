@@ -16,18 +16,40 @@ export interface PromptOption {
   label: string;
   /** The line(s) Claude prints under the option (AskUserQuestion descriptions). */
   detail?: string;
+  /** Multi-select forms only: the option's box is ticked. */
+  checked?: boolean;
+}
+
+/** One question tab in a multi-question form ("☒ Color  ☐ Fruit  ✔ Submit"). */
+export interface PromptStep {
+  label: string;
+  done: boolean;
 }
 
 export interface ClaudePrompt {
   question: string;
   options: PromptOption[];
+  /**
+   * A multi-select question: a digit toggles its box and the form stays put,
+   * so answering is several taps and then Next (the right arrow).
+   */
+  multi?: boolean;
+  /** The form's question tabs, when it asks more than one. */
+  steps?: PromptStep[];
 }
+
+/** Moves a question form to its next question (or the review screen). */
+export const NEXT_KEY = '\x1b[C';
 
 const OPTION_RX = /^(?:[❯›>]\s*)?(\d{1,2})[.)]\s+(.+?)$/;
 /** An option drawn with Claude's selection caret. */
 const CARET_RX = /^[❯›]\s*\d{1,2}[.)]\s/;
 /** The question form's footer. */
 const FOOTER_RX = /enter to select\b.*\besc to cancel/i;
+/** A multi-select option's box: "[ ] Apple", "[✔] Mango". */
+const BOX_RX = /^\[([ ✔✓xX])\]\s+/;
+/** The form's tab row: "←  ☒ Color  ☐ Fruit  ✔ Submit  →". */
+const TABS_RX = /^←.*→$/;
 /** The most rows an option block (options + descriptions) may span. */
 const MAX_BLOCK = 30;
 /** The rule Claude draws between a question's options and "Chat about this". */
@@ -83,18 +105,30 @@ export function parseClaudePrompt(lines: readonly string[], lookback = 16): Clau
   }
 
   const options: PromptOption[] = [];
+  let multi = false;
   let labelCol = 0;
   for (let i = first; i <= end; i++) {
     const t = clean(lines[i]);
     const m = OPTION_RX.exec(t);
     if (m) {
       if (Number(m[1]) !== options.length + 1) return null;
-      options.push({ key: m[1], label: m[2].replace(/\s*\(esc\)\s*$/i, '').trim() });
+      let label = m[2].replace(/\s*\(esc\)\s*$/i, '').trim();
+      const box = anchored ? BOX_RX.exec(label) : null;
+      const opt: PromptOption = { key: m[1], label };
+      if (box) {
+        multi = true;
+        label = label.slice(box[0].length);
+        opt.label = label;
+        opt.checked = box[1] !== ' ';
+      }
+      options.push(opt);
       labelCol = unframed(lines[i]).indexOf(m[2]);
       continue;
     }
     if (!anchored) return null;
     if (RULE_RX.test(t)) continue;
+    // A multi-select form draws an unnumbered "Submit" row under its options.
+    if (multi && t === 'Submit') continue;
     if (!t || indentOf(lines[i]) < labelCol) return null;
     const last = options[options.length - 1];
     last.detail = last.detail ? `${last.detail} ${t}` : t;
@@ -106,7 +140,54 @@ export function parseClaudePrompt(lines: readonly string[], lookback = 16): Clau
     const t = clean(lines[i]);
     if (t) { question = t; break; }
   }
-  return { question, options };
+  let steps: PromptStep[] | undefined;
+  if (anchored) {
+    for (let i = first - 1; i >= Math.max(0, first - MAX_BLOCK); i--) {
+      const t = clean(lines[i]);
+      // The form's last screen: the answers so far, then Submit / Cancel.
+      if (t === 'Review your answers') { question = t; break; }
+      if (TABS_RX.test(t)) { steps = parseSteps(t); break; }
+    }
+  }
+  const out: ClaudePrompt = { question, options };
+  if (multi) out.multi = true;
+  if (steps && steps.length > 1) out.steps = steps;
+  return out;
+}
+
+/** The question tabs of a form's tab row, minus its own "Submit" tab. */
+function parseSteps(row: string): PromptStep[] {
+  const steps: PromptStep[] = [];
+  for (const m of row.matchAll(/([☐☒✔])\s+(.+?)(?=\s{2,}|\s*[☐☒✔→]|$)/g)) {
+    const label = m[2].trim();
+    if (m[1] === '✔' && label === 'Submit') continue;
+    steps.push({ label, done: m[1] !== '☐' });
+  }
+  return steps;
+}
+
+/** Same question, same options, same ticks: nothing on screen changed. */
+export function samePromptState(a: ClaudePrompt | null, b: ClaudePrompt | null): boolean {
+  if (!a || !b) return a === b;
+  return a.question === b.question && a.options.length === b.options.length
+    && a.options.every((o, i) => o.key === b.options[i].key && o.label === b.options[i].label && !!o.checked === !!b.options[i].checked);
+}
+
+/**
+ * A tap that ticks a multi-select box (the form stays) rather than answering.
+ * Decided per option: only boxed options have `checked`, so "Chat about this"
+ * and "Type something" never count.
+ */
+export function isTick(o: PromptOption): boolean {
+  return o.checked !== undefined && !isRedirectOption(o);
+}
+
+/** The pseudo-option a multi-select's answer chips end with. */
+export const NEXT_OPTION: PromptOption = { key: NEXT_KEY, label: 'Next' };
+
+/** The chips to offer for a prompt: a multi-select adds Next. */
+export function answerOptions(p: ClaudePrompt): PromptOption[] {
+  return p.multi ? [...p.options, NEXT_OPTION] : p.options;
 }
 
 export function isAlwaysOption(o: PromptOption): boolean {
@@ -123,6 +204,8 @@ export function isRedirectOption(o: PromptOption): boolean {
 
 /** The one label an answer chip shows for an option, at every width. */
 export function chipLabel(o: PromptOption): string {
+  if (o.key === NEXT_KEY) return 'Next →';
+  if (o.checked) return `✓ ${o.label}`;
   if (isAlwaysOption(o)) return 'Always';
   if (/^Type something\.?$/i.test(o.label)) return 'Your words';
   if (isRedirectOption(o)) return 'No, explain';

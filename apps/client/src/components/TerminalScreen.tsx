@@ -24,7 +24,6 @@ import { orderSessions, waitingSessions } from '../lib/sessionOrder';
 import { ExitedTombstone } from './ExitedTombstone';
 import { KeyRow } from './ui/KeyRow';
 import { Sheet } from './ui/Sheet';
-import { StateGlyph } from './ui/StateGlyph';
 import { IconButton } from './ui/IconButton';
 import { PhoneHeader, HeaderFlash } from './ui/PhoneHeader';
 import { ConnectionReadout } from './ui/ConnectionReadout';
@@ -39,7 +38,7 @@ import {
   MessageSquare, Mic, Palette, Paperclip, Plus, Rows3, Search, SquarePlus, TextCursor, TextSearch, X,
 } from 'lucide-react';
 import { PANE_COMMAND_EVENT, PHONE_TERMINAL, type PaneCommandDetail } from '../lib/paneCommands';
-import { isRedirectOption, promptOnScreen, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
+import { answerOptions, isRedirectOption, isTick, NEXT_KEY, promptOnScreen, samePromptState, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
 import { useGlobalShortcuts } from './ShortcutsPanel';
 import { MoreSheet, type MenuItem } from './ui/MoreSheet';
 import { SessionSwitcher, NewSessionSheet } from './ui/SessionSwitcher';
@@ -608,11 +607,7 @@ export function TerminalScreen() {
   const readPrompt = useCallback(() => {
     const t = terminalRef.current;
     const next = t && watchPromptRef.current ? promptOnScreen(t) : null;
-    setPrompt((cur) => {
-      const same = cur && next && cur.question === next.question && cur.options.length === next.options.length
-        && cur.options.every((o, i) => o.key === next.options[i].key && o.label === next.options[i].label);
-      return same ? cur : next;
-    });
+    setPrompt((cur) => (cur && next && samePromptState(cur, next) ? cur : next));
   }, []);
   const schedulePromptRef = useRef<() => void>(() => {});
   schedulePromptRef.current = () => {
@@ -665,13 +660,27 @@ export function TerminalScreen() {
   }, [prompt, openComposer]);
 
   const answer = useCallback((o: PromptOption) => {
+    const reread = (ms: number) => setTimeout(() => { if (watchPromptRef.current) readPrompt(); }, ms);
+    if (o.key === NEXT_KEY) {
+      // On to the form's next question (or its review screen).
+      sendInput(NEXT_KEY);
+      setPrompt(null);
+      reread(600);
+      return;
+    }
     if (isRedirectOption(o)) { openReply(); return; }
+    if (isTick(o)) {
+      // A tick, not an answer: the form stays, the boxes update in place.
+      sendInput(o.key);
+      reread(250);
+      return;
+    }
     sendAnswer(o);
     setPrompt(null);
     // Look again once the agent has had time to move on: if the question is
     // still there (the key did not take), the bar comes back.
     setTimeout(() => { if (watchPromptRef.current) readPrompt(); }, 1500);
-  }, [openReply, sendAnswer, readPrompt]);
+  }, [openReply, sendAnswer, readPrompt, sendInput]);
 
   const deliverText = useCallback((text: string, enter: boolean, redirectKey?: string) => {
     const go = () => {
@@ -1983,7 +1992,6 @@ export function TerminalScreen() {
 
   // ------------------------------------------------------------------ render
   const r = readout(connectionState, rttMs);
-  const glyphState = isEnded ? 'exited' : liveAttached ? stateKey(liveAttached, { offline: !online }) : 'idle';
   let line2: ReactNode;
   if (confirmation) {
     line2 = (
@@ -2036,7 +2044,7 @@ export function TerminalScreen() {
       <PhoneHeader
         ref={headerTitleRef}
         onBack={detachSession}
-        glyph={liveAttached ? <><StateGlyph state={glyphState} live label={isEnded ? 'Ended' : undefined} /><SessionIcon session={liveAttached} size={18} /></> : undefined}
+        glyph={liveAttached ? <SessionIcon session={liveAttached} size={18} /> : undefined}
         name={title}
         line2={line2}
         onTitle={() => { if (!swipedRef.current) setShowSwitcher(true); }}
@@ -2199,7 +2207,8 @@ export function TerminalScreen() {
         <AnswerBar
           name={title}
           question={prompt.question}
-          options={prompt.options}
+          options={answerOptions(prompt)}
+          accent={!prompt.multi}
           onAnswer={answer}
           onReply={openReply}
           onOpenQuestion={() => setClaudeTab('answer')}

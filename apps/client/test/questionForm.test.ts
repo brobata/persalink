@@ -7,7 +7,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseClaudePrompt, chipLabel, isRedirectOption } from '../src/lib/claudePrompt.ts';
+import { parseClaudePrompt, chipLabel, isRedirectOption, answerOptions, isTick, NEXT_KEY } from '../src/lib/claudePrompt.ts';
+import { promptFromCapture } from '../src/lib/inlineAnswer.ts';
 import { classifyPane } from '../../server/src/attention.ts';
 
 const FORM = [
@@ -81,4 +82,65 @@ test('the form still parses with the caret moved off option 1', () => {
 
 test('server calls the question form waiting', () => {
   assert.equal(classifyPane(FORM.join('\n'), 0), 'waiting');
+});
+
+// Captured from a live Claude Code 2.1 form after "1" answered Color and
+// "1" + "3" ticked Apple and Mango.
+const MULTI = [
+  '──────────────────────────────────────────────────────────────────────────────────',
+  '←  ☒ Color  ☐ Fruit  ✔ Submit  →',
+  '',
+  'Which fruits do you like? Pick any number.',
+  '',
+  '❯ 1. [✔] Apple',
+  '         Crisp and sweet-tart.',
+  '  2. [ ] Banana',
+  '         Soft and sweet.',
+  '  3. [✔] Mango',
+  '         Juicy and tropical.',
+  '  4. [ ] Type something',
+  '     Submit',
+  '──────────────────────────────────────────────────────────────────────────────────',
+  '  5. Chat about this',
+  '',
+  'Enter to select · Tab/Arrow keys to navigate · Esc to cancel',
+];
+
+test('multi-select: boxes become ticks, Submit row skipped, steps read', () => {
+  const p = parseClaudePrompt(MULTI)!;
+  assert.equal(p.multi, true);
+  assert.equal(p.question, 'Which fruits do you like? Pick any number.');
+  assert.deepEqual(p.options.map((o) => [o.label, !!o.checked]),
+    [['Apple', true], ['Banana', false], ['Mango', true], ['Type something', false], ['Chat about this', false]]);
+  assert.equal(p.options[3].detail, undefined);
+  assert.deepEqual(p.steps, [{ label: 'Color', done: true }, { label: 'Fruit', done: false }]);
+  assert.equal(chipLabel(p.options[0]), '✓ Apple');
+  assert.equal(isRedirectOption(p.options[3]), true);
+  const chips = answerOptions(p);
+  assert.equal(chips[chips.length - 1].key, NEXT_KEY);
+  assert.equal(chipLabel(chips[chips.length - 1]), 'Next →');
+});
+
+test('single-select forms get no Next chip', () => {
+  const p = parseClaudePrompt(FORM)!;
+  assert.equal(answerOptions(p).length, 5);
+  assert.deepEqual(p.steps?.map((s) => s.label), ['Booking', 'CO invite', 'Fulfil', 'Presets']);
+});
+
+test('the review screen is titled and answerable', () => {
+  const review = ['Review your answers', '', ' ● Which color do you prefer?', '   → Red', ' ● Which fruits?', '   → Apple, Mango', '', '❯ 1. Submit answers', '  2. Cancel'];
+  const p = parseClaudePrompt(review)!;
+  assert.equal(p.question, 'Review your answers');
+  assert.deepEqual(p.options.map((o) => o.label), ['Submit answers', 'Cancel']);
+});
+
+test('Home never answers a multi-select inline', () => {
+  assert.equal(promptFromCapture(MULTI.join('\n')), null);
+  assert.ok(promptFromCapture(FORM.join('\n')));
+});
+
+test('only boxed options tick; Chat about this and Type something answer', () => {
+  const p = parseClaudePrompt(MULTI)!;
+  assert.deepEqual(p.options.map(isTick), [true, true, true, false, false]);
+  assert.equal(parseClaudePrompt(FORM)!.options.some(isTick), false);
 });

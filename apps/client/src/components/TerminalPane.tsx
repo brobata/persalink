@@ -33,12 +33,11 @@ import { ClaudeReplyPanel } from './ClaudeReplyPanel';
 import { Composer, wrapForPaste } from './Composer';
 import type { ClaudeReplyState } from '../stores/appStore';
 import { PANE_COMMAND_EVENT, type PaneCommandDetail } from '../lib/paneCommands';
-import { chipLabel, isRedirectOption, promptOnScreen, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
+import { answerOptions, chipLabel, isRedirectOption, isTick, NEXT_KEY, promptOnScreen, samePromptState, type ClaudePrompt, type PromptOption } from '../lib/claudePrompt';
 import { rowInset } from '../lib/terminalDims';
 import { sentSentence } from '../lib/statusLine';
 import { sessionTitle, stateKey, stateWord } from '../lib/sessionState';
 import { useUiStore } from '../stores/uiStore';
-import { StateGlyph } from './ui/StateGlyph';
 import { SessionIcon } from './ui/ProfileTile';
 import { AnswerChips } from './ui/AnswerChips';
 import { IconButton } from './ui/IconButton';
@@ -306,11 +305,7 @@ export function TerminalPane({
   const readPrompt = useCallback(() => {
     const t = termRef.current;
     const next = t && watchPromptRef.current ? promptOnScreen(t) : null;
-    setPrompt((cur) => {
-      const same = cur && next && cur.question === next.question && cur.options.length === next.options.length
-        && cur.options.every((o, i) => o.key === next.options[i].key && o.label === next.options[i].label);
-      return same ? cur : next;
-    });
+    setPrompt((cur) => (cur && next && samePromptState(cur, next) ? cur : next));
   }, []);
   const schedulePromptCheckRef = useRef<() => void>(() => {});
   schedulePromptCheckRef.current = () => {
@@ -938,6 +933,13 @@ export function TerminalPane({
   const nameNow = attachedSession ? sessionTitle(attachedSession) : null;
 
   const answer = (o: PromptOption) => {
+    if (o.key === NEXT_KEY || isTick(o)) {
+      // Next, or a tick in a multi-select: the form stays, so read it again soon.
+      sendInput(o.key);
+      if (o.key === NEXT_KEY) setPrompt(null);
+      setTimeout(() => { if (watchPromptRef.current) readPrompt(); }, o.key === NEXT_KEY ? 600 : 250);
+      return;
+    }
     sendInput(o.key);
     setPrompt(null);
     if (isRedirectOption(o)) {
@@ -1023,7 +1025,6 @@ export function TerminalPane({
         {attachedSession && label ? (
           <>
             <span className="ttl pl-slide" key={attachedSession.id}>
-              {k && <StateGlyph state={k} size={12} live={isFocused} label={stateWord(attachedSession, k)} />}
               <SessionIcon session={attachedSession} size={16} />
               {renamingSession ? (
                 <input
@@ -1051,7 +1052,8 @@ export function TerminalPane({
             {isFocused && !collapsed && prompt && (
               <AnswerChips
                 className="ans"
-                options={prompt.options}
+                options={answerOptions(prompt)}
+                accent={!prompt.multi}
                 onAnswer={answer}
                 onOpenQuestion={() => termRef.current?.focus()}
               />

@@ -20,7 +20,6 @@ import { ArrowRight, ChevronRight, Mic } from 'lucide-react';
 import type { SessionInfo } from '@persalink/shared/protocol';
 import { AnswerChips } from './AnswerChips';
 import { SessionIcon } from './ProfileTile';
-import { StateGlyph } from './StateGlyph';
 import { chipLabel, type PromptOption } from '../../lib/claudePrompt';
 import { peekKey } from '../../lib/inlineAnswer';
 import { cancelHeld, holdAnswer, useHeldAnswer } from '../../lib/heldAnswers';
@@ -158,7 +157,6 @@ export function WaitCard({ session: s, variant, accent, onOpen, onReply, onSent,
         title={[title, s.profileName && s.profileName !== title ? s.profileName : '', s.id].filter(Boolean).join(' · ')}
         aria-label={`Open ${title}, ${stateWord(s, k).toLowerCase()}`}
       >
-        <StateGlyph state={k} size={12} />
         <SessionIcon session={s} size={20} />
         <span className="nm">{title}</span>
         <span className="age tnum">{age}</span>

@@ -13,11 +13,13 @@ import type { PromptOption } from '../../lib/claudePrompt';
 import { AnswerChips } from './AnswerChips';
 import { StateGlyph } from './StateGlyph';
 
-export function AnswerBar({ name, question, options, onAnswer, onReply, onOpenQuestion }: {
+export function AnswerBar({ name, question, options, accent = true, onAnswer, onReply, onOpenQuestion }: {
   /** The session's name, for the spoken label. */
   name: string;
   question: string;
   options: readonly PromptOption[];
+  /** Accent the first chip (off for a multi-select, whose first chip is only a tick). */
+  accent?: boolean;
   onAnswer: (o: PromptOption) => void;
   onReply: () => void;
   onOpenQuestion: () => void;
@@ -38,6 +40,7 @@ export function AnswerBar({ name, question, options, onAnswer, onReply, onOpenQu
       <AnswerChips
         className="pl-abar-c"
         options={options}
+        accent={accent}
         onAnswer={onAnswer}
         onReply={onReply}
         onOpenQuestion={onOpenQuestion}

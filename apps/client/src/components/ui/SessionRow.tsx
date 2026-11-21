@@ -12,7 +12,6 @@
 
 import type { ReactNode } from 'react';
 import type { SessionInfo } from '@persalink/shared/protocol';
-import { StateGlyph } from './StateGlyph';
 import { SessionIcon } from './ProfileTile';
 import { groupOf, previewLine, rowAge, sessionTitle, stateKey, stateWord, type StateKey } from '../../lib/sessionState';
 
@@ -63,13 +62,10 @@ export function SessionRow({
         onClick={onOpen}
         title={tip}
         aria-current={current ? 'true' : undefined}
-        className={`flex-1 min-w-0 grid grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-x-2.5 text-left ${
+        className={`flex-1 min-w-0 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 text-left ${
           touch ? 'min-h-(--pl-row-h) px-2.5 py-2' : 'min-h-8 px-2 py-1'
         }`}
       >
-        <span className="grid place-items-center">
-          <StateGlyph state={k} size={12} live={!!current} label={stateWord(session, k)} />
-        </span>
         <span className={`flex items-center gap-1.5 min-w-0 ${touch ? 'text-[14px] leading-5 font-medium' : 'text-body font-medium'} text-fg-1`}>
           <SessionIcon session={session} size={touch ? 20 : 18} />
           <span className="truncate">{name}</span>
@@ -80,7 +76,7 @@ export function SessionRow({
         </span>
         <span className="text-micro font-mono tnum text-fg-3 whitespace-nowrap">{age}</span>
         {sub && (
-          <span className={`col-start-2 col-end-4 truncate font-sans ${touch ? 'text-[12.5px] leading-[17px]' : 'text-meta'} ${
+          <span className={`col-start-1 col-end-3 truncate font-sans ${touch ? 'text-[12.5px] leading-[17px]' : 'text-meta'} ${
             g === 'needs' ? 'text-fg-2' : 'text-fg-3'
           }`}>
             {sub}

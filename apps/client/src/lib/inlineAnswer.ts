@@ -64,7 +64,9 @@ export function typeTextCommand(id: string, text: string): string | null {
 export function promptFromCapture(text: string): ClaudePrompt | null {
   const lines = text.replace(/\r/g, '').split('\n');
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  return parseClaudePrompt(lines);
+  const p = parseClaudePrompt(lines);
+  // A multi-select needs several toggles and then Next: open the session.
+  return p?.multi ? null : p;
 }
 
 /** Same question, same options in the same order: safe to type the key. */
