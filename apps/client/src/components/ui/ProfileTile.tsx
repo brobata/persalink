@@ -2,7 +2,7 @@
  * @file ProfileTile
  * @description A profile's tile: its own icon (the owner's chosen emoji) or,
  *   when it has none, a one- or two-letter monogram, on a 14% tint of the
- *   profile colour with a 2px colour bar on its left edge. Profile icons and
+ *   profile colour (no edge bar: the owner asked for it gone, 2026-11-20). Profile icons and
  *   colours are user data and appear only here, never as state.
  */
 
@@ -30,7 +30,6 @@ export function ProfileTile({ name, icon, color, size = 22, className = '' }: {
         letterSpacing: '0.02em',
         background: c ? `color-mix(in srgb, ${c} 14%, transparent)` : 'var(--color-bg-3)',
         color: c ?? 'var(--color-fg-2)',
-        boxShadow: c ? `inset 2px 0 0 ${c}` : undefined,
       }}
     >
       {icon || monogram(name)}
