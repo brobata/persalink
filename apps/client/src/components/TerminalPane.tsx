@@ -1198,7 +1198,7 @@ export function TerminalPane({
             onClick={() => { voice.toggle(); termRef.current?.focus(); }}
             className={`absolute right-3 bottom-3 z-10 w-9 h-9 rounded-full grid place-items-center border transition-colors duration-(--d-press) ${
               voice.isListening
-                ? 'bg-accent-soft text-accent-hi border-accent/50'
+                ? 'pl-live-mic'
                 : 'bg-bg-2/90 text-fg-2 border-line-2 hover:text-fg-1'
             }`}
             title={voice.isListening ? 'Stop dictation' : 'Start dictation'}

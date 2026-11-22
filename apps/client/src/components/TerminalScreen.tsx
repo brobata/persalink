@@ -2042,10 +2042,11 @@ export function TerminalScreen() {
     {
       id: 'dictate',
       icon: canDictate ? <Mic /> : <MessageSquare />,
-      label: canDictate ? (voice.isListening ? 'Stop' : 'Dictate') : 'Message',
+      label: canDictate ? (voice.isListening ? 'Listening' : 'Dictate') : 'Message',
       // One accent per screen: while the answer bar shows, its first chip is it.
       primary: !answerShown && !isEnded,
       on: voice.isListening,
+      live: voice.isListening,
       aria: voice.isListening ? 'Stop dictation' : undefined,
       onPress: () => (canDictate ? voice.toggle() : openComposer({ listen: false })),
     },

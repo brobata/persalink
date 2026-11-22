@@ -17,6 +17,8 @@ export interface DockItem {
   onPress: () => void;
   primary?: boolean;
   on?: boolean;
+  /** Something is running right now (the mic): solid fill and a breathing glow. */
+  live?: boolean;
   badge?: number;
   /** Spoken name when the label alone is not enough. */
   aria?: string;
@@ -35,7 +37,7 @@ export function Dock({ items, hidden = false }: { items: readonly DockItem[]; hi
         <button
           key={it.id}
           type="button"
-          className={`pl-dk${it.primary ? ' pri' : ''}${it.on ? ' on' : ''}`}
+          className={`pl-dk${it.primary ? ' pri' : ''}${it.on ? ' on' : ''}${it.live ? ' live' : ''}`}
           onPointerDown={(e) => e.preventDefault()}
           onClick={it.onPress}
           aria-pressed={it.on === undefined ? undefined : it.on}

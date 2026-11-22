@@ -1284,3 +1284,53 @@ html.pl-desktop .pl-rebanner:not(.docked) { bottom: 36px; }
 .pl-rail-row { display: flex; gap: 8px; }
 html.pl-square .pl-rail-row { gap: 6px; }
 .pl-rail-cat { font: 600 11.5px/14px var(--font-sans); color: var(--color-fg-3); padding-left: 2px; white-space: nowrap; }
+
+/* ---- Live mic: solid accent with a breathing glow and a ripple ring.
+   Green = on air (red would read as stop). Owner 11-21. */
+@keyframes pl-mic-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(61, 220, 151, 0.55), 0 0 10px 1px rgba(61, 220, 151, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(61, 220, 151, 0), 0 0 24px 7px rgba(61, 220, 151, 0.6); }
+}
+@keyframes pl-mic-throb { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+.pl-live-mic, .pl-dk.live .pill, .pl-mic.on {
+  position: relative;
+  background: var(--color-accent) !important; color: var(--color-accent-ink) !important;
+  border-color: transparent !important;
+  animation: pl-mic-breathe 1.6s ease-in-out infinite;
+}
+.pl-live-mic svg, .pl-dk.live .pill svg, .pl-mic.on svg { animation: pl-mic-throb 1.6s ease-in-out infinite; }
+.pl-live-mic::after, .pl-dk.live .pill::after {
+  content: ""; position: absolute; inset: -5px; border-radius: inherit; pointer-events: none;
+  border: 2px solid rgba(61, 220, 151, 0.6); animation: pl-mic-ring 1.6s var(--ease-out) infinite;
+}
+.pl-dk.live { color: var(--color-accent-hi); font-weight: 600; }
+
+/* ---- Update banner: loud, over the session, impossible to miss. */
+@keyframes pl-update-glow {
+  0%, 100% { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 0 rgba(61, 220, 151, 0.6); }
+  50% { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 10px rgba(61, 220, 151, 0); }
+}
+.pl-update {
+  /* Centred with margins, not a transform: pl-pop animates transform. */
+  position: fixed; z-index: 70; left: 0; right: 0; margin: 0 auto;
+  top: calc(env(safe-area-inset-top, 0px) + 64px);
+  width: min(560px, calc(100vw - 24px));
+  display: flex; align-items: center; gap: 12px; padding: 12px 10px 12px 16px;
+  border-radius: 14px; background: var(--color-accent); color: var(--color-accent-ink);
+  animation: pl-pop 220ms var(--ease-out) both, pl-update-glow 1.8s ease-in-out 220ms infinite;
+}
+.pl-update .go {
+  flex: none; height: 38px; padding: 0 16px; border-radius: 10px; border: 0; cursor: pointer;
+  background: var(--color-accent-ink); color: var(--color-accent-hi); font: 600 14px/1 var(--font-sans);
+}
+.pl-update .go:hover { color: #fff; }
+.pl-update .x {
+  flex: none; width: 34px; height: 34px; border-radius: 8px; border: 0; cursor: pointer;
+  display: grid; place-items: center; background: transparent; color: var(--color-accent-ink); opacity: 0.7;
+}
+.pl-update .x:hover { opacity: 1; background: rgba(3, 20, 12, 0.12); }
+@media (prefers-reduced-motion: reduce) {
+  .pl-live-mic, .pl-dk.live .pill, .pl-mic.on, .pl-update { animation: none !important; }
+  .pl-live-mic svg, .pl-dk.live .pill svg, .pl-mic.on svg, .pl-live-mic::after, .pl-dk.live .pill::after { animation: none !important; }
+  .pl-live-mic::after, .pl-dk.live .pill::after { opacity: 0.6; }
+}
