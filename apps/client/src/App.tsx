@@ -179,6 +179,7 @@ export function App() {
       <DesktopShell>
         <WindowSurfaces />
         <PublicBadge />
+        <UpdatePill />
       </DesktopShell>
     );
   }
