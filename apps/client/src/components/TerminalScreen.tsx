@@ -16,7 +16,7 @@ import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/termina
 import { TerminalSettings } from './TerminalSettings';
 import { SessionIcon } from './ui/ProfileTile';
 import { SnippetSheet } from './SnippetSheet';
-import { voiceSupported } from '../lib/voiceInput';
+import { useVoiceInput, voiceSupported } from '../lib/voiceInput';
 import { saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
@@ -625,8 +625,20 @@ export function TerminalScreen() {
   // One send rule: a chip sends at once; line 2 says "Answered: Yes · Stop" for 3s.
   const { answer: sendAnswer, confirmation } = useAnswerSend(sendInput);
 
-  // The composer, opened by Dictate, the reply chip, or Alt+M.
+  // Dictate types each finished phrase straight into the session, like a
+  // keyboard; nothing is sent until Enter. The composer (More, the reply chip,
+  // Alt+M) keeps its own mic for a message you want to edit first.
   const canDictate = useMemo(() => voiceSupported(), []);
+  const voice = useVoiceInput(useCallback((text: string) => {
+    sendInput(text);
+  }, [sendInput]));
+  useEffect(() => {
+    if (!voice.error) return;
+    useAppStore.getState().pushNotification('error', voice.error, 'voice');
+  }, [voice.error]);
+  // Switching sessions stops the mic, so words never land in the wrong one.
+  const { stop: stopVoice } = voice;
+  useEffect(() => { stopVoice(); }, [attachedSession?.id, stopVoice]);
   const recentLines = useCallback((n: number): string[] => {
     const t = terminalRef.current;
     if (!t) return [];
@@ -1973,6 +1985,7 @@ export function TerminalScreen() {
     else if (r.open()) terminalRef.current?.blur();
   };
   const moreItems: MenuItem[] = [
+    { id: 'message', icon: <MessageSquare />, label: 'Write a message', sub: 'a box with a mic: edit, then send', run: () => openComposer({ listen: false }) },
     { id: 'upload', icon: <Paperclip />, label: 'Attach a file', sub: title ? `uploads it and types the path into ${title}` : undefined, hidden: filesDisabled, run: () => fileInputRef.current?.click() },
     { id: 'palette', icon: <Search />, label: 'Search everything', run: () => openPalette() },
     { id: 'copy', icon: <ClipboardCopy />, label: 'Copy from Claude', run: () => setClaudeTab('copy') },
@@ -2029,10 +2042,12 @@ export function TerminalScreen() {
     {
       id: 'dictate',
       icon: canDictate ? <Mic /> : <MessageSquare />,
-      label: canDictate ? 'Dictate' : 'Message',
+      label: canDictate ? (voice.isListening ? 'Stop' : 'Dictate') : 'Message',
       // One accent per screen: while the answer bar shows, its first chip is it.
       primary: !answerShown && !isEnded,
-      onPress: () => openComposer({ listen: canDictate }),
+      on: voice.isListening,
+      aria: voice.isListening ? 'Stop dictation' : undefined,
+      onPress: () => (canDictate ? voice.toggle() : openComposer({ listen: false })),
     },
     { id: 'snippets', icon: <Braces />, label: 'Snippets', onPress: () => setShowSnippets(true) },
     { id: 'more', icon: <Ellipsis />, label: 'More', onPress: () => setShowMore(true) },

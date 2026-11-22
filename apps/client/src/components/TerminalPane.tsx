@@ -23,7 +23,7 @@ import { WSClient } from '../lib/ws';
 import { useAppStore } from '../stores/appStore';
 import { handleOsc52 } from '../lib/clipboardBridge';
 import { useTerminalStyleStore, getTheme, getFontStack } from '../stores/terminalStyleStore';
-import { voiceSupported } from '../lib/voiceInput';
+import { useVoiceInput, voiceSupported } from '../lib/voiceInput';
 import { getInitialDims, saveDims } from '../lib/terminalDims';
 import { createSwipeAutoSpacer } from '../lib/swipeAutoSpace';
 import { uploadFiles } from '../lib/upload';
@@ -184,11 +184,16 @@ export function TerminalPane({
     wsRef.current?.send({ type: 'session.resize', cols, rows });
   }, []);
 
-  // Dictation lives in the composer: what the mic hears lands in the box for
-  // review, never straight in the session. The pane's mic opens it listening.
+  // The pane's mic types each finished phrase straight into the session, like
+  // a keyboard; nothing is sent until Enter. The composer has its own mic.
   const canDictate = useMemo(() => voiceSupported(), []);
-  const [composerListen, setComposerListen] = useState(false);
-  useEffect(() => { if (!composerOpen) setComposerListen(false); }, [composerOpen]);
+  const voice = useVoiceInput(useCallback((text: string) => {
+    sendInput(text);
+  }, [sendInput]));
+  useEffect(() => {
+    if (!voice.error) return;
+    useAppStore.getState().pushNotification('error', voice.error, 'voice');
+  }, [voice.error]);
 
   // Toggles read the open state through refs: a socket send doesn't belong
   // inside a setState updater (React may run updaters twice).
@@ -1188,12 +1193,17 @@ export function TerminalPane({
         {attachedSession && canDictate && !composerOpen && (
           <button
             // onMouseDown preventDefault stops the browser from moving focus
-            // from xterm's textarea to the button.
+            // from xterm's textarea to the button (else Ctrl+C stops reaching xterm).
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => { setComposerListen(true); setComposerOpen(true); }}
-            className="absolute right-3 bottom-3 z-10 w-9 h-9 rounded-full grid place-items-center border transition-colors duration-(--d-press) bg-bg-2/90 text-fg-2 border-line-2 hover:text-fg-1"
-            title="Dictate a message"
-            aria-label="Dictate a message"
+            onClick={() => { voice.toggle(); termRef.current?.focus(); }}
+            className={`absolute right-3 bottom-3 z-10 w-9 h-9 rounded-full grid place-items-center border transition-colors duration-(--d-press) ${
+              voice.isListening
+                ? 'bg-accent-soft text-accent-hi border-accent/50'
+                : 'bg-bg-2/90 text-fg-2 border-line-2 hover:text-fg-1'
+            }`}
+            title={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+            aria-label={voice.isListening ? 'Stop dictation' : 'Start dictation'}
+            aria-pressed={voice.isListening}
           >
             <Mic className="w-4 h-4" strokeWidth={1.75} />
           </button>
@@ -1232,7 +1242,7 @@ export function TerminalPane({
         )}
       </div>
       {composerOpen && attachedSession && (
-        <Composer onSend={sendComposed} onClose={closeComposer} variant="pane" listen={composerListen} />
+        <Composer onSend={sendComposed} onClose={closeComposer} variant="pane" />
       )}
     </section>
   );
