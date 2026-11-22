@@ -289,6 +289,19 @@ async function checkForUpdate(): Promise<void> {
   } catch { /* offline or dev — check again on next auth */ }
 }
 
+// A client-only rebuild doesn't restart the server, so no reconnect happens
+// and the auth.ok check above never fires. Also check when the window comes
+// back into view and every 5 minutes while it's visible.
+if (typeof window !== 'undefined') {
+  const recheck = () => {
+    if (document.visibilityState !== 'visible' || useAppStore.getState().updateAvailable) return;
+    void checkForUpdate();
+  };
+  document.addEventListener('visibilitychange', recheck);
+  window.addEventListener('focus', recheck);
+  setInterval(recheck, 5 * 60_000);
+}
+
 // Read-only debug handle for automated tests / console triage. Same-origin
 // scripts only (strict CSP) — the page already runs with full store access.
 declare global { interface Window { __plStore?: typeof useAppStore } }
