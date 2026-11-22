@@ -1292,8 +1292,11 @@ html.pl-square .pl-rail-row { gap: 6px; }
   50% { box-shadow: 0 0 0 6px rgba(61, 220, 151, 0), 0 0 24px 7px rgba(61, 220, 151, 0.6); }
 }
 @keyframes pl-mic-throb { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+/* No position here: the desktop pane mic is absolute (bottom right) and an
+   unlayered `position: relative` would beat its utility and throw it to the
+   top left. Each live element is already positioned. */
+.pl-dk.live .pill { position: relative; }
 .pl-live-mic, .pl-dk.live .pill, .pl-mic.on {
-  position: relative;
   background: var(--color-accent) !important; color: var(--color-accent-ink) !important;
   border-color: transparent !important;
   animation: pl-mic-breathe 1.6s ease-in-out infinite;
