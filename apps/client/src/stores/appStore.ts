@@ -291,7 +291,7 @@ async function checkForUpdate(): Promise<void> {
 
 // A client-only rebuild doesn't restart the server, so no reconnect happens
 // and the auth.ok check above never fires. Also check when the window comes
-// back into view and every 5 minutes while it's visible.
+// back into view and every minute while it's visible (a tiny no-store JSON).
 if (typeof window !== 'undefined') {
   const recheck = () => {
     if (document.visibilityState !== 'visible' || useAppStore.getState().updateAvailable) return;
@@ -299,7 +299,7 @@ if (typeof window !== 'undefined') {
   };
   document.addEventListener('visibilitychange', recheck);
   window.addEventListener('focus', recheck);
-  setInterval(recheck, 5 * 60_000);
+  setInterval(recheck, 60_000);
 }
 
 // Read-only debug handle for automated tests / console triage. Same-origin
