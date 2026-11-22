@@ -98,7 +98,38 @@ function useComposerVoice(listen: boolean) {
   const phase: Phase = voice.isListening ? (stopping ? 'finishing' : 'listening') : dictated ? 'review' : 'idle';
   const discard = () => { setText(seedRef.current); setDictated(false); };
   const reset = () => { setText(''); setDictated(false); seedRef.current = ''; };
-  return { text, setText, phase, voice, toggleMic, stopMic, discard, reset };
+
+  // Send or Insert while the mic is on: stop it, let the last words land, then
+  // run with the final text. The box stays editable the whole time; only the
+  // brief 'finishing' moment blocks a second tap.
+  const pendingRef = useRef<((finalText: string) => void) | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearTimer = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+  };
+  const runPending = useCallback(() => {
+    clearTimer();
+    const fn = pendingRef.current;
+    pendingRef.current = null;
+    fn?.(textRef.current);
+  }, []);
+  useEffect(() => {
+    if (!voice.isListening) runPending();
+  }, [voice.isListening, runPending]);
+  // Closed mid-finish: the send is cancelled, not fired later.
+  useEffect(() => () => { pendingRef.current = null; clearTimer(); }, []);
+  const { abort: voiceAbort } = voice;
+  const afterMic = useCallback((fn: (finalText: string) => void) => {
+    if (!voice.isListening) { fn(textRef.current); return; }
+    pendingRef.current = fn;
+    clearTimer();
+    stopMic();
+    // If the engine never reports its end, drop the mic and send what's there.
+    timerRef.current = setTimeout(() => { voiceAbort(); runPending(); }, 2000);
+  }, [voice.isListening, stopMic, voiceAbort, runPending]);
+
+  return { text, setText, phase, voice, toggleMic, stopMic, discard, reset, afterMic };
 }
 
 export function Composer(props: ComposerProps) {
@@ -119,9 +150,9 @@ export function Composer(props: ComposerProps) {
 
 function ComposerSheetBody({ onSend, onInsert, listen = false, context, hint, target }: ComposerProps) {
   const close = useSheetClose();
-  const { text, setText, phase, voice, toggleMic, stopMic, discard } = useComposerVoice(listen);
+  const { text, setText, phase, voice, toggleMic, discard, afterMic } = useComposerVoice(listen);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const busy = phase === 'listening' || phase === 'finishing';
+  const busy = phase === 'finishing';
   const has = text.trim().length > 0;
 
   // Typing starts in the box; dictation keeps the soft keyboard down.
@@ -140,12 +171,14 @@ function ComposerSheetBody({ onSend, onInsert, listen = false, context, hint, ta
   }, [text]);
 
   const deliver = (enter: boolean) => {
-    const t = text.trim();
-    if (!t) return;
-    if (voice.isListening) stopMic();
-    close();
-    if (enter) onSend(t);
-    else onInsert?.(t);
+    if (busy || (!text.trim() && phase !== 'listening')) return;
+    afterMic((finalText) => {
+      const t = finalText.trim();
+      if (!t) return;
+      close();
+      if (enter) onSend(t);
+      else onInsert?.(t);
+    });
   };
 
   let status: ReactNode;
@@ -154,7 +187,7 @@ function ComposerSheetBody({ onSend, onInsert, listen = false, context, hint, ta
       <>
         <span className="pl-live-dot" aria-hidden />
         <span className="text-accent-hi font-medium">Listening</span>
-        <span className="ml-auto">Tap the mic to stop</span>
+        <span className="ml-auto">Edit or send anytime</span>
       </>
     );
   } else if (phase === 'finishing') {
@@ -195,11 +228,10 @@ function ComposerSheetBody({ onSend, onInsert, listen = false, context, hint, ta
               deliver(true);
             }
           }}
-          readOnly={busy}
           rows={3}
           spellCheck
           aria-label={target ? `Message ${target}` : 'Message'}
-          placeholder={busy ? 'Start talking…' : voice.isSupported ? 'Type, or tap the mic and talk' : 'Type a message'}
+          placeholder={phase === 'listening' ? 'Start talking…' : voice.isSupported ? 'Type, or tap the mic and talk' : 'Type a message'}
           className="block w-full min-h-24 max-h-[180px] resize-none bg-transparent border-0 outline-none px-3 py-2.5 text-[15px] leading-[22px] text-fg-1 placeholder:text-fg-3"
         />
       </div>
@@ -229,13 +261,13 @@ function ComposerSheetBody({ onSend, onInsert, listen = false, context, hint, ta
             type="button"
             className="pl-btn"
             onClick={() => deliver(false)}
-            disabled={busy || !has}
+            disabled={busy || (!has && phase !== 'listening')}
             title="Type it in without pressing Enter"
           >
             Insert
           </button>
         )}
-        <button type="button" className="pl-btn pri" onClick={() => deliver(true)} disabled={busy || !has}>
+        <button type="button" className="pl-btn pri" onClick={() => deliver(true)} disabled={busy || (!has && phase !== 'listening')}>
           Send
           <CornerDownLeft className="w-3.5 h-3.5" strokeWidth={2} aria-hidden />
         </button>
@@ -245,9 +277,9 @@ function ComposerSheetBody({ onSend, onInsert, listen = false, context, hint, ta
 }
 
 function ComposerRow({ onSend, onClose, listen = false }: ComposerProps) {
-  const { text, setText, phase, voice, toggleMic, stopMic, reset } = useComposerVoice(listen);
+  const { text, setText, phase, voice, toggleMic, reset, afterMic } = useComposerVoice(listen);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const busy = phase === 'listening' || phase === 'finishing';
+  const busy = phase === 'finishing';
 
   useEffect(() => { ref.current?.focus(); }, []);
 
@@ -259,15 +291,17 @@ function ComposerRow({ onSend, onClose, listen = false }: ComposerProps) {
   }, [text]);
 
   const send = () => {
-    if (!text.trim() || busy) return;
-    if (voice.isListening) stopMic();
-    onSend(text);
-    reset();
-    ref.current?.focus();
+    if (busy || (!text.trim() && phase !== 'listening')) return;
+    afterMic((finalText) => {
+      if (!finalText.trim()) return;
+      onSend(finalText);
+      reset();
+      ref.current?.focus();
+    });
   };
 
   const placeholder = phase === 'listening'
-    ? 'Listening… click the mic to stop'
+    ? 'Listening… edit or send anytime'
     : phase === 'review'
       ? 'Dictated. Edit anything, then send'
       : 'Message: Enter to send, Shift+Enter for a new line, Esc to close';
@@ -287,7 +321,6 @@ function ComposerRow({ onSend, onClose, listen = false }: ComposerProps) {
             send();
           }
         }}
-        readOnly={busy}
         rows={1}
         placeholder={placeholder}
         className={`flex-1 min-w-0 resize-none bg-bg-term border rounded-[6px] text-fg-1 placeholder:text-fg-3 outline-none px-2.5 py-1.5 text-[12.5px] font-mono ${
@@ -305,7 +338,7 @@ function ComposerRow({ onSend, onClose, listen = false }: ComposerProps) {
           <Mic className="w-4 h-4" strokeWidth={1.75} />
         </IconButton>
       )}
-      <button type="button" onClick={send} disabled={!text.trim() || busy} className="pl-btn pri sm" title="Send (Enter)">
+      <button type="button" onClick={send} disabled={busy || (!text.trim() && phase !== 'listening')} className="pl-btn pri sm" title="Send (Enter)">
         Send
       </button>
       <button type="button" onClick={onClose} className="pl-btn ghost sm" title="Close (Esc)">

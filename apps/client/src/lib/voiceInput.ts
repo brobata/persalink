@@ -80,6 +80,8 @@ export type VoiceInputState = {
   error: string | null;
   start: () => void;
   stop: () => void;
+  /** Tear down now without waiting for the engine's end; late words are dropped. */
+  abort: () => void;
   toggle: () => void;
 };
 
@@ -298,5 +300,11 @@ export function useVoiceInput(onFinalTranscript: (text: string) => void): VoiceI
     };
   }, [releaseWakeLock, clearSilenceTimer]);
 
-  return { isSupported, isListening, error, start, stop, toggle };
+  const abort = useCallback(() => {
+    if (!recognitionRef.current) return;
+    abandon();
+    releaseOwnership();
+  }, [abandon]);
+
+  return { isSupported, isListening, error, start, stop, abort, toggle };
 }
