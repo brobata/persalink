@@ -23,9 +23,9 @@ interface TerminalSettingsProps {
 }
 
 const PHONE_KEYBOARD_CHOICES: Array<{ value: PhoneKeyboard; label: string; hint: string }> = [
-  { value: 'auto', label: 'Auto', hint: 'Works it out: a keyboard phone like the Titan 2 types straight into the terminal, a touch-screen phone gets the command line with Send.' },
+  { value: 'auto', label: 'Auto', hint: 'Works it out: a keyboard phone like the Titan 2 types straight into the terminal, a touch-screen phone gets a typing row with Send.' },
   { value: 'keys', label: 'Has keys', hint: 'Type straight into the terminal on the phone\'s own keys. No command line.' },
-  { value: 'touch', label: 'Touch screen', hint: 'Type into a command line with a Send button, so swipe typing and autocorrect work. The keyboard icon on its left types live.' },
+  { value: 'touch', label: 'Touch screen', hint: 'A typing row with Send: swipe typing and corrections work, and the words show on the session\'s own prompt as you type.' },
 ];
 
 export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSettingsProps) {

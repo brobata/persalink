@@ -1025,6 +1025,11 @@ html.pl-square .pl-ph .r2 { font-size: 11.5px; line-height: 14px; height: 14px; 
 .pl-cmdline-in { resize: none; padding-top: 9px; padding-bottom: 9px; overflow: hidden; white-space: pre; }
 /* Keys face: the box stays focused but out of sight. */
 .pl-cmdline-in.hidden-face { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; padding: 0; border: 0; }
+.pl-cmdline-hint {
+  flex: 1; min-width: 0; height: 40px; padding: 0 6px; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--color-fg-3); font: 400 13px/20px var(--font-sans);
+}
 .pl-cmdline-strip {
   flex: 1; min-width: 0; height: 52px; display: flex; align-items: center; gap: 4px; padding-right: 8px;
   overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x;

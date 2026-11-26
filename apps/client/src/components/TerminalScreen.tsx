@@ -217,12 +217,21 @@ function isPhysicalKeyEvent(e: KeyboardEvent): boolean {
 
 export function TerminalScreen() {
   const {
-    attachedSession, sendInput, exitScroll, resize, detachSession,
+    attachedSession, sendInput: rawSendInput, exitScroll, resize, detachSession,
     windows, createWindow, serverUrl, authToken,
     sessions, showTabPicker, setShowTabPicker,
     connectionState, requestLinks, sessionLinks, clearSessionLinks,
     claudeReply, requestClaudeReply, clearClaudeReply,
   } = useAppStore();
+  // Touch phones' command line mirrors its box into the session. Anything
+  // else that types into the session (snippets, answers, paste, Tab, xterm)
+  // makes the session's line differ from the box, so the box forgets first.
+  // Only the command line itself gets the raw sender.
+  const cmdRef = useRef<CommandLineHandle>(null);
+  const sendInput = useCallback((data: string) => {
+    cmdRef.current?.reset();
+    rawSendInput(data);
+  }, [rawSendInput]);
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const endedSession = useAppStore((s) => s.endedSession);
   const restartEnded = useAppStore((s) => s.restartEnded);
@@ -294,16 +303,13 @@ export function TerminalScreen() {
   // model list misses).
   const phoneKeyboard = useTerminalStyleStore((s) => s.phoneKeyboard);
   const hwKeyboard = phoneKeyboard === 'auto' ? detectedHw : phoneKeyboard === 'keys';
-  // Touch-screen phones type into the command line (a real text box with
-  // Send) instead of straight into the terminal. Its keyboard icon switches
-  // to live typing until the keyboard goes away.
-  const [liveTyping, setLiveTyping] = useState(false);
+  // Touch-screen phones type through the command line (keyboard-friendly,
+  // mirrored live into the session) instead of xterm's own textarea.
   // Which face the command line shows: the box, or the terminal keys.
   const [lineKeys, setLineKeys] = useState(false);
-  const lineShown = !hwKeyboard && !liveTyping;
+  const lineShown = !hwKeyboard;
   const lineShownRef = useRef(lineShown);
   lineShownRef.current = lineShown;
-  const cmdRef = useRef<CommandLineHandle>(null);
   // When a tap on the cursor row last handed the keyboard to the command
   // line: the click that follows the same tap must not take it back.
   const cmdTapAtRef = useRef(0);
@@ -770,10 +776,9 @@ export function TerminalScreen() {
       if (now === shown) return;
       shown = now;
       setKbVisible(now);
-      // Put away by the system (Back): the key row goes with it, and live
-      // typing hands back to the command line.
+      // Put away by the system (Back): the key row goes with it, and the
+      // command line goes back to its typing face.
       if (!now) {
-        setLiveTyping(false);
         setLineKeys(false);
         if (softKbOnRef.current) {
           applySoftKb(false);
@@ -804,24 +809,6 @@ export function TerminalScreen() {
     cmdRef.current?.blur();
     applySoftKb(false);
   }, [persistKeys, applySoftKb]);
-  // The command line's keyboard icon: type live, straight into the session.
-  const goLive = useCallback(() => {
-    setLiveTyping(true);
-    persistKeys(true);
-    applySoftKb(true);
-  }, [persistKeys, applySoftKb]);
-  // One command from the line: the text (paste-wrapped when the program asked
-  // for bracketed paste), then Enter a beat later so Claude Code reads the
-  // Enter as Send, not as a newline inside the paste.
-  const sendLine = useCallback((text: string) => {
-    if (text) {
-      const bracketed = terminalRef.current?.modes.bracketedPasteMode ?? false;
-      sendInput(wrapForPaste(text, bracketed));
-      setTimeout(() => sendInput('\r'), 60);
-    } else {
-      sendInput('\r');
-    }
-  }, [sendInput]);
 
   // ------------------------------------------------------------------
   // Switching sessions slides. The outgoing terminal's own canvas is kept
@@ -2330,8 +2317,10 @@ export function TerminalScreen() {
           // follow a swipe into another session and run there.
           key={attachedSession.id}
           ref={cmdRef}
-          onSend={sendLine}
-          sendInput={sendInput}
+          sendInput={rawSendInput}
+          bracketedPaste={() => terminalRef.current?.modes.bracketedPasteMode ?? false}
+          hold={answerShown}
+          keyboardUp={kbVisible}
           ctrlArmed={ctrlArmed}
           onToggleCtrl={toggleCtrl}
           onCtrlUsed={() => { ctrlArmedRef.current = false; setCtrlArmed(false); }}
@@ -2339,7 +2328,6 @@ export function TerminalScreen() {
           onHide={kbVisible ? hideKeyboard : undefined}
           keysView={lineKeys}
           onKeysView={setLineKeys}
-          onLive={goLive}
           target={title}
           offline={!online}
         />
