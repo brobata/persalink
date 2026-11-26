@@ -1006,6 +1006,32 @@ html.pl-square .pl-ph .r2 { font-size: 11.5px; line-height: 14px; height: 14px; 
 }
 .pl-sug b { color: var(--color-fg-1); font-weight: 500; }
 
+/* the command line (touch-screen phones): a real text box with Send */
+.pl-cmdline {
+  flex: none; height: 52px; display: flex; align-items: center; gap: 6px; padding: 0 6px;
+  background: var(--color-bg-1); border-top: 1px solid var(--color-line);
+}
+.pl-cmdline-mode {
+  flex: none; width: 40px; height: 40px; display: grid; place-items: center;
+  border-radius: var(--r-sm); color: var(--color-fg-2);
+}
+.pl-cmdline-mode:active { background: var(--color-bg-3); }
+.pl-cmdline-in {
+  flex: 1; min-width: 0; height: 40px; padding: 0 12px;
+  border-radius: var(--r-sm); background: var(--color-bg-term); border: 1px solid var(--color-line-2);
+  color: var(--color-fg-1); font: 400 14px/20px var(--font-mono); outline: none;
+}
+.pl-cmdline-in::placeholder { color: var(--color-fg-3); }
+.pl-cmdline-in:focus { border-color: color-mix(in srgb, var(--color-accent) 45%, transparent); }
+.pl-cmdline-send {
+  flex: none; height: 40px; min-width: 76px; padding: 0 12px; display: flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: var(--r-sm); background: var(--color-accent); color: var(--color-accent-ink);
+  font: 600 14px/20px var(--font-sans);
+}
+.pl-cmdline-send.idle { background: var(--color-bg-3); color: var(--color-fg-1); }
+.pl-cmdline-send:active { filter: brightness(0.9); }
+.pl-cmdline-send:disabled { opacity: 0.4; }
+
 /* the dock */
 .pl-dock {
   flex: none;

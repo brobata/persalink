@@ -23,6 +23,7 @@ import { uploadFiles } from '../lib/upload';
 import { orderSessions, waitingSessions } from '../lib/sessionOrder';
 import { ExitedTombstone } from './ExitedTombstone';
 import { KeyRow } from './ui/KeyRow';
+import { CommandLine, type CommandLineHandle } from './ui/CommandLine';
 import { Sheet } from './ui/Sheet';
 import { IconButton } from './ui/IconButton';
 import { PhoneHeader, HeaderFlash } from './ui/PhoneHeader';
@@ -259,7 +260,7 @@ export function TerminalScreen() {
   // out of the pipeline — so the very chord that most needs the IME was the one that could
   // never switch it on, and its symbol was swallowed. Modifiers count as evidence now.
   // Sticky per device — once seen, the soft-keyboard dial item is dead weight and hides.
-  const [hwKeyboard, setHwKeyboard] = useState(() => {
+  const [detectedHw, setDetectedHw] = useState(() => {
     if (typeof window === 'undefined') return false;
     if (userAgentSuggestsHardwareKeyboard()) return true;
     try { return localStorage.getItem('persalink-hw-keyboard') === 'true'; } catch { return false; }
@@ -268,23 +269,42 @@ export function TerminalScreen() {
   // match should stay a live answer, so a wrong pattern here can never be baked into a device
   // permanently the way a real keypress legitimately is.
   useEffect(() => {
-    if (hwKeyboard) return;
+    if (detectedHw) return;
     let cancelled = false;
     void modelSuggestsHardwareKeyboard().then((isHardware) => {
-      if (!cancelled && isHardware) setHwKeyboard(true);
+      if (!cancelled && isHardware) setDetectedHw(true);
     });
     return () => { cancelled = true; };
-  }, [hwKeyboard]);
+  }, [detectedHw]);
   useEffect(() => {
-    if (hwKeyboard) return;
+    if (detectedHw) return;
     const onKey = (e: KeyboardEvent) => {
       if (!isPhysicalKeyEvent(e)) return;
-      setHwKeyboard(true);
+      // Gboard's cursor arrows send real key codes into the command line;
+      // they must not turn a touch phone into a "keyboard phone" for good.
+      if (e.target instanceof Element && e.target.closest('.pl-cmdline')) return;
+      setDetectedHw(true);
       try { localStorage.setItem('persalink-hw-keyboard', 'true'); } catch { /* private mode */ }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [hwKeyboard]);
+  }, [detectedHw]);
+  // Settings → Terminal → "This phone" can overrule detection either way
+  // (a Bluetooth keyboard once paired with a Pixel, a keyboard phone the
+  // model list misses).
+  const phoneKeyboard = useTerminalStyleStore((s) => s.phoneKeyboard);
+  const hwKeyboard = phoneKeyboard === 'auto' ? detectedHw : phoneKeyboard === 'keys';
+  // Touch-screen phones type into the command line (a real text box with
+  // Send) instead of straight into the terminal. Its keyboard icon switches
+  // to live typing until the keyboard goes away.
+  const [liveTyping, setLiveTyping] = useState(false);
+  const lineShown = !hwKeyboard && !liveTyping;
+  const lineShownRef = useRef(lineShown);
+  lineShownRef.current = lineShown;
+  const cmdRef = useRef<CommandLineHandle>(null);
+  // When a tap on the cursor row last handed the keyboard to the command
+  // line: the click that follows the same tap must not take it back.
+  const cmdTapAtRef = useRef(0);
   // Input-debug overlay (Settings → "Input debug overlay"): shows the raw
   // events reaching the app so exotic hardware (Titan keyboard-swipe scroll,
   // odd Sym layers) can be diagnosed from the device itself. Consecutive
@@ -559,10 +579,15 @@ export function TerminalScreen() {
       // Paste all uploaded paths space-separated, with a trailing space so the
       // user can keep typing (e.g. a command in front of the file list).
       if (paths.length > 0) {
-        sendInput(paths.join(' ') + ' ');
-        // The file picker stole focus — hand it straight back with the
-        // keyboard up, since the next act is always typing around the path.
-        applySoftKb(true);
+        if (lineShownRef.current && cmdRef.current) {
+          // The command line owns typing: the paths join what is in the box.
+          cmdRef.current.insert(paths.join(' ') + ' ');
+        } else {
+          sendInput(paths.join(' ') + ' ');
+          // The file picker stole focus — hand it straight back with the
+          // keyboard up, since the next act is always typing around the path.
+          applySoftKb(true);
+        }
       }
     } catch (err) {
       // Without this, a rejected upload (auth failure, size cap, network drop)
@@ -577,7 +602,7 @@ export function TerminalScreen() {
       setUploading(false);
       // Reset input so the same file(s) can be re-selected
       if (fileInputRef.current) fileInputRef.current.value = '';
-      terminalRef.current?.focus();
+      if (!lineShownRef.current) terminalRef.current?.focus();
     }
   };
 
@@ -743,10 +768,16 @@ export function TerminalScreen() {
       if (now === shown) return;
       shown = now;
       setKbVisible(now);
-      // Put away by the system (Back): the key row goes with it.
-      if (!now && softKbOnRef.current) {
-        applySoftKb(false);
-        persistKeys(false);
+      // Put away by the system (Back): the key row goes with it, and live
+      // typing hands back to the command line.
+      if (!now) {
+        setLiveTyping(false);
+        if (softKbOnRef.current) {
+          applySoftKb(false);
+          persistKeys(false);
+        } else if (lineShownRef.current) {
+          persistKeys(false);
+        }
       }
     };
     vv.addEventListener('resize', check);
@@ -756,12 +787,37 @@ export function TerminalScreen() {
   const toggleKeys = useCallback(() => {
     const next = !keysShown;
     persistKeys(next);
+    if (lineShownRef.current) {
+      // Touch phone: the keyboard comes up on the command line.
+      if (next) cmdRef.current?.focus();
+      else cmdRef.current?.blur();
+      return;
+    }
     applySoftKb(next);
   }, [keysShown, persistKeys, applySoftKb]);
   const hideKeyboard = useCallback(() => {
     persistKeys(false);
+    cmdRef.current?.blur();
     applySoftKb(false);
   }, [persistKeys, applySoftKb]);
+  // The command line's keyboard icon: type live, straight into the session.
+  const goLive = useCallback(() => {
+    setLiveTyping(true);
+    persistKeys(true);
+    applySoftKb(true);
+  }, [persistKeys, applySoftKb]);
+  // One command from the line: the text (paste-wrapped when the program asked
+  // for bracketed paste), then Enter a beat later so Claude Code reads the
+  // Enter as Send, not as a newline inside the paste.
+  const sendLine = useCallback((text: string) => {
+    if (text) {
+      const bracketed = terminalRef.current?.modes.bracketedPasteMode ?? false;
+      sendInput(wrapForPaste(text, bracketed));
+      setTimeout(() => sendInput('\r'), 60);
+    } else {
+      sendInput('\r');
+    }
+  }, [sendInput]);
 
   // ------------------------------------------------------------------
   // Switching sessions slides. The outgoing terminal's own canvas is kept
@@ -1699,7 +1755,11 @@ export function TerminalScreen() {
         // the first tap of a double-tap-Tab (used mid-typing) would yank the
         // keyboard down before the Tab even fired.
         if (tapOnCursorRow()) {
-          if (!softKbOnRef.current) applySoftKb(true);
+          // Touch phones: the command line is where typing goes.
+          // xterm's own mousedown (fired after this touchend) grabs focus
+          // back, so the click handler below does the focusing.
+          if (lineShownRef.current) cmdTapAtRef.current = performance.now();
+          else if (!softKbOnRef.current) applySoftKb(true);
         } else if (softKbOnRef.current) {
           kbDismissTimer = setTimeout(() => {
             kbDismissTimer = null;
@@ -2044,7 +2104,8 @@ export function TerminalScreen() {
       icon: canDictate ? <Mic /> : <MessageSquare />,
       label: canDictate ? (voice.isListening ? 'Listening' : 'Dictate') : 'Message',
       // One accent per screen: while the answer bar shows, its first chip is it.
-      primary: !answerShown && !isEnded,
+      // The command line's Send takes the accent once text is in it.
+      primary: !answerShown && !isEnded && !lineShown,
       on: voice.isListening,
       live: voice.isListening,
       aria: voice.isListening ? 'Stop dictation' : undefined,
@@ -2134,6 +2195,14 @@ export function TerminalScreen() {
         onClick={() => {
           // Ended: nothing to type into, so don't raise the keyboard.
           if (useAppStore.getState().endedSession) return;
+          // A tap on the prompt row: the command line takes the keyboard.
+          // Any other tap leaves focus with xterm (inputmode none), which puts
+          // the keyboard away on purpose, like tapping away in a chat app.
+          if (lineShownRef.current && performance.now() - cmdTapAtRef.current < 500) {
+            cmdTapAtRef.current = 0;
+            cmdRef.current?.focus();
+            return;
+          }
           const rd = readerRef.current;
           if (rd?.active) {
             // A tap on the text page with nothing selected closes it; with a
@@ -2247,6 +2316,22 @@ export function TerminalScreen() {
           }}
           keys={keysShown}
           onHide={kbVisible ? hideKeyboard : undefined}
+        />
+      )}
+
+      {lineShown && attachedSession && !isEnded && (
+        <CommandLine
+          // A fresh, empty line per session: a half-typed command must never
+          // follow a swipe into another session and run there.
+          key={attachedSession.id}
+          ref={cmdRef}
+          onSend={sendLine}
+          sendInput={sendInput}
+          ctrlArmed={ctrlArmed}
+          onCtrlUsed={() => { ctrlArmedRef.current = false; setCtrlArmed(false); }}
+          onLive={goLive}
+          target={title}
+          offline={!online}
         />
       )}
 

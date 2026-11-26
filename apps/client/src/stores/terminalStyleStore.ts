@@ -296,6 +296,11 @@ interface TerminalStyleState {
    *  prefix). Only takes effect once a physical keyboard has been detected,
    *  so Gboard-only phones never get a surprise soft keyboard. */
   hwImeCompat: boolean;
+  /** What kind of phone this is, for typing. 'auto' trusts detection (a
+   *  physical key press, or a known keyboard-phone model like the Titan 2).
+   *  'keys' = type straight into the terminal on the phone's own keys.
+   *  'touch' = an on-screen keyboard: a command line with a Send button. */
+  phoneKeyboard: PhoneKeyboard;
 
   setFontFamily: (f: FontFamilyChoice) => void;
   setFontSize: (s: number) => void;
@@ -306,8 +311,11 @@ interface TerminalStyleState {
   setInputDebug: (v: boolean) => void;
   setScrollGain: (v: number) => void;
   setHwImeCompat: (v: boolean) => void;
+  setPhoneKeyboard: (v: PhoneKeyboard) => void;
   reset: () => void;
 }
+
+export type PhoneKeyboard = 'auto' | 'keys' | 'touch';
 
 /** Safe lookup — falls back to Cascadia if a stale persisted key is unknown. */
 export function getFontStack(choice: FontFamilyChoice | string): string {
@@ -334,6 +342,7 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       inputDebug: false,
       scrollGain: 1,
       hwImeCompat: true,
+      phoneKeyboard: 'auto',
 
       setFontFamily: (fontFamily) => set({ fontFamily }),
       setFontSize: (fontSize) => set({ fontSize: Math.min(24, Math.max(8, Math.round(fontSize))) }),
@@ -344,10 +353,11 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
       setInputDebug: (inputDebug) => set({ inputDebug }),
       setScrollGain: (scrollGain) => set({ scrollGain: Math.min(5, Math.max(1, Math.round(scrollGain))) }),
       setHwImeCompat: (hwImeCompat) => set({ hwImeCompat }),
+      setPhoneKeyboard: (phoneKeyboard) => set({ phoneKeyboard }),
       reset: () => set({
         fontFamily: 'cascadia', fontSize: 13, fontWeight: '400',
         theme: 'persalink', historyOnAttach: 0, doubleTapTab: true, inputDebug: false,
-        scrollGain: 1, hwImeCompat: true,
+        scrollGain: 1, hwImeCompat: true, phoneKeyboard: 'auto',
       }),
     }),
     {
@@ -357,6 +367,7 @@ export const useTerminalStyleStore = create<TerminalStyleState>()(
         if (!state) return;
         if (!FONT_FAMILIES[state.fontFamily]) state.fontFamily = 'cascadia';
         if (!THEMES[state.theme]) state.theme = 'persalink';
+        if (!['auto', 'keys', 'touch'].includes(state.phoneKeyboard)) state.phoneKeyboard = 'auto';
       },
     }
   )

@@ -12,6 +12,7 @@ import { Sheet } from './ui/Sheet';
 import {
   useTerminalStyleStore, FONT_FAMILIES, THEMES, HISTORY_OPTIONS,
   type FontFamilyChoice, type FontWeightChoice, type ThemeName, type HistoryOnAttach,
+  type PhoneKeyboard,
 } from '../stores/terminalStyleStore';
 
 interface TerminalSettingsProps {
@@ -20,6 +21,12 @@ interface TerminalSettingsProps {
    *  as a phone bottom sheet; 'inline' sits in Settings. Same controls. */
   variant?: 'popover' | 'sheet' | 'inline';
 }
+
+const PHONE_KEYBOARD_CHOICES: Array<{ value: PhoneKeyboard; label: string; hint: string }> = [
+  { value: 'auto', label: 'Auto', hint: 'Works it out: a keyboard phone like the Titan 2 types straight into the terminal, a touch-screen phone gets the command line with Send.' },
+  { value: 'keys', label: 'Has keys', hint: 'Type straight into the terminal on the phone\'s own keys. No command line.' },
+  { value: 'touch', label: 'Touch screen', hint: 'Type into a command line with a Send button, so swipe typing and autocorrect work. The keyboard icon on its left types live.' },
+];
 
 export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSettingsProps) {
   const style = useTerminalStyleStore();
@@ -164,6 +171,29 @@ export function TerminalSettings({ onClose, variant = 'popover' }: TerminalSetti
           onChange={(e) => style.setDoubleTapTab(e.target.checked)}
           className="w-4 h-4 rounded bg-zinc-800 border-zinc-600 shrink-0 ml-3"
         />
+      </div>
+
+      <div className="space-y-1.5 pt-1">
+        <label className="text-xs text-zinc-300">This phone</label>
+        <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="This phone">
+          {PHONE_KEYBOARD_CHOICES.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              role="radio"
+              aria-checked={style.phoneKeyboard === c.value}
+              onClick={() => style.setPhoneKeyboard(c.value)}
+              className={`h-9 rounded-md border text-xs transition-colors ${
+                style.phoneKeyboard === c.value ? 'border-zinc-200 text-zinc-100 ring-1 ring-zinc-200' : 'border-zinc-700 text-zinc-400 hover:border-zinc-500'
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] text-zinc-600 leading-snug">
+          {PHONE_KEYBOARD_CHOICES.find((c) => c.value === style.phoneKeyboard)?.hint}
+        </p>
       </div>
 
       <div className="flex items-center justify-between pt-1">
