@@ -13,19 +13,19 @@
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Braces, ChevronDown } from 'lucide-react';
 
-const PINNED: Array<{ label: string; seq: string; aria: string }> = [
+export const PINNED: Array<{ label: string; seq: string; aria: string }> = [
   { label: 'Esc', seq: '\x1b', aria: 'Escape' },
   { label: 'Tab', seq: '\t', aria: 'Tab' },
 ];
 
-const ARROWS: Array<{ seq: string; aria: string; icon: ReactNode }> = [
+export const ARROWS: Array<{ seq: string; aria: string; icon: ReactNode }> = [
   { seq: '\x1b[A', aria: 'Up', icon: <ArrowUp className="w-4 h-4" strokeWidth={1.75} /> },
   { seq: '\x1b[B', aria: 'Down', icon: <ArrowDown className="w-4 h-4" strokeWidth={1.75} /> },
   { seq: '\x1b[D', aria: 'Left', icon: <ArrowLeft className="w-4 h-4" strokeWidth={1.75} /> },
   { seq: '\x1b[C', aria: 'Right', icon: <ArrowRight className="w-4 h-4" strokeWidth={1.75} /> },
 ];
 
-const MORE_KEYS: Array<{ label: string; seq: string; aria: string }> = [
+export const MORE_KEYS: Array<{ label: string; seq: string; aria: string }> = [
   { label: '⇧Tab', seq: '\x1b[Z', aria: 'Shift Tab' },
   { label: '^C', seq: '\x03', aria: 'Control C' },
   { label: '^D', seq: '\x04', aria: 'Control D' },
@@ -37,7 +37,7 @@ const MORE_KEYS: Array<{ label: string; seq: string; aria: string }> = [
   { label: 'End', seq: '\x1b[F', aria: 'End' },
 ];
 
-const KEY = 'shrink-0 h-9 rounded-[6px] bg-bg-3 text-fg-1 font-mono text-[13px] grid place-items-center select-none transition-colors duration-(--d-press) active:bg-bg-4';
+export const KEY = 'shrink-0 h-9 rounded-[6px] bg-bg-3 text-fg-1 font-mono text-[13px] grid place-items-center select-none transition-colors duration-(--d-press) active:bg-bg-4';
 
 function hold(e: ReactPointerEvent) {
   // Keep terminal focus so the soft keyboard stays up between taps.

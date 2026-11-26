@@ -298,6 +298,8 @@ export function TerminalScreen() {
   // Send) instead of straight into the terminal. Its keyboard icon switches
   // to live typing until the keyboard goes away.
   const [liveTyping, setLiveTyping] = useState(false);
+  // Which face the command line shows: the box, or the terminal keys.
+  const [lineKeys, setLineKeys] = useState(false);
   const lineShown = !hwKeyboard && !liveTyping;
   const lineShownRef = useRef(lineShown);
   lineShownRef.current = lineShown;
@@ -772,6 +774,7 @@ export function TerminalScreen() {
       // typing hands back to the command line.
       if (!now) {
         setLiveTyping(false);
+        setLineKeys(false);
         if (softKbOnRef.current) {
           applySoftKb(false);
           persistKeys(false);
@@ -788,7 +791,8 @@ export function TerminalScreen() {
     const next = !keysShown;
     persistKeys(next);
     if (lineShownRef.current) {
-      // Touch phone: the keyboard comes up on the command line.
+      // Touch phone: the keyboard comes up on the command line, keys face.
+      setLineKeys(next);
       if (next) cmdRef.current?.focus();
       else cmdRef.current?.blur();
       return;
@@ -2303,7 +2307,8 @@ export function TerminalScreen() {
       {/* The key row: the keys a soft keyboard lacks, with the shell's
           suggestions for what you are typing. Suggestions alone when the
           keys are put away. */}
-      {(keysShown || sugg.items.length > 0) && (
+      {/* Touch phones carry their keys inside the command line: one row. */}
+      {!lineShown && (keysShown || sugg.items.length > 0) && (
         <KeyRow
           sendInput={sendInput}
           ctrlArmed={ctrlArmed}
@@ -2328,7 +2333,12 @@ export function TerminalScreen() {
           onSend={sendLine}
           sendInput={sendInput}
           ctrlArmed={ctrlArmed}
+          onToggleCtrl={toggleCtrl}
           onCtrlUsed={() => { ctrlArmedRef.current = false; setCtrlArmed(false); }}
+          onOpenSnippets={() => setShowSnippets(true)}
+          onHide={kbVisible ? hideKeyboard : undefined}
+          keysView={lineKeys}
+          onKeysView={setLineKeys}
           onLive={goLive}
           target={title}
           offline={!online}
