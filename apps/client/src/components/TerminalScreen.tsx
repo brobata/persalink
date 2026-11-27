@@ -34,7 +34,7 @@ import { readout } from '../lib/readout';
 import { ReconnectBanner } from './ui/Reconnect';
 import { sessionTitle, stateKey, stateWord } from '../lib/sessionState';
 import {
-  ArrowDown, Braces, Check, ChevronDown, ChevronUp, ClipboardCopy, ClipboardPaste, Copy, Ellipsis, Keyboard, Link,
+  ArrowDown, Braces, Check, ChevronDown, CornerDownLeft, ChevronUp, ClipboardCopy, ClipboardPaste, Copy, Ellipsis, Keyboard, Link,
   MessageSquare, Mic, Palette, Paperclip, Plus, Rows3, Search, SquarePlus, TextCursor, TextSearch, X,
 } from 'lucide-react';
 import { PANE_COMMAND_EVENT, PHONE_TERMINAL, type PaneCommandDetail } from '../lib/paneCommands';
@@ -216,12 +216,21 @@ function isPhysicalKeyEvent(e: KeyboardEvent): boolean {
 
 export function TerminalScreen() {
   const {
-    attachedSession, sendInput, exitScroll, resize, detachSession,
+    attachedSession, sendInput: rawSendInput, exitScroll, resize, detachSession,
     windows, createWindow, serverUrl, authToken,
     sessions, showTabPicker, setShowTabPicker,
     connectionState, requestLinks, sessionLinks, clearSessionLinks,
     claudeReply, requestClaudeReply, clearClaudeReply,
   } = useAppStore();
+  // Dictated words wait on the prompt until Enter. The dock's Send stands in
+  // for the keyboard's Enter so a dictated message goes without raising the
+  // keyboard; it shows from the first dictated phrase until an Enter or
+  // Ctrl+C reaches the session by any route.
+  const [dictPending, setDictPending] = useState(false);
+  const sendInput = useCallback((data: string) => {
+    if (/[\r\x03]/.test(data)) setDictPending(false);
+    rawSendInput(data);
+  }, [rawSendInput]);
   const filesDisabled = useAppStore((s) => s.filesDisabled);
   const endedSession = useAppStore((s) => s.endedSession);
   const restartEnded = useAppStore((s) => s.restartEnded);
@@ -636,6 +645,7 @@ export function TerminalScreen() {
   const canDictate = useMemo(() => voiceSupported(), []);
   const voice = useVoiceInput(useCallback((text: string) => {
     sendInput(text);
+    setDictPending(true);
   }, [sendInput]));
   useEffect(() => {
     if (!voice.error) return;
@@ -643,7 +653,7 @@ export function TerminalScreen() {
   }, [voice.error]);
   // Switching sessions stops the mic, so words never land in the wrong one.
   const { stop: stopVoice } = voice;
-  useEffect(() => { stopVoice(); }, [attachedSession?.id, stopVoice]);
+  useEffect(() => { stopVoice(); setDictPending(false); }, [attachedSession?.id, stopVoice]);
   const recentLines = useCallback((n: number): string[] => {
     const t = terminalRef.current;
     if (!t) return [];
@@ -2048,13 +2058,20 @@ export function TerminalScreen() {
       id: 'dictate',
       icon: canDictate ? <Mic /> : <MessageSquare />,
       label: canDictate ? (voice.isListening ? 'Listening' : 'Dictate') : 'Message',
-      // One accent per screen: while the answer bar shows, its first chip is it.
-      primary: !answerShown && !isEnded,
+      // One accent per screen: while the answer bar shows, its first chip is
+      // it; while dictated words wait, Send is.
+      primary: !answerShown && !isEnded && !dictPending,
       on: voice.isListening,
       live: voice.isListening,
       aria: voice.isListening ? 'Stop dictation' : undefined,
       onPress: () => (canDictate ? voice.toggle() : openComposer({ listen: false })),
     },
+    // Enter for dictated words. The mic stays as it is, so the next message
+    // can be spoken straight away.
+    ...(dictPending && !isEnded ? [{
+      id: 'send', icon: <CornerDownLeft />, label: 'Send', primary: !answerShown,
+      aria: 'Send: press Enter', onPress: () => sendInput('\r'),
+    }] : []),
     { id: 'snippets', icon: <Braces />, label: 'Snippets', onPress: () => setShowSnippets(true) },
     { id: 'more', icon: <Ellipsis />, label: 'More', onPress: () => setShowMore(true) },
   ];
