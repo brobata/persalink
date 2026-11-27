@@ -2166,9 +2166,12 @@ export function TerminalScreen() {
           terminalRef.current?.focus();
         }}
       >
+        {/* overflow-clip, not hidden: a hidden box still scrolls to follow
+            xterm's helper textarea, so a long voice-typed phrase slid the
+            whole terminal sideways and the words ran off screen. */}
         <div
           ref={termRef}
-          className={`absolute inset-0 overflow-hidden transition-opacity duration-200 ${ended ? 'opacity-50' : ''}`}
+          className={`absolute inset-0 overflow-clip transition-opacity duration-200 ${ended ? 'opacity-50' : ''}`}
         />
         {/* The session just left, held until this one paints. */}
         <div ref={ghostRef} className="pl-term-ghost" aria-hidden inert />

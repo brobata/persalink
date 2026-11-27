@@ -1337,3 +1337,25 @@ html.pl-square .pl-rail-row { gap: 6px; }
   .pl-live-mic svg, .pl-dk.live .pill svg, .pl-mic.on svg, .pl-live-mic::after, .pl-dk.live .pill::after { animation: none !important; }
   .pl-live-mic::after, .pl-dk.live .pill::after { opacity: 0.6; }
 }
+
+/* Words still being spoken or composed (Gboard voice typing, swipe) show in
+   xterm's composition view. xterm draws it as one unwrapped line from the
+   cursor, so a long dictation ran off both screen edges and looked cut off
+   (the words all arrived; you just could not see them). Wrap it across the
+   full terminal width instead, growing downward from the cursor's row. */
+.xterm .xterm-helpers {
+  /* Full width (it was 0 wide), so the composition view below can span the
+     terminal; it must stay click-through or it would eat taps. */
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+.xterm .xterm-helpers > textarea { pointer-events: auto; }
+.xterm .composition-view {
+  pointer-events: none;
+  left: 0 !important;
+  right: 0;
+  height: auto !important;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
